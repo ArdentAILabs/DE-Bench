@@ -26,7 +26,7 @@ test_uuid = uuid.uuid4().hex[:8]
     "resource_id": f"simple_pipeline_test_{test_timestamp}_{test_uuid}",
 }], indirect=True)
 @pytest.mark.parametrize("github_resource", [{
-    "resource_id": f"simple_pipeline_test_{test_timestamp}_{test_uuid}",
+    "resource_id": f"test_airflow_simple_pipeline_test_{test_timestamp}_{test_uuid}",
 }], indirect=True)
 def test_airflow_agent_simple_pipeline(request, airflow_resource, github_resource, supabase_account_resource):
     input_dir = os.path.dirname(os.path.abspath(__file__))
