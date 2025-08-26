@@ -29,7 +29,8 @@ def airflow_resource(request):
     Each test gets its own isolated Airflow environment using docker-compose.
     """
     # verify the required astro envars are set
-    resource_id = "airflow_resource"
+    build_template = request.param
+    resource_id = build_template["resource_id"]
     required_envars = [
         "ASTRO_WORKSPACE_ID",
         "ASTRO_ACCESS_TOKEN",
@@ -45,12 +46,10 @@ def airflow_resource(request):
     _parse_astro_version()
 
     start_time = time.time()
-    test_name = parse_test_name(request.node.name)
-    unique_id = f"{test_name}_{int(time.time())}"
-    print(f"Worker {os.getpid()}: Starting airflow_resource for {test_name}")
+    print(f"Worker {os.getpid()}: Starting airflow_resource for {resource_id}")
 
     # Create Airflow resource
-    print(f"Worker {os.getpid()}: Creating Airflow resource for {test_name}")
+    print(f"Worker {os.getpid()}: Creating Airflow resource for {resource_id}")
     creation_start = time.time()
     test_resources = []
 
@@ -61,9 +60,9 @@ def airflow_resource(request):
         "login to Astro",
     )
 
-    test_dir = _create_dir_and_astro_project(unique_id)
+    test_dir = _create_dir_and_astro_project(resource_id)
     # astro_deployment_id = _create_deployment_in_astronomer(unique_id)
-    result = _find_hibernating_deployment(unique_id)
+    result = _find_hibernating_deployment(resource_id)
     astro_deployment_id = result["deployment_id"]
     astro_deployment_name = result["deployment_name"]
 
@@ -101,7 +100,7 @@ def airflow_resource(request):
                 "token",
                 "create",
                 "--description",
-                f"{test_name} API access for deployment {astro_deployment_name}",
+                f"{resource_id} API access for deployment {astro_deployment_name}",
                 "--name",
                 f"{astro_deployment_name} API access",
                 "--role",
@@ -137,11 +136,11 @@ def airflow_resource(request):
         resource_data = {
             "resource_id": resource_id,
             "type": "airflow_resource",
-            "test_name": test_name,
+            "test_name": parse_test_name(request.node.name),
             "creation_time": time.time(),
             "worker_pid": os.getpid(),
             "creation_duration": creation_end - creation_start,
-            "description": f"An Airflow resource for {test_name}",
+            "description": f"An Airflow resource for {resource_id}",
             "status": "active",
             "project_name": test_dir.stem,
             "base_url": base_url,
@@ -169,7 +168,7 @@ def airflow_resource(request):
     finally:
         # clean up the airflow resource after the test completes
         print(f"Worker {os.getpid()}: Cleaning up Airflow resource {resource_id}")
-        cleanup_airflow_resource(test_name, resource_id, test_resources, test_dir, result["created"])
+        cleanup_airflow_resource(resource_id, resource_id, test_resources, test_dir, result["created"])
 
 
 def _parse_astro_version() -> None:
