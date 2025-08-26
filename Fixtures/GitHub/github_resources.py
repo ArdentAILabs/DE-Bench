@@ -18,11 +18,12 @@ def github_resource(request):
     Each test gets its own GitHub manager instance.
     """
     build_template = request.param
+    test_name = parse_test_name(request.node.name)
     if "resource_id" not in build_template:
         import uuid
         time_stamp = int(time.time())
         test_uuid = uuid.uuid4().hex[:8]
-        build_template["resource_id"] = f"github_resource_{time_stamp}_{test_uuid}"
+        build_template["resource_id"] = f"{test_name}_{time_stamp}_{test_uuid}"
     resource_id = build_template["resource_id"]
     # Verify required environment variables
     required_envars = [
@@ -57,7 +58,7 @@ def github_resource(request):
         resource_data = {
             "resource_id": resource_id,
             "type": "github_resource",
-            "test_name": parse_test_name(request.node.name),
+            "test_name": test_name,
             "creation_time": time.time(),
             "worker_pid": os.getpid(),
             "creation_duration": creation_end - start_time,

@@ -30,12 +30,13 @@ class GitHubManager:
         self.repo: Repository = self.github_client.get_repo(self.repo_name)
         self.build_info = "./build-info.properties"
         self.create_branch = create_branch
-        self.branch_name = test_name
         if create_branch:
             self.branch_name = self.create_test_branch(
                 test_name=test_name,
                 build_info=build_info
             )
+        else:
+            self.branch_name = test_name
 
     def create_test_branch(self, test_name: str, build_info: Optional[Dict[str, str]]) -> str:
         """
@@ -58,7 +59,7 @@ class GitHubManager:
             raise Exception(f"✗ Error creating branch: {e}")
         finally:
             if build_info:
-                self._update_build_info(test_name)
+                self._update_build_info(build_info, test_name)
         return self.branch_name
 
     def add_merge_step_to_user_input(self, user_input: str) -> str:
