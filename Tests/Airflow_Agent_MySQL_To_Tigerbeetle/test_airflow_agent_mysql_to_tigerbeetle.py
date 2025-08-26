@@ -1,7 +1,7 @@
 import os
 import importlib
 import pytest
-import mysql.connector
+import uuid
 from python_on_whales import DockerClient
 import time
 from datetime import datetime, timedelta
@@ -21,6 +21,10 @@ parent_dir_name = os.path.basename(current_dir)
 module_path = f"Tests.{parent_dir_name}.Test_Configs"
 Test_Configs = importlib.import_module(module_path)
 
+# Generate unique identifiers for parallel execution
+test_timestamp = int(time.time())
+test_uuid = uuid.uuid4().hex[:8]
+
 
 @pytest.mark.airflow
 @pytest.mark.mysql
@@ -30,6 +34,12 @@ Test_Configs = importlib.import_module(module_path)
 @pytest.mark.api_integration
 @pytest.mark.database
 @pytest.mark.pipeline
+@pytest.mark.parametrize("github_resource", [{
+    "resource_id": f"test_airflow_mysql_to_tigerbeetle_test_{test_timestamp}_{test_uuid}",
+}], indirect=True)
+@pytest.mark.parametrize("airflow_resource", [{
+    "resource_id": f"mysql_to_tigerbeetle_test_{test_timestamp}_{test_uuid}",
+}], indirect=True)
 def test_airflow_agent_mysql_to_tigerbeetle(request):
     input_dir = os.path.dirname(os.path.abspath(__file__))
     request.node.user_properties.append(("user_query", Test_Configs.User_Input))
