@@ -15,6 +15,9 @@ from Fixtures.Airflow.airflow_resources import *
 from Fixtures.GitHub.github_resources import *
 from Fixtures.Supabase_Account.supabase_account_resource import *
 
+# Import shared identifier functions
+from Fixtures.shared_identifiers import *
+
 # Future imports for other categories:
 # from .Databricks.clusters import databricks_cluster, databricks_client
 # from .AWS.s3 import s3_bucket
