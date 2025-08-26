@@ -3,10 +3,10 @@ This module provides a class for managing GitHub operations.
 """
 
 import os
+import time
 from typing import Any, Dict, List, Optional, Tuple
 
 import github
-import time
 from github import Github, Repository
 
 
