@@ -168,7 +168,7 @@ def airflow_resource(request):
     finally:
         # clean up the airflow resource after the test completes
         print(f"Worker {os.getpid()}: Cleaning up Airflow resource {resource_id}")
-        cleanup_airflow_resource(resource_id, resource_id, test_resources, test_dir, result["created"])
+        cleanup_airflow_resource(resource_id, test_resources, test_dir)
 
 
 def _parse_astro_version() -> None:
@@ -299,11 +299,12 @@ def _check_and_update_gh_secrets(deployment_id: str, deployment_name: str, astro
         raise e from e
 
 
-def _create_deployment_in_astronomer(deployment_name: str) -> str:
+def _create_deployment_in_astronomer(deployment_name: str, wait: Optional[bool] = True) -> str:
     """
     Creates a deployment in Astronomer.
 
     :param deployment_name: The name of the deployment to create.
+    :param wait: Whether to wait for the deployment to be created.
     :raises EnvironmentError: If the deployment ID cannot be parsed from the output.
     :return: The ID of the created deployment.
     :rtype: str
@@ -320,7 +321,7 @@ def _create_deployment_in_astronomer(deployment_name: str) -> str:
                 "--cloud-provider", os.getenv("ASTRO_CLOUD_PROVIDER"),
                 "--region", os.getenv("ASTRO_REGION", "us-east-1"),
                 "--scheduler-size", "small",
-                "--wait",
+                "--wait" if wait else "",
             ],
             "creating Astronomer deployment",
             return_output=True,
@@ -540,16 +541,13 @@ def _create_user_in_airflow_deployment(deployment_name: str) -> None:
     
 
 def cleanup_airflow_resource(
-    test_name: str,
     resource_id: str,
     test_resources: list[str],
     test_dir: Optional[Path] = None,
-    created: bool = False,
 ):
     """
     Cleans up an Airflow resource, including the temp directory and the created resources in Astronomer.
 
-    :param test_name: The name of the test.
     :param resource_id: The ID of the resource.
     :param test_resources: The list of resources used in the test.
     :param test_dir: The path to the test directory.
@@ -560,7 +558,7 @@ def cleanup_airflow_resource(
         try:
             shutil.rmtree(test_dir)
             print(
-                f"Worker {os.getpid()}: Removed {test_name}'s temp directory: {test_dir}"
+                f"Worker {os.getpid()}: Removed {resource_id}'s temp directory: {test_dir}"
             )
         except Exception as e:
             print(f"Worker {os.getpid()}: Error removing temp directory: {e}")
@@ -570,15 +568,13 @@ def cleanup_airflow_resource(
     try:
             # Clean up created resources in reverse order
         for resource in reversed(test_resources):
-            if created:
-                _ = _run_and_validate_subprocess(
-                    ["astro", "deployment", "delete", resource, "-f"],
-                    "delete Astronomer deployment",
-                    check=True,
-                )
-            else:
-                # deployment was hibernating, just hibernate it again
-                _hibernate_deployment(resource)
+            _ = _run_and_validate_subprocess(
+                ["astro", "deployment", "delete", "-n", resource, "-f"],
+                "delete Astronomer deployment",
+                check=True,
+            )
+            _ = _create_deployment_in_astronomer(resource, wait=False)
+            _hibernate_deployment(resource)
         print(
             f"Worker {os.getpid()}: Airflow resource {resource_id} cleaned up successfully"
         )
