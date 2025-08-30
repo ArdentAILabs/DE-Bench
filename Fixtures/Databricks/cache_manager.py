@@ -796,15 +796,15 @@ class CacheManager:
                             # If the deployment is in the database, update it, otherwise insert it
                             cursor.execute("""
                                 SELECT * FROM astronomer_deployments 
-                                WHERE deployment_id = ?
-                            """, (deployment["deployment_id"],))
+                                WHERE deployment_name = ?
+                            """, (deployment["deployment_name"],))
                             
                             if cursor.fetchone():
                                 cursor.execute("""
                                     UPDATE astronomer_deployments 
                                     SET deployment_name = ?, status = ?, in_use = ?, created_at = datetime('now'), usage_count = 0
-                                    WHERE deployment_id = ?
-                                """, (deployment["deployment_name"], deployment["status"], 1 if deployment["status"] == "HEALTHY" else 0, deployment["deployment_id"]))
+                                    WHERE deployment_name = ?
+                                """, (deployment["deployment_name"], deployment["status"], 1 if deployment["status"] == "HEALTHY" else 0, deployment["deployment_name"]))
                             else:
                                 cursor.execute("""
                                     INSERT INTO astronomer_deployments (
