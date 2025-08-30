@@ -30,7 +30,7 @@ Environment/Databricks/cluster_cache*
 # Ignore all .gitkeep files in Environment/Airflow recursively
 Environment/Airflow/**/.gitkeep
 Environment/Airflow/logs/*
-Environment/CacheManager/
+Environment/CacheManager/cluster_cache*
 
 tmp_airflow_tests/*
 .idea/*
