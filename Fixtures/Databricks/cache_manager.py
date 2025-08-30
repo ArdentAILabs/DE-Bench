@@ -100,7 +100,7 @@ class CacheManager:
                         id INTEGER PRIMARY KEY AUTOINCREMENT,
                         deployment_id TEXT UNIQUE NOT NULL,
                         deployment_name TEXT UNIQUE NOT NULL,
-                        status TEXT DEFAULT 'hibernating',
+                        status TEXT DEFAULT 'HIBERNATING',
                         worker_pid INTEGER,
                         in_use BOOLEAN DEFAULT 0,
                         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -913,7 +913,7 @@ class CacheManager:
                         # Release the deployment
                         cursor.execute("""
                             UPDATE astronomer_deployments 
-                            SET in_use = 0, worker_pid = NULL, test_name = NULL, status = 'hibernating'
+                            SET in_use = 0, worker_pid = NULL, test_name = NULL, status = 'HIBERNATING'
                             WHERE deployment_id = ? AND worker_pid = ?
                         """, (deployment_id, worker_pid))
                         
