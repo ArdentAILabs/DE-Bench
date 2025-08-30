@@ -1,9 +1,10 @@
 """
-Helper class for managing Databricks cluster cache using SQLite database, stored in the Environment/Databricks directory.
+Helper class for managing Databricks cluster cache and Astronomer deployment cache using SQLite database, stored in the Environment/Databricks directory.
 """
 
 import os
 import sqlite3
+import subprocess
 import time
 from datetime import datetime, timedelta
 from typing import Any, Optional
@@ -11,7 +12,7 @@ from typing import Any, Optional
 
 class CacheManager:
     """
-    A class to manage Databricks cluster cache using SQLite database, which is used to store cluster information.
+    A class to manage Databricks cluster cache and Astronomer deployment cache using SQLite database, which is used to store cluster and deployment information.
 
     :param Optional[int] default_expiry_hours: Default expiry time for cached clusters, defaults to 1 hour.
     """
@@ -93,6 +94,22 @@ class CacheManager:
                     )
                 """)
                 
+                # Create Astronomer deployments table
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS astronomer_deployments (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        deployment_id TEXT UNIQUE NOT NULL,
+                        deployment_name TEXT UNIQUE NOT NULL,
+                        status TEXT DEFAULT 'hibernating',
+                        worker_pid INTEGER,
+                        in_use BOOLEAN DEFAULT 0,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        last_accessed TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        test_name TEXT,
+                        usage_count INTEGER DEFAULT 0
+                    )
+                """)
+                
                 # Create indexes for shared cluster registry
                 cursor.execute("""
                     CREATE INDEX IF NOT EXISTS idx_config_hash ON shared_cluster_registry(config_hash)
@@ -102,6 +119,20 @@ class CacheManager:
                 """)
                 cursor.execute("""
                     CREATE INDEX IF NOT EXISTS idx_registry_usage_count ON shared_cluster_registry(usage_count)
+                """)
+                
+                # Create indexes for astronomer deployments
+                cursor.execute("""
+                    CREATE INDEX IF NOT EXISTS idx_deployment_id ON astronomer_deployments(deployment_id)
+                """)
+                cursor.execute("""
+                    CREATE INDEX IF NOT EXISTS idx_deployment_status ON astronomer_deployments(status)
+                """)
+                cursor.execute("""
+                    CREATE INDEX IF NOT EXISTS idx_deployment_in_use ON astronomer_deployments(in_use)
+                """)
+                cursor.execute("""
+                    CREATE INDEX IF NOT EXISTS idx_deployment_name ON astronomer_deployments(deployment_name)
                 """)
                 
                 conn.commit()
@@ -739,3 +770,234 @@ class CacheManager:
         except sqlite3.Error as e:
             print(f"Warning: Could not get all shared clusters: {e}")
             return []
+
+    def populate_astronomer_deployments(self, deployments: list[dict[str, str]]) -> None:
+        """
+        Populate the astronomer_deployments table with existing deployments.
+
+        :param list[dict[str, Any]] deployments: List of deployment dictionaries with deployment_id, deployment_name, and status.
+        :rtype: None
+        """
+        max_retries = 3
+        retry_delay = 1.0
+        
+        for attempt in range(max_retries):
+            try:
+                with self._get_connection() as conn:
+                    cursor = conn.cursor()
+                    
+                    cursor.execute("BEGIN TRANSACTION")
+                    
+                    try:
+                        # Clear existing deployments first
+                        cursor.execute("DELETE FROM astronomer_deployments")
+                        
+                        # Insert new deployment data
+                        for deployment in deployments:
+                            cursor.execute("""
+                                INSERT INTO astronomer_deployments (
+                                    deployment_id, deployment_name, status, in_use, created_at, usage_count
+                                ) VALUES (?, ?, ?, 0, datetime('now'), 0)
+                            """, (
+                                deployment["deployment_id"],
+                                deployment["deployment_name"],
+                                deployment["status"]
+                            ))
+                        
+                        cursor.execute("COMMIT")
+                        print(f"Worker {os.getpid()}: Populated {len(deployments)} astronomer deployments")
+                        return
+                        
+                    except Exception as e:
+                        cursor.execute("ROLLBACK")
+                        raise e
+                    
+            except sqlite3.OperationalError as e:
+                if "database is locked" in str(e).lower() and attempt < max_retries - 1:
+                    print(f"Database locked, retrying in {retry_delay}s (attempt {attempt + 1}/{max_retries})")
+                    time.sleep(retry_delay)
+                    retry_delay *= 2
+                    continue
+                else:
+                    print(f"Warning: Could not populate astronomer deployments after {max_retries} attempts: {e}")
+                    break
+            except sqlite3.Error as e:
+                print(f"Warning: Could not populate astronomer deployments: {e}")
+                break
+
+    def allocate_astronomer_deployment(self, test_name: str, worker_pid: int) -> Optional[dict[str, Any]]:
+        """
+        Allocate an available hibernating astronomer deployment for use.
+
+        :param str test_name: Name of the test requesting the deployment.
+        :param int worker_pid: Process ID of the worker requesting the deployment.
+        :return: Dictionary containing deployment information, or None if no deployment available.
+        :rtype: Optional[dict[str, Any]]
+        """
+        max_retries = 5
+        retry_delay = 1.0
+        
+        for attempt in range(max_retries):
+            try:
+                with self._get_connection() as conn:
+                    cursor = conn.cursor()
+                    
+                    cursor.execute("BEGIN TRANSACTION")
+                    
+                    try:
+                        # Find the first available hibernating deployment
+                        cursor.execute("""
+                            SELECT * FROM astronomer_deployments 
+                            WHERE in_use = 0 AND status = 'HIBERNATING'
+                            ORDER BY last_accessed ASC 
+                            LIMIT 1
+                        """)
+                        
+                        row = cursor.fetchone()
+                        if not row:
+                            cursor.execute("ROLLBACK")
+                            return None
+                        
+                        deployment = dict(row)
+                        
+                        # Mark the deployment as in use
+                        cursor.execute("""
+                            UPDATE astronomer_deployments 
+                            SET in_use = 1, worker_pid = ?, test_name = ?, last_accessed = datetime('now'), usage_count = usage_count + 1
+                            WHERE deployment_id = ?
+                        """, (worker_pid, test_name, deployment["deployment_id"]))
+                        
+                        cursor.execute("COMMIT")
+                        
+                        print(f"Worker {worker_pid}: Allocated deployment {deployment['deployment_name']} ({deployment['deployment_id']}) for {test_name}")
+                        return deployment
+                        
+                    except Exception as e:
+                        cursor.execute("ROLLBACK")
+                        raise e
+                    
+            except sqlite3.OperationalError as e:
+                if "database is locked" in str(e).lower() and attempt < max_retries - 1:
+                    print(f"Database locked during allocation, retrying in {retry_delay}s (attempt {attempt + 1}/{max_retries})")
+                    time.sleep(retry_delay)
+                    retry_delay *= 2
+                    continue
+                else:
+                    print(f"Warning: Could not allocate deployment after {max_retries} attempts: {e}")
+                    return None
+            except sqlite3.Error as e:
+                print(f"Warning: Could not allocate deployment: {e}")
+                return None
+        
+        return None
+
+    def release_astronomer_deployment(self, deployment_id: str, worker_pid: int) -> None:
+        """
+        Release an astronomer deployment back to hibernating state.
+
+        :param str deployment_id: ID of the deployment to release.
+        :param int worker_pid: Process ID of the worker releasing the deployment.
+        :rtype: None
+        """
+        max_retries = 3
+        retry_delay = 1.0
+        
+        for attempt in range(max_retries):
+            try:
+                with self._get_connection() as conn:
+                    cursor = conn.cursor()
+                    
+                    cursor.execute("BEGIN TRANSACTION")
+                    
+                    try:
+                        # Release the deployment
+                        cursor.execute("""
+                            UPDATE astronomer_deployments 
+                            SET in_use = 0, worker_pid = NULL, test_name = NULL, status = 'hibernating'
+                            WHERE deployment_id = ? AND worker_pid = ?
+                        """, (deployment_id, worker_pid))
+                        
+                        cursor.execute("COMMIT")
+                        print(f"Worker {worker_pid}: Released deployment {deployment_id}")
+                        return
+                        
+                    except Exception as e:
+                        cursor.execute("ROLLBACK")
+                        raise e
+                    
+            except sqlite3.OperationalError as e:
+                if "database is locked" in str(e).lower() and attempt < max_retries - 1:
+                    print(f"Database locked during release, retrying in {retry_delay}s (attempt {attempt + 1}/{max_retries})")
+                    time.sleep(retry_delay)
+                    retry_delay *= 2
+                    continue
+                else:
+                    print(f"Warning: Could not release deployment after {max_retries} attempts: {e}")
+                    break
+            except sqlite3.Error as e:
+                print(f"Warning: Could not release deployment: {e}")
+                break
+
+    def get_astronomer_deployment_status(self, deployment_id: str) -> Optional[dict[str, Any]]:
+        """
+        Get the status of a specific astronomer deployment.
+
+        :param str deployment_id: ID of the deployment to check.
+        :return: Dictionary containing deployment status information.
+        :rtype: Optional[dict[str, Any]]
+        """
+        try:
+            with self._get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("""
+                    SELECT * FROM astronomer_deployments 
+                    WHERE deployment_id = ?
+                """, (deployment_id,))
+                
+                row = cursor.fetchone()
+                return dict(row) if row else None
+                
+        except sqlite3.Error as e:
+            print(f"Warning: Could not get deployment status: {e}")
+            return None
+
+    def get_all_astronomer_deployments(self, where_clause: Optional[str] = None) -> list[dict[str, Any]]:
+        """
+        Get all astronomer deployments (for debugging and monitoring).
+
+        :param Optional[str] where_clause: Optional WHERE clause to filter deployments.
+        :return: List of dictionaries containing deployment data.
+        :rtype: list[dict[str, Any]]
+        """
+        try:
+            with self._get_connection() as conn:
+                cursor = conn.cursor()
+                
+                if where_clause:
+                    query = f"SELECT * FROM astronomer_deployments WHERE {where_clause} ORDER BY created_at DESC"
+                else:
+                    query = "SELECT * FROM astronomer_deployments ORDER BY created_at DESC"
+                
+                cursor.execute(query)
+                rows = cursor.fetchall()
+                
+                return [dict(row) for row in rows]
+                
+        except sqlite3.Error as e:
+            print(f"Warning: Could not get all astronomer deployments: {e}")
+            return []
+
+    def clear_astronomer_deployments(self) -> None:
+        """
+        Clear all astronomer deployment records (for testing or manual cleanup).
+
+        :rtype: None
+        """
+        try:
+            with self._get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("DELETE FROM astronomer_deployments")
+                conn.commit()
+                print("Astronomer deployment cache cleared")
+        except sqlite3.Error as e:
+            print(f"Warning: Could not clear astronomer deployment cache: {e}")
