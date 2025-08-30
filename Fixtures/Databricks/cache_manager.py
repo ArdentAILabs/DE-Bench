@@ -4,9 +4,9 @@ Helper class for managing Databricks cluster cache and Astronomer deployment cac
 
 import os
 import sqlite3
-import subprocess
 import time
 from datetime import datetime, timedelta
+from pathlib import Path
 from typing import Any, Optional
 
 
@@ -34,8 +34,9 @@ class CacheManager:
         :return: Path to the SQLite database file.
         :rtype: str
         """
-        cwd = os.getcwd()
-        cache_dir = os.path.join(cwd, "Environment", "Databricks")
+        cwd = Path(os.getcwd()).parents[1]
+        cache_dir = os.path.join(cwd, "Environment", "CacheManager")
+        print(f"CacheManager: Using cache directory: {cache_dir}")
         if not os.path.exists(cache_dir):
             os.makedirs(cache_dir)
         return os.path.join(cache_dir, "cluster_cache.db")
@@ -100,7 +101,7 @@ class CacheManager:
                         id INTEGER PRIMARY KEY AUTOINCREMENT,
                         deployment_id TEXT UNIQUE NOT NULL,
                         deployment_name TEXT UNIQUE NOT NULL,
-                        status TEXT DEFAULT 'HIBERNATING',
+                        status TEXT DEFAULT 'HEALTHY',
                         worker_pid INTEGER,
                         in_use BOOLEAN DEFAULT 0,
                         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -789,20 +790,32 @@ class CacheManager:
                     cursor.execute("BEGIN TRANSACTION")
                     
                     try:
-                        # Clear existing deployments first
-                        cursor.execute("DELETE FROM astronomer_deployments")
                         
                         # Insert new deployment data
                         for deployment in deployments:
+                            # If the deployment is in the database, update it, otherwise insert it
                             cursor.execute("""
-                                INSERT INTO astronomer_deployments (
-                                    deployment_id, deployment_name, status, in_use, created_at, usage_count
-                                ) VALUES (?, ?, ?, 0, datetime('now'), 0)
-                            """, (
-                                deployment["deployment_id"],
-                                deployment["deployment_name"],
-                                deployment["status"]
-                            ))
+                                SELECT * FROM astronomer_deployments 
+                                WHERE deployment_id = ?
+                            """, (deployment["deployment_id"],))
+                            
+                            if cursor.fetchone():
+                                cursor.execute("""
+                                    UPDATE astronomer_deployments 
+                                    SET deployment_name = ?, status = ?, in_use = ?, created_at = datetime('now'), usage_count = 0
+                                    WHERE deployment_id = ?
+                                """, (deployment["deployment_name"], deployment["status"], 1 if deployment["status"] == "HEALTHY" else 0, deployment["deployment_id"]))
+                            else:
+                                cursor.execute("""
+                                    INSERT INTO astronomer_deployments (
+                                        deployment_id, deployment_name, status, in_use, created_at, usage_count
+                                    ) VALUES (?, ?, ?, ?, datetime('now'), 0)
+                                """, (
+                                    deployment["deployment_id"],
+                                    deployment["deployment_name"],
+                                    deployment["status"],
+                                    1 if deployment["status"] == "HEALTHY" else 0
+                                ))
                         
                         cursor.execute("COMMIT")
                         print(f"Worker {os.getpid()}: Populated {len(deployments)} astronomer deployments")
@@ -986,18 +999,3 @@ class CacheManager:
         except sqlite3.Error as e:
             print(f"Warning: Could not get all astronomer deployments: {e}")
             return []
-
-    def clear_astronomer_deployments(self) -> None:
-        """
-        Clear all astronomer deployment records (for testing or manual cleanup).
-
-        :rtype: None
-        """
-        try:
-            with self._get_connection() as conn:
-                cursor = conn.cursor()
-                cursor.execute("DELETE FROM astronomer_deployments")
-                conn.commit()
-                print("Astronomer deployment cache cleared")
-        except sqlite3.Error as e:
-            print(f"Warning: Could not clear astronomer deployment cache: {e}")
