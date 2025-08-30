@@ -1,6 +1,8 @@
 import importlib
 import os
 import time
+import uuid
+from datetime import datetime
 
 import pytest
 
@@ -12,6 +14,8 @@ parent_dir_name = os.path.basename(current_dir)
 module_path = f"Tests.{parent_dir_name}.Test_Configs"
 Test_Configs = importlib.import_module(module_path)
 
+test_timestamp = int(time.time())
+test_uuid = uuid.uuid4().hex[:8]
 
 @pytest.mark.airflow
 @pytest.mark.pipeline
