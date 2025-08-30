@@ -40,6 +40,8 @@ def test_airflow_agent_simple_pipeline(request, airflow_resource, github_resourc
             "ASTRO_ACCESS_TOKEN": os.environ["ASTRO_ACCESS_TOKEN"],
         }
     )
+    model_result = {}
+    ardent_client = None
     
     # Use the airflow_resource fixture - the Docker instance is already running
     print("=== Starting Simple Airflow Pipeline Test ===")
@@ -94,7 +96,7 @@ def test_airflow_agent_simple_pipeline(request, airflow_resource, github_resourc
         # SECTION 2: RUN THE MODEL
         start_time = time.time()
         print("Running model to create DAG and PR...")
-        model_result = run_model(
+        model_result, ardent_client = run_model(
             container=None, 
             task=Test_Configs.User_Input, 
             configs=Test_Configs.Configs,
@@ -187,8 +189,13 @@ def test_airflow_agent_simple_pipeline(request, airflow_resource, github_resourc
                     "secretKey": supabase_account_resource["secretKey"],
                 }
             )
-            # Delete the branch from github using the github manager
-            github_manager.delete_branch("feature/hello_world_dag")
-
+            if ardent_client and ardent_client.delete_job(
+                model_result["id"],
+                model_result["files_share_name"],
+                model_result["dependencies_share_name"],
+            ):
+                print(f"✓ Ardent job {model_result['jobID']} deleted successfully.")
+            else:
+                raise Exception(f"✗ Failed to delete Ardent job {model_result['jobID']}.")
         except Exception as e:
             print(f"Error during cleanup: {e}")
