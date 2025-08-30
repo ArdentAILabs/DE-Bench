@@ -72,13 +72,11 @@ def airflow_resource(request):
         cache_manager.populate_astronomer_deployments(astro_deployments)
 
         # Try to allocate a hibernating deployment from cache
-        deployment_info = cache_manager.allocate_astronomer_deployment(resource_id, os.getpid())
-
-        if deployment_info:
+        if deployment_info := cache_manager.allocate_astronomer_deployment(resource_id, os.getpid()):
             # Got an existing hibernating deployment
             astro_deployment_id = deployment_info["deployment_id"]
             astro_deployment_name = deployment_info["deployment_name"]
-            result = {"created": False, "deployment_id": astro_deployment_id, "deployment_name": astro_deployment_name}
+            result = {"deployment_id": astro_deployment_id, "deployment_name": astro_deployment_name}
             print(f"Worker {os.getpid()}: Allocated hibernating deployment: {astro_deployment_name}")
             _wake_up_deployment(astro_deployment_name)
         else:
@@ -86,7 +84,7 @@ def airflow_resource(request):
             print(f"Worker {os.getpid()}: No hibernating deployments available, creating new deployment: {resource_id}")
             astro_deployment_id = _create_deployment_in_astronomer(resource_id)
             astro_deployment_name = resource_id
-            result = {"created": True, "deployment_id": astro_deployment_id, "deployment_name": astro_deployment_name}
+            result = {"deployment_id": astro_deployment_id, "deployment_name": astro_deployment_name}
 
         # check and update the github secrets
         _check_and_update_gh_secrets(
@@ -175,7 +173,6 @@ def airflow_resource(request):
             "airflow_instance": airflow_instance,
             "created_resources": test_resources,
             "cache_manager": cache_manager,
-            "deployment_was_created": result["created"],
         }
 
         print(f"Worker {os.getpid()}: Created Airflow resource {resource_id}")
