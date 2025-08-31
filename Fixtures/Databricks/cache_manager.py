@@ -106,8 +106,7 @@ class CacheManager:
                         in_use BOOLEAN DEFAULT 0,
                         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                         last_accessed TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                        test_name TEXT,
-                        usage_count INTEGER DEFAULT 0
+                        test_name TEXT
                     )
                 """)
                 
@@ -802,19 +801,19 @@ class CacheManager:
                             if cursor.fetchone():
                                 cursor.execute("""
                                     UPDATE astronomer_deployments 
-                                    SET deployment_name = ?, status = ?, in_use = ?, created_at = datetime('now'), usage_count = 0
+                                    SET deployment_id = ?, deployment_name = ?, status = ?, in_use = CASE WHEN test_name IS NOT NULL AND test_name != '' THEN 1 ELSE 0 END, created_at = datetime('now')
                                     WHERE deployment_name = ?
-                                """, (deployment["deployment_name"], deployment["status"], 1 if deployment["status"] == "HEALTHY" else 0, deployment["deployment_name"]))
+                                """, (deployment["deployment_id"], deployment["deployment_name"], deployment["status"], deployment["deployment_name"]))
                             else:
+                                # For new deployments, in_use should be 0 since no test is using them yet
                                 cursor.execute("""
                                     INSERT INTO astronomer_deployments (
-                                        deployment_id, deployment_name, status, in_use, created_at, usage_count
-                                    ) VALUES (?, ?, ?, ?, datetime('now'), 0)
+                                        deployment_id, deployment_name, status, in_use, created_at
+                                    ) VALUES (?, ?, ?, 0, datetime('now'))
                                 """, (
                                     deployment["deployment_id"],
                                     deployment["deployment_name"],
-                                    deployment["status"],
-                                    1 if deployment["status"] == "HEALTHY" else 0
+                                    deployment["status"]
                                 ))
                         
                         cursor.execute("COMMIT")
@@ -858,7 +857,7 @@ class CacheManager:
                     cursor.execute("BEGIN TRANSACTION")
                     
                     try:
-                        # Find the first available hibernating deployment
+                        # Find the first available hibernating deployment (in_use should be 0 for available deployments)
                         cursor.execute("""
                             SELECT * FROM astronomer_deployments 
                             WHERE in_use = 0 AND status = 'HIBERNATING'
@@ -876,7 +875,7 @@ class CacheManager:
                         # Mark the deployment as in use
                         cursor.execute("""
                             UPDATE astronomer_deployments 
-                            SET in_use = 1, worker_pid = ?, test_name = ?, last_accessed = datetime('now'), usage_count = usage_count + 1
+                            SET in_use = 1, worker_pid = ?, test_name = ?, last_accessed = datetime('now')
                             WHERE deployment_id = ?
                         """, (worker_pid, test_name, deployment["deployment_id"]))
                         
@@ -926,7 +925,7 @@ class CacheManager:
                         # Release the deployment
                         cursor.execute("""
                             UPDATE astronomer_deployments 
-                            SET in_use = 0, worker_pid = NULL, test_name = NULL, status = 'HIBERNATING'
+                            SET worker_pid = NULL, test_name = NULL, status = 'HIBERNATING', in_use = 0
                             WHERE deployment_id = ? AND worker_pid = ?
                         """, (deployment_id, worker_pid))
                         
