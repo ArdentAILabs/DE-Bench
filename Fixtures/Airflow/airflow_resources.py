@@ -23,8 +23,44 @@ from Fixtures import parse_test_name
 VALIDATE_ASTRO_INSTALL = "Please check if the Astro CLI is installed and in PATH."
 
 
+@pytest.fixture(scope="session")
+def astro_login():
+    """
+    A session-scoped fixture that logs into Astro once for the entire test session.
+    This avoids repeated logins for each test when running in parallel.
+    """
+    astro_token = os.getenv("ASTRO_ACCESS_TOKEN")
+    if not astro_token:
+        raise ValueError("ASTRO_ACCESS_TOKEN environment variable is not set")
+    
+    print("Session login: Logging into Astro for test session")
+    _run_and_validate_subprocess(
+        ["astro", "login", "--token-login", astro_token],
+        "login to Astro (session-wide)",
+    )
+    print("Session login: Successfully logged into Astro")
+    return True
+
+
+@pytest.fixture(scope="session")
+def shared_cache_manager():
+    """
+    A session-scoped fixture that creates a single CacheManager instance shared across all tests.
+    This ensures proper coordination of database access in parallel test execution.
+    """
+    print("Session cache: Initializing shared CacheManager for test session")
+    cache_manager = CacheManager()
+    
+    # Fetch and populate deployments once for the entire session
+    astro_deployments = fetch_astro_deployments()
+    cache_manager.populate_astronomer_deployments(astro_deployments)
+    
+    print("Session cache: CacheManager initialized and populated with deployments")
+    return cache_manager
+
+
 @pytest.fixture(scope="function")
-def airflow_resource(request):
+def airflow_resource(request, astro_login, shared_cache_manager):
     """
     A function-scoped fixture that creates unique Airflow instances for each test.
     Each test gets its own isolated Airflow environment using docker-compose.
@@ -54,25 +90,14 @@ def airflow_resource(request):
     creation_start = time.time()
     test_resources = []
 
-    # run terminal commands to create the airflow resource in astronomer
-    # login to astronomer
-    astro_token = os.getenv("ASTRO_ACCESS_TOKEN")
-    _run_and_validate_subprocess(
-        ["astro", "login", "--token-login", astro_token],
-        "login to Astro",
-    )
-
+    # Astro login is handled by the session-scoped astro_login fixture
     test_dir = _create_dir_and_astro_project(resource_id)
 
-    # Initialize cache manager and fetch/populate deployments
+    # Use the shared cache manager from the session-scoped fixture
 
     try:
-        astro_deployments = fetch_astro_deployments()
-        cache_manager = CacheManager()
-        cache_manager.populate_astronomer_deployments(astro_deployments)
-
-        # Try to allocate a hibernating deployment from cache
-        if deployment_info := cache_manager.allocate_astronomer_deployment(resource_id, os.getpid()):
+        # Try to allocate a hibernating deployment from shared cache
+        if deployment_info := shared_cache_manager.allocate_astronomer_deployment(resource_id, os.getpid()):
             # Got an existing hibernating deployment
             astro_deployment_id = deployment_info["deployment_id"]
             astro_deployment_name = deployment_info["deployment_name"]
@@ -91,7 +116,7 @@ def airflow_resource(request):
             astro_access_token=os.environ["ASTRO_ACCESS_TOKEN"],
         )
 
-        test_resources.append((astro_deployment_name, cache_manager))
+        test_resources.append((astro_deployment_name, shared_cache_manager))
         api_url = "https://" + _run_and_validate_subprocess(
             [
                 "astro",
@@ -170,7 +195,7 @@ def airflow_resource(request):
             "password": os.getenv("AIRFLOW_PASSWORD", "airflow"),
             "airflow_instance": airflow_instance,
             "created_resources": test_resources,
-            "cache_manager": cache_manager,
+            "cache_manager": shared_cache_manager,
         }
 
         print(f"Worker {os.getpid()}: Created Airflow resource {resource_id}")
