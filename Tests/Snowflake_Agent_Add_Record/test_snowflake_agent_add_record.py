@@ -5,7 +5,7 @@ import uuid
 
 import pytest
 
-from model.Configure_Model import remove_model_configs, set_up_model_configs
+from model.Configure_Model import cleanup_model_artifacts, set_up_model_configs
 from model.Run_Model import run_model
 
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -199,12 +199,13 @@ def test_snowflake_agent_add_record(request, snowflake_resource, supabase_accoun
         try:
             # Clean up model configs
             if config_results:
-                remove_model_configs(
+                cleanup_model_artifacts(
                     Configs=Test_Configs.Configs, 
                     custom_info={
                         **config_results,
                         "publicKey": supabase_account_resource["publicKey"],
                         "secretKey": supabase_account_resource["secretKey"],
+                        'job_id': model_result.get("id") if model_result else None,
                     }
                 )
         except Exception as e:

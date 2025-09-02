@@ -5,7 +5,7 @@ import time
 import pytest
 
 from Fixtures.Databricks.databricks_manager import DatabricksManager
-from model.Configure_Model import set_up_model_configs, remove_model_configs
+from model.Configure_Model import set_up_model_configs, cleanup_model_artifacts
 from model.Run_Model import run_model
 
 # Import test configurations
@@ -230,7 +230,7 @@ def test_databricks_hello_world(request, databricks_resource, supabase_account_r
         
         # Step 4: Run model
         model_start_time = time.time()
-        result = run_model(
+        model_result = run_model(
             container=None,
             task=Test_Configs.User_Input,
             configs=Test_Configs.Configs,
@@ -303,7 +303,14 @@ def test_databricks_hello_world(request, databricks_resource, supabase_account_r
         databricks_manager.cleanup_databricks_environment(config)
         
         # Clean up model configs
-        remove_model_configs(Configs=Test_Configs.Configs)
+        cleanup_model_artifacts(
+            Configs=Test_Configs.Configs,
+            custom_info={
+                "publicKey": supabase_account_resource["publicKey"],
+                "secretKey": supabase_account_resource["secretKey"],
+                'job_id': model_result.get("id") if model_result else None,
+            }
+        )
         
         # Store execution time
         request.node.user_properties.append(

@@ -12,7 +12,7 @@ from github import Github
 from requests.auth import HTTPBasicAuth
 
 from Configs.MySQLConfig import connection as mysql_connection
-from model.Configure_Model import remove_model_configs
+from model.Configure_Model import cleanup_model_artifacts
 from model.Configure_Model import set_up_model_configs
 from model.Run_Model import run_model
 
@@ -244,10 +244,11 @@ def test_airflow_agent_postgresql_to_mysql(request, airflow_resource, github_res
     finally:
         try:
             # this function is for you to remove the configs for the test. They follow a set structure.
-            remove_model_configs(
+            cleanup_model_artifacts(
                 Configs=Test_Configs.Configs, 
                 custom_info={
                     **config_results,  # Spread all config results
+                    'job_id': model_result.get("id") if model_result else None,
                     "publicKey": supabase_account_resource["publicKey"],
                     "secretKey": supabase_account_resource["secretKey"],
                 }
