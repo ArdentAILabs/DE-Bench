@@ -1,11 +1,11 @@
-import pytest
-import time
+
 import os
 import re
 import time
 import uuid
+
+import pytest
 import snowflake.connector
-from snowflake.connector import DictCursor
 
 
 @pytest.fixture(scope="function")
