@@ -4,6 +4,7 @@ import pytest
 import time
 import os
 import re
+import uuid
 import snowflake.connector
 from snowflake.connector import DictCursor
 
@@ -88,7 +89,6 @@ def snowflake_resource(request):
     
     # Generate unique resource names
     timestamp = int(time.time())
-    import uuid
     test_uuid = uuid.uuid4().hex[:8]
     
     database_name = build_template.get("database", f"BENCH_DB_{timestamp}_{test_uuid}").upper()
@@ -187,8 +187,8 @@ def snowflake_resource(request):
                 # Consume results if any
                 try:
                     cursor.fetchall()
-                except:
-                    pass  # Some statements don't return results
+                except Exception:
+                    pass  # Some statements don't return results (DDL, DML)
             
             print(f"Worker {os.getpid()}: Successfully executed SQL file")
             
