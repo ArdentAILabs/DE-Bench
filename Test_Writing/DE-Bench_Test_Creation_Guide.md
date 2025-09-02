@@ -44,7 +44,7 @@ All DE-Bench tests follow this **per-user isolation pattern** to prevent config 
 ```python
 # Import from the Model directory
 from model.Run_Model import run_model
-from model.Configure_Model import set_up_model_configs, remove_model_configs
+from model.Configure_Model import set_up_model_configs, cleanup_model_artifacts
 import os
 import importlib
 import pytest
@@ -119,16 +119,101 @@ def test_your_function_name(request, resource_fixture, supabase_account_resource
             raise AssertionError("Test failed because...")
 
     finally:
-        # CLEANUP - Include API keys for proper cleanup
+        # CLEANUP - Include API keys and job_id for proper cleanup
         if config_results:
-            remove_model_configs(
+            cleanup_model_artifacts(
                 Configs=Test_Configs.Configs, 
                 custom_info={
                     **config_results,  # Spread all config results
+                    'job_id': model_result.get("id") if model_result else None,  # For Ardent job cleanup
                     "publicKey": supabase_account_resource["publicKey"],
                     "secretKey": supabase_account_resource["secretKey"],
                 }
             )
+```
+
+## 🧹 Cleanup and Job Management
+
+### Ardent Job Cleanup
+
+All tests that use the Ardent backend must include proper job cleanup to prevent resource leaks. The `cleanup_model_artifacts` function now handles both configuration cleanup and Ardent job deletion.
+
+#### Required Pattern
+
+```python
+finally:
+    # CLEANUP - Include API keys and job_id for proper cleanup
+    if config_results:
+        cleanup_model_artifacts(
+            Configs=Test_Configs.Configs, 
+            custom_info={
+                **config_results,  # Spread all config results
+                'job_id': model_result.get("id") if model_result else None,  # For Ardent job cleanup
+                "publicKey": supabase_account_resource["publicKey"],
+                "secretKey": supabase_account_resource["secretKey"],
+            }
+        )
+```
+
+#### Key Components
+
+1. **`job_id`**: Extracted from `model_result.get("id")` after calling `run_model()`
+2. **`config_results`**: Contains service-specific configuration IDs for cleanup
+3. **Supabase credentials**: Required for authenticating with Ardent backend
+4. **Error handling**: Cleanup should be in `finally` block to ensure it runs even if test fails
+
+#### What Gets Cleaned Up
+
+- **Ardent Jobs**: Active jobs are terminated and deleted from the backend
+- **Service Configurations**: Database connections, API keys, and other service configs
+- **Temporary Resources**: Any resources created during the test execution
+
+#### Example with Job ID Extraction
+
+```python
+try:
+    # Set up configurations
+    config_results = set_up_model_configs(
+        Configs=Test_Configs.Configs,
+        custom_info={
+            "publicKey": supabase_account_resource["publicKey"],
+            "secretKey": supabase_account_resource["secretKey"],
+        }
+    )
+    
+    # Run the model and capture result with job_id
+    model_result = run_model(
+        container=None,
+        task=Test_Configs.User_Input,
+        configs=Test_Configs.Configs,
+        extra_information={
+            "useArdent": True,
+            "publicKey": supabase_account_resource["publicKey"],
+            "secretKey": supabase_account_resource["secretKey"],
+        }
+    )
+    
+    # Extract job ID for cleanup
+    job_id = model_result.get("id") if model_result else None
+    print(f"Job created with ID: {job_id}")
+    
+    # Your test assertions here...
+    
+finally:
+    try:
+        # Clean up model configs and jobs
+        if config_results:
+            cleanup_model_artifacts(
+                Configs=Test_Configs.Configs, 
+                custom_info={
+                    **config_results,
+                    'job_id': model_result.get("id") if model_result else None,
+                    "publicKey": supabase_account_resource["publicKey"],
+                    "secretKey": supabase_account_resource["secretKey"],
+                }
+            )
+    except Exception as e:
+        print(f"Error during cleanup: {e}")
 ```
 
 ## ⚙️ Test_Configs.py Structure

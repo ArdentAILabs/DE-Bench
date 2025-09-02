@@ -13,7 +13,7 @@ from python_on_whales.exceptions import NoSuchVolume
 from Configs.ArdentConfig import Ardent_Client
 from model.Run_Model import run_model
 from Configs.MySQLConfig import connection
-from model.Configure_Model import set_up_model_configs, remove_model_configs
+from model.Configure_Model import set_up_model_configs, cleanup_model_artifacts
 from Environment.Airflow.Airflow import Airflow_Local
 
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -30,7 +30,8 @@ Test_Configs = importlib.import_module(module_path)
 @pytest.mark.api_integration
 @pytest.mark.database
 @pytest.mark.pipeline
-def test_airflow_agent_mysql_to_tigerbeetle(request):
+@pytest.mark.parametrize("supabase_account_resource", [{"useArdent": True}], indirect=True)
+def test_airflow_agent_mysql_to_tigerbeetle(request, supabase_account_resource):
     input_dir = os.path.dirname(os.path.abspath(__file__))
     request.node.user_properties.append(("user_query", Test_Configs.User_Input))
 
@@ -179,15 +180,28 @@ def test_airflow_agent_mysql_to_tigerbeetle(request):
 
         connection.commit()
 
-        config_results = set_up_model_configs(Configs=Test_Configs.Configs)
+        config_results = set_up_model_configs(
+            Configs=Test_Configs.Configs,
+            custom_info={
+                "publicKey": supabase_account_resource["publicKey"],
+                "secretKey": supabase_account_resource["secretKey"],
+            }
+        )
 
         
 
 
         # SECTION 2: RUN THE MODEL
         start_time = time.time()
-        run_model(
-            container=None, task=Test_Configs.User_Input, configs=Test_Configs.Configs
+        model_result = run_model(
+            container=None, 
+            task=Test_Configs.User_Input, 
+            configs=Test_Configs.Configs,
+            extra_information={
+                "useArdent": True,
+                "publicKey": supabase_account_resource["publicKey"],
+                "secretKey": supabase_account_resource["secretKey"],
+            }
         )
         end_time = time.time()
         request.node.user_properties.append(("model_runtime", end_time - start_time))
@@ -398,8 +412,14 @@ def test_airflow_agent_mysql_to_tigerbeetle(request):
                 print(f"Error during cleanup: {e}")
 
             # Remove model configs
-            remove_model_configs(
-                Configs=Test_Configs.Configs, custom_info=config_results
+            cleanup_model_artifacts(
+                Configs=Test_Configs.Configs, 
+                custom_info={
+                    **config_results,  # Spread all config results
+                    'job_id': model_result.get("id") if model_result else None,
+                    "publicKey": supabase_account_resource["publicKey"],
+                    "secretKey": supabase_account_resource["secretKey"],
+                }
             )
             
             # Clean up GitHub - delete branch if it exists
