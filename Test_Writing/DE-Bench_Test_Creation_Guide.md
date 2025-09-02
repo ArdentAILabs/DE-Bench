@@ -210,6 +210,40 @@ Configs = {
 }
 ```
 
+**Snowflake Test Config:**
+```python
+import os
+
+User_Input = """
+I need to add a new user record to the Snowflake users table.
+
+The new user details are:
+- Name: David Wilson
+- Email: david.wilson@newuser.com  
+- Age: 35
+- City: Austin
+- State: TX
+- Active: True
+- Initial purchases: 0.00
+
+Please add this user to the USERS table in Snowflake and verify it was added successfully.
+"""
+
+Configs = {
+    "services": {
+        "snowflake": {
+            "account": os.getenv("SNOWFLAKE_ACCOUNT"),
+            "user": os.getenv("SNOWFLAKE_USER"),
+            "password": os.getenv("SNOWFLAKE_PASSWORD"),
+            "warehouse": os.getenv("SNOWFLAKE_WAREHOUSE"),
+            "role": os.getenv("SNOWFLAKE_ROLE", "SYSADMIN"),
+            "database": "TEST_DB",  # Will be overridden by fixture
+            "schema": "TEST_SCHEMA"  # Will be overridden by fixture
+        }
+    }
+}
+```
+
 ## 🏷️ Test Markers
 
 Use appropriate pytest markers to categorize your tests:
@@ -228,6 +262,7 @@ Use appropriate pytest markers to categorize your tests:
 @pytest.mark.airflow
 @pytest.mark.postgres
 @pytest.mark.mysql
+@pytest.mark.snowflake
 @pytest.mark.databricks
 @pytest.mark.aws
 @pytest.mark.s3
@@ -294,6 +329,65 @@ def test_airflow_function(request, airflow_resource):
     # Each test gets its own Airflow instance
     base_url = airflow_resource["base_url"]
     api_token = airflow_resource["api_token"]
+```
+
+**Snowflake (Fresh per test with SQL file support):**
+```python
+@pytest.mark.parametrize("snowflake_resource", [{
+    "resource_id": "your_test_snowflake_resource",
+    "database": "TEST_DB_12345_ABC",
+    "schema": "TEST_SCHEMA_12345_ABC", 
+    "sql_file": "schema.sql"  # Optional: SQL file to execute
+}], indirect=True)
+def test_snowflake_function(request, snowflake_resource):
+    # Each test gets fresh Snowflake database + schema
+    connection = snowflake_resource["connection"]
+    database = snowflake_resource["database"]
+    schema = snowflake_resource["schema"]
+```
+
+#### **SQL File Fixtures**
+
+Some fixtures support loading SQL files for complex schema setup:
+
+**Snowflake with SQL File:**
+```python
+# Create schema.sql in your test directory
+@pytest.mark.parametrize("snowflake_resource", [{
+    "resource_id": "test_12345_abc",
+    "database": "BENCH_DB_12345_ABC",
+    "schema": "TEST_SCHEMA_12345_ABC",
+    "sql_file": "users_schema.sql"  # Relative to test directory
+}], indirect=True)
+def test_with_sql_file(request, snowflake_resource):
+    # SQL file is executed automatically during fixture setup
+    # Tables and data are ready to use
+    connection = snowflake_resource["connection"]
+```
+
+**SQL File Features:**
+- **Variable substitution**: Use `{{DB}}`, `{{SCHEMA}}`, `{{WAREHOUSE}}` in SQL
+- **Multi-statement support**: Semicolon-separated statements executed in order  
+- **Automatic cleanup**: Database/schema dropped after test
+- **Relative paths**: SQL files resolved relative to test directory
+
+**Example SQL File (`users_schema.sql`):**
+```sql
+-- Variables: {{DB}}, {{SCHEMA}}, {{WAREHOUSE}}, {{ROLE}}
+USE ROLE {{ROLE}};
+USE WAREHOUSE {{WAREHOUSE}};
+USE DATABASE {{DB}};
+USE SCHEMA {{SCHEMA}};
+
+CREATE OR REPLACE TABLE USERS (
+    USER_ID NUMBER PRIMARY KEY,
+    FIRST_NAME VARCHAR(100) NOT NULL,
+    EMAIL VARCHAR(255) UNIQUE
+);
+
+INSERT INTO USERS (USER_ID, FIRST_NAME, EMAIL) VALUES 
+    (1, 'Alice', 'alice@example.com'),
+    (2, 'Bob', 'bob@example.com');
 ```
 
 #### **Authentication Fixtures (Function-Scoped)**
@@ -430,14 +524,37 @@ All DE-Bench tests require these environment variables in your test's README:
 ```markdown
 ## Environment Requirements
 
-Set the following environment variables for test isolation:
+### Core Framework Variables (Required for all tests)
 - `SUPABASE_URL`: Your Supabase project URL
 - `SUPABASE_SERVICE_ROLE_KEY`: Supabase service role key (for user management)
 - `SUPABASE_JWT_SECRET`: JWT secret for token generation
 - `ARDENT_BASE_URL`: Your Ardent backend base URL
 
+### Service-Specific Variables
 
-- `SERVICE_DB` (optional): Database name (defaults to 'test')
+#### Snowflake Tests
+- `SNOWFLAKE_ACCOUNT`: Your Snowflake account identifier (e.g., abc12345.us-west-2)
+- `SNOWFLAKE_USER`: Snowflake username
+- `SNOWFLAKE_PASSWORD`: Snowflake password
+- `SNOWFLAKE_WAREHOUSE`: Snowflake warehouse name
+- `SNOWFLAKE_ROLE`: Snowflake role (optional, defaults to SYSADMIN)
+
+#### MongoDB Tests  
+- `MONGODB_URI`: MongoDB connection string
+
+#### PostgreSQL Tests
+- `POSTGRES_HOSTNAME`: PostgreSQL host
+- `POSTGRES_PORT`: PostgreSQL port
+- `POSTGRES_USERNAME`: PostgreSQL username
+- `POSTGRES_PASSWORD`: PostgreSQL password
+
+#### Airflow Tests
+- `AIRFLOW_GITHUB_TOKEN`: GitHub token for DAG management
+- `AIRFLOW_REPO`: GitHub repository URL
+- `AIRFLOW_DAG_PATH`: Path to DAGs in repository
+- `AIRFLOW_HOST`: Airflow webserver URL
+- `AIRFLOW_USERNAME`: Airflow username
+- `AIRFLOW_PASSWORD`: Airflow password
 ```
 
 Add them to the main project's `.env` template in the root README.
@@ -617,6 +734,7 @@ def test_function(request, shared_resource):
 - Examples: 
   - `PostgreSQL_Agent_Add_Record/` (simple task)
   - `MongoDB_Agent_Add_Record/` (simple task)
+  - `Snowflake_Agent_Add_Record/` (simple task)
   - `Airflow_Agent_Simple_Pipeline/` (simple task)
   - `Airflow_Agent_Amazon_SP_API_To_PostgreSQL/` (source → destination)
   - `Airflow_Agent_PostgreSQL_To_MySQL/` (source → destination)
