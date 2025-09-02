@@ -8,6 +8,7 @@ import shutil
 import subprocess
 import tempfile
 import time
+import random
 from pathlib import Path
 from typing import Optional, Union
 
@@ -273,26 +274,9 @@ def airflow_resource(request, astro_login, shared_cache_manager):
         api_token = os.getenv("ASTRO_API_TOKEN")
 
         # create a token for the airflow resource
-        api_token = api_token or _run_and_validate_subprocess(
-            [
-                "astro",
-                "deployment",
-                "token",
-                "create",
-                "--description",
-                f"{resource_id} API access for deployment {astro_deployment_name}",
-                "--name",
-                f"{astro_deployment_name} API access",
-                "--role",
-                "DEPLOYMENT_ADMIN",
-                "--expiration",
-                "30",
-                "--deployment-id",
-                astro_deployment_id,
-                "--clean-output",
-            ],
-            "creating Astro deployment API token",
-            return_output=True,
+        api_token = api_token or _create_astro_deployment_api_token(
+            deployment_id=astro_deployment_id,
+            deployment_name=astro_deployment_name,
         )
         # check if the token has any prefix
         if "astro api" in api_token.lower():
@@ -806,3 +790,48 @@ def cleanup_airflow_resource(
         )
     except Exception as e:
         print(f"Worker {os.getpid()}: Error cleaning up Airflow resource: {e}")
+
+
+def _create_astro_deployment_api_token(deployment_id: str, deployment_name: str, retries: int = 5) -> str:
+    """
+    Creates an API token for a deployment in Astronomer.
+
+    :param deployment_id: The ID of the deployment.
+    :param deployment_name: The name of the deployment.
+    :param retries: The number of times to retry the operation.
+    :raises EnvironmentError: If the API token cannot be created after the retries.
+    :return: The API token.
+    :rtype: str
+    """
+    for retry in range(retries+1):
+        error_message = f"Failed to create Astro deployment API token for deployment {deployment_name} after {retry} retries"
+        try:
+            if api_token := _run_and_validate_subprocess(
+            [
+                "astro",
+                "deployment",
+                "token",
+                "create",
+                "--description",
+                f"{deployment_name} API access for deployment {deployment_name}",
+                "--name",
+                f"{deployment_name} API access",
+                "--role",
+                "DEPLOYMENT_ADMIN",
+                "--expiration",
+                "30",
+                "--deployment-id",
+                deployment_id,
+                "--clean-output",
+            ],
+            "creating Astro deployment API token",
+            return_output=True,
+        ):
+                return api_token
+            else:
+                print(f"Worker {os.getpid()}: {error_message}")
+                time.sleep(random.randint(5, 15))
+        except Exception as e:
+            print(f"Worker {os.getpid()}: {error_message}: {e}")
+            time.sleep(random.randint(5, 15))
+    raise EnvironmentError(error_message)
