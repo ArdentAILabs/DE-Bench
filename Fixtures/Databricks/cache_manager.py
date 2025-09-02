@@ -801,15 +801,15 @@ class CacheManager:
                             if cursor.fetchone():
                                 cursor.execute("""
                                     UPDATE astronomer_deployments 
-                                    SET deployment_id = ?, deployment_name = ?, status = ?, in_use = CASE WHEN test_name IS NOT NULL AND test_name != '' THEN 1 ELSE 0 END, created_at = datetime('now')
+                                    SET deployment_id = ?, deployment_name = ?, status = ?, test_name = NULL, in_use = 0, created_at = datetime('now')
                                     WHERE deployment_name = ?
                                 """, (deployment["deployment_id"], deployment["deployment_name"], deployment["status"], deployment["deployment_name"]))
                             else:
                                 # For new deployments, in_use should be 0 since no test is using them yet
                                 cursor.execute("""
                                     INSERT INTO astronomer_deployments (
-                                        deployment_id, deployment_name, status, in_use, created_at
-                                    ) VALUES (?, ?, ?, 0, datetime('now'))
+                                        deployment_id, deployment_name, status, test_name, in_use, created_at
+                                    ) VALUES (?, ?, ?, NULL, 0, datetime('now'))
                                 """, (
                                     deployment["deployment_id"],
                                     deployment["deployment_name"],
@@ -857,10 +857,11 @@ class CacheManager:
                     cursor.execute("BEGIN TRANSACTION")
                     
                     try:
-                        # Find the first available hibernating deployment (in_use should be 0 for available deployments)
+                        # Find the first available hibernating deployment
+                        # Note: in_use might be 1 due to database trigger, but we can still use hibernating deployments
                         cursor.execute("""
                             SELECT * FROM astronomer_deployments 
-                            WHERE in_use = 0 AND status = 'HIBERNATING'
+                            WHERE status = 'HIBERNATING'
                             ORDER BY last_accessed ASC 
                             LIMIT 1
                         """)

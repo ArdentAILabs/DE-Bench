@@ -23,40 +23,170 @@ from Fixtures import parse_test_name
 VALIDATE_ASTRO_INSTALL = "Please check if the Astro CLI is installed and in PATH."
 
 
+def _ensure_astro_login():
+    """
+    Ensure Astro is logged in using file-based coordination to prevent multiple logins in parallel.
+    """
+    import tempfile
+    import fcntl
+    
+    # Create a lock file for coordination
+    lock_file_path = os.path.join(tempfile.gettempdir(), "astro_login.lock")
+    
+    with open(lock_file_path, 'w') as lock_file:
+        try:
+            # Try to acquire an exclusive lock
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            
+            # Check if already logged in
+            try:
+                # Try a simple command that requires authentication
+                result = subprocess.run(
+                    ["astro", "deployment", "list"], 
+                    capture_output=True, 
+                    text=True, 
+                    timeout=10
+                )
+                if result.returncode == 0:
+                    print(f"Worker {os.getpid()}: Astro already logged in")
+                    return True
+            except (subprocess.TimeoutExpired, FileNotFoundError):
+                pass
+            
+            # Not logged in, perform login
+            # Load environment variables from .env file
+            astro_token = None
+            try:
+                with open('.env', 'r') as env_file:
+                    for line in env_file:
+                        line = line.strip()
+                        if line.startswith('ASTRO_ACCESS_TOKEN'):
+                            # Handle both formats: ASTRO_ACCESS_TOKEN=value and ASTRO_ACCESS_TOKEN = value
+                            if '=' in line:
+                                # Split on first = and handle spaces around it
+                                parts = line.split('=', 1)
+                                if len(parts) == 2:
+                                    astro_token = parts[1].strip().strip('"\'')
+                                    break
+            except FileNotFoundError:
+                pass
+            
+            if not astro_token:
+                raise ValueError("ASTRO_ACCESS_TOKEN not found in .env file")
+            
+            print(f"Worker {os.getpid()}: Logging into Astro for test session")
+            _run_and_validate_subprocess(
+                ["astro", "login", "--token-login", astro_token],
+                "login to Astro (session-wide)",
+            )
+            print(f"Worker {os.getpid()}: Successfully logged into Astro")
+            return True
+            
+        except (IOError, OSError):
+            # Another process has the lock, wait for login to complete
+            print(f"Worker {os.getpid()}: Waiting for another process to complete Astro login...")
+            try:
+                # Wait for the lock to be released
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+                print(f"Worker {os.getpid()}: Astro login completed by another process")
+                return True
+            except Exception as e:
+                print(f"Worker {os.getpid()}: Error waiting for Astro login: {e}")
+                raise
+
+
 @pytest.fixture(scope="session")
 def astro_login():
     """
-    A session-scoped fixture that logs into Astro once for the entire test session.
-    This avoids repeated logins for each test when running in parallel.
+    A session-scoped fixture that ensures Astro is logged in once for the entire test session.
+    Uses file-based coordination to prevent multiple logins in parallel execution.
     """
-    astro_token = os.getenv("ASTRO_ACCESS_TOKEN")
-    if not astro_token:
-        raise ValueError("ASTRO_ACCESS_TOKEN environment variable is not set")
-    
-    print("Session login: Logging into Astro for test session")
-    _run_and_validate_subprocess(
-        ["astro", "login", "--token-login", astro_token],
-        "login to Astro (session-wide)",
-    )
-    print("Session login: Successfully logged into Astro")
+    _ensure_astro_login()
     return True
+
+
+def _ensure_cache_manager_initialized():
+    """
+    Ensure CacheManager is initialized using file-based coordination to prevent multiple initializations in parallel.
+    """
+    import tempfile
+    import fcntl
+    import time
+    
+    # Create a lock file for coordination
+    lock_file_path = os.path.join(tempfile.gettempdir(), "cache_manager_init.lock")
+    
+    # First, check if already initialized without acquiring lock
+    cache_manager = CacheManager()
+    existing_deployments = cache_manager.get_all_astronomer_deployments()
+    if existing_deployments:
+        print(f"Worker {os.getpid()}: CacheManager already initialized with {len(existing_deployments)} deployments")
+        return cache_manager
+    
+    # Not initialized, need to coordinate
+    with open(lock_file_path, 'w') as lock_file:
+        try:
+            # Try to acquire an exclusive lock
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            
+            # Double-check that it's still not initialized (another process might have done it)
+            existing_deployments = cache_manager.get_all_astronomer_deployments()
+            if existing_deployments:
+                print(f"Worker {os.getpid()}: CacheManager already initialized by another process with {len(existing_deployments)} deployments")
+                return cache_manager
+            
+            # Not initialized, populate deployments
+            print(f"Worker {os.getpid()}: Initializing shared CacheManager for test session")
+            astro_deployments = fetch_astro_deployments()
+            print(f"Worker {os.getpid()}: Fetched {len(astro_deployments)} deployments from Astro")
+            
+            # Debug: Print deployment details
+            for deployment in astro_deployments:
+                print(f"Worker {os.getpid()}: Deployment: {deployment['deployment_name']} ({deployment['deployment_id']}) - Status: {deployment['status']}")
+            
+            cache_manager.populate_astronomer_deployments(astro_deployments)
+            
+            # Verify population worked
+            verification_deployments = cache_manager.get_all_astronomer_deployments()
+            print(f"Worker {os.getpid()}: CacheManager initialized and populated with {len(verification_deployments)} deployments")
+            return cache_manager
+            
+        except (IOError, OSError):
+            # Another process has the lock, wait for initialization to complete
+            print(f"Worker {os.getpid()}: Waiting for another process to complete CacheManager initialization...")
+            
+            # Wait for the lock to be released and check for deployments
+            max_wait_time = 300  # 5 minutes max wait
+            start_time = time.time()
+            
+            while time.time() - start_time < max_wait_time:
+                try:
+                    # Try to acquire the lock
+                    fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    # Lock acquired, check if deployments are now available
+                    existing_deployments = cache_manager.get_all_astronomer_deployments()
+                    if existing_deployments:
+                        print(f"Worker {os.getpid()}: CacheManager initialization completed by another process ({len(existing_deployments)} deployments)")
+                        return cache_manager
+                    # Still no deployments, release lock and wait
+                    fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+                    time.sleep(2)  # Wait 2 seconds before trying again
+                except (IOError, OSError):
+                    # Lock not available, wait and try again
+                    time.sleep(2)
+                    continue
+            
+            # If we get here, something went wrong
+            raise Exception(f"Timeout waiting for CacheManager initialization after {max_wait_time} seconds")
 
 
 @pytest.fixture(scope="session")
 def shared_cache_manager():
     """
     A session-scoped fixture that creates a single CacheManager instance shared across all tests.
-    This ensures proper coordination of database access in parallel test execution.
+    Uses file-based coordination to prevent multiple initializations in parallel execution.
     """
-    print("Session cache: Initializing shared CacheManager for test session")
-    cache_manager = CacheManager()
-    
-    # Fetch and populate deployments once for the entire session
-    astro_deployments = fetch_astro_deployments()
-    cache_manager.populate_astronomer_deployments(astro_deployments)
-    
-    print("Session cache: CacheManager initialized and populated with deployments")
-    return cache_manager
+    return _ensure_cache_manager_initialized()
 
 
 @pytest.fixture(scope="function")
@@ -97,6 +227,14 @@ def airflow_resource(request, astro_login, shared_cache_manager):
 
     try:
         # Try to allocate a hibernating deployment from shared cache
+        print(f"Worker {os.getpid()}: Attempting to allocate hibernating deployment for {resource_id}")
+        
+        # Debug: Check what deployments are available
+        all_deployments = shared_cache_manager.get_all_astronomer_deployments()
+        print(f"Worker {os.getpid()}: Total deployments in cache: {len(all_deployments)}")
+        for dep in all_deployments:
+            print(f"Worker {os.getpid()}: Deployment: {dep['deployment_name']} - Status: {dep['status']} - In use: {dep['in_use']}")
+        
         if deployment_info := shared_cache_manager.allocate_astronomer_deployment(resource_id, os.getpid()):
             # Got an existing hibernating deployment
             astro_deployment_id = deployment_info["deployment_id"]
@@ -372,7 +510,8 @@ def _create_deployment_in_astronomer(deployment_name: str, wait: Optional[bool] 
         if not wait:
             return None
         # Parse the output to get the newly created deployment ID
-        deployment_id_pattern = re.compile(r"(?<=deployments/)([^/]+)(?=/overview)")
+        # Look for the deployment ID in the deployment dashboard URL
+        deployment_id_pattern = re.compile(r"deployments/([a-zA-Z0-9]+)")
         match = deployment_id_pattern.search(response)
         if not match:
             raise EnvironmentError("Could not parse deployment ID from output")
