@@ -63,6 +63,7 @@ def test_postgresql_agent_add_record(request, postgres_resource, supabase_accoun
 
     # SECTION 1: SETUP THE TEST
     config_results = None
+    model_result = None  # Initialize for cleanup
     created_db_name = postgres_resource["created_resources"][0]["name"]
     
     try:
@@ -79,8 +80,6 @@ def test_postgresql_agent_add_record(request, postgres_resource, supabase_accoun
 
 
         print(test_configs)
-
-        input("Press Enter to continue...")
 
         # SECTION 2: RUN THE MODEL
         start_time = time.time()
