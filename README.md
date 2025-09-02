@@ -23,6 +23,10 @@ Below is a template of all environment variables needed for the tests. Copy this
 ACCESS_KEY_ID_AWS="YOUR_AWS_ACCESS_KEY_ID"
 SECRET_ACCESS_KEY_AWS="YOUR_AWS_SECRET_ACCESS_KEY"
 
+# AWS S3 Credentials (for Snowflake S3 integration)
+AWS_ACCESS_KEY="YOUR_AWS_ACCESS_KEY"
+AWS_SECRET_KEY="YOUR_AWS_SECRET_KEY"
+
 # MongoDB
 MONGODB_URI="YOUR_MONGODB_CONNECTION_STRING"
 
@@ -50,6 +54,7 @@ SNOWFLAKE_ACCOUNT="YOUR_SNOWFLAKE_ACCOUNT"
 SNOWFLAKE_USER="YOUR_SNOWFLAKE_USER"
 SNOWFLAKE_PASSWORD="YOUR_SNOWFLAKE_PASSWORD"
 SNOWFLAKE_WAREHOUSE="YOUR_SNOWFLAKE_WAREHOUSE"
+SNOWFLAKE_ROLE="SYSADMIN"
 
 # Azure SQL
 AZURE_SQL_SERVER="YOUR_AZURE_SQL_SERVER"
@@ -152,6 +157,15 @@ MongoDB:
   - Create/Delete Collections
   - Create/Delete Databases
   - Read/Write to Collections
+
+Snowflake:
+- Required Role: SYSADMIN (or custom role with database creation permissions)
+- Required Permissions:
+  - CREATE DATABASE
+  - CREATE SCHEMA
+  - CREATE TABLE
+  - COPY INTO (for S3 loading)
+- AWS S3 Access: Ensure AWS credentials have S3 read permissions for parquet files
 
 7. A lot of the tests run on tools or frameworks. We've set up a clean .env file with all the necessary variables needed. We've tried to optimize the setup of all the tests but it will likely charge some credits through the tools. Keep that in mind.
 
