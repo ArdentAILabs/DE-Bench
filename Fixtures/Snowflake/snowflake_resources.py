@@ -1,57 +1,11 @@
-
-
 import pytest
 import time
 import os
 import re
+import time
 import uuid
 import snowflake.connector
 from snowflake.connector import DictCursor
-
-
-def parse_test_name(test_name):
-    """Extract clean test name from pytest node name."""
-    # Remove pytest parametrization brackets and special characters
-    clean_name = re.sub(r'[^\w\-]', '_', test_name)
-    return clean_name
-
-
-def substitute_sql_variables(sql_content, variables):
-    """
-    Replace {{VAR}} placeholders in SQL content with actual values.
-    
-    Args:
-        sql_content (str): SQL content with {{VAR}} placeholders
-        variables (dict): Variable name -> value mapping
-    
-    Returns:
-        str: SQL content with variables substituted
-    """
-    result = sql_content
-    for var_name, var_value in variables.items():
-        placeholder = f"{{{{{var_name}}}}}"
-        result = result.replace(placeholder, str(var_value))
-    return result
-
-
-def resolve_env_variables(config):
-    """
-    Resolve environment variable references in config.
-    Converts "env:VAR_NAME" to os.getenv("VAR_NAME").
-    
-    Args:
-        config (dict): Configuration dictionary
-    
-    Returns:
-        dict: Configuration with environment variables resolved
-    """
-    if isinstance(config, dict):
-        return {k: resolve_env_variables(v) for k, v in config.items()}
-    elif isinstance(config, str) and config.startswith("env:"):
-        env_var = config[4:]  # Remove "env:" prefix
-        return os.getenv(env_var)
-    else:
-        return config
 
 
 @pytest.fixture(scope="function")
@@ -80,12 +34,11 @@ def snowflake_resource(request):
 
     """
     start_time = time.time()
-    test_name = parse_test_name(request.node.name)
+    test_name = re.sub(r'[^\w\-]', '_', request.node.name)
     print(f"Worker {os.getpid()}: Starting snowflake_resource for {test_name}")
     
-    # Extract and process template
+    # Extract template
     build_template = request.param
-    build_template = resolve_env_variables(build_template)
     
     # Generate unique resource names
     timestamp = int(time.time())
@@ -172,8 +125,10 @@ def snowflake_resource(request):
                     "AWS_SECRET_KEY": s3_config.get("aws_secret_key", ""),
                 })
             
-            # Substitute variables in SQL
-            processed_sql = substitute_sql_variables(sql_content, variables)
+            # Replace {{VAR}} placeholders
+            processed_sql = sql_content
+            for var_name, var_value in variables.items():
+                processed_sql = processed_sql.replace(f"{{{{{var_name}}}}}", str(var_value))
             
             print(f"Worker {os.getpid()}: Executing SQL file with variables substituted")
             
