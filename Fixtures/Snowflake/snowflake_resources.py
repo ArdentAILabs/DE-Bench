@@ -118,11 +118,20 @@ def snowflake_resource(request):
             # Add S3 config variables if provided
             if "s3_config" in build_template:
                 s3_config = build_template["s3_config"]
+                # Resolve env: variables
+                aws_key_id = s3_config.get("aws_key_id", "")
+                if aws_key_id.startswith("env:"):
+                    aws_key_id = os.getenv(aws_key_id[4:])
+                
+                aws_secret_key = s3_config.get("aws_secret_key", "")
+                if aws_secret_key.startswith("env:"):
+                    aws_secret_key = os.getenv(aws_secret_key[4:])
+                
                 variables.update({
                     "BUCKET_URL": s3_config.get("bucket_url", ""),
                     "S3_KEY": s3_config.get("s3_key", ""),
-                    "AWS_KEY_ID": s3_config.get("aws_key_id", ""),
-                    "AWS_SECRET_KEY": s3_config.get("aws_secret_key", ""),
+                    "AWS_ACCESS_KEY": aws_key_id,
+                    "AWS_SECRET_KEY": aws_secret_key,
                 })
             
             # Replace {{VAR}} placeholders

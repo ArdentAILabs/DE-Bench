@@ -7,8 +7,8 @@ User_Input = """
 I need to add a new user record to the Snowflake users table. 
 
 The new user details are:
-- Name: David Wilson  
-- Email: david.wilson@newuser.com
+- Name: Sarah Johnson  
+- Email: sarah.johnson@newuser.com
 - Age: 35
 - City: Austin
 - State: TX

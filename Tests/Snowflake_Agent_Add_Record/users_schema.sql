@@ -1,6 +1,6 @@
--- users_schema.sql - Snowflake schema for users table with data loading
+-- users_schema.sql - Snowflake schema for users table with S3 parquet data loading
 -- Variables: {{DB}}, {{SCHEMA}}, {{WAREHOUSE}}, {{ROLE}}
--- Optional S3 variables: {{BUCKET_URL}}, {{S3_KEY}}, {{AWS_KEY_ID}}, {{AWS_SECRET_KEY}}
+-- S3 variables: {{BUCKET_URL}}, {{S3_KEY}}, {{AWS_ACCESS_KEY}}, {{AWS_SECRET_KEY}}
 
 USE ROLE {{ROLE}};
 USE WAREHOUSE {{WAREHOUSE}};
@@ -12,38 +12,32 @@ USE SCHEMA {{SCHEMA}};
 -- Create file format for Parquet
 CREATE OR REPLACE FILE FORMAT PARQUET_STD TYPE=PARQUET;
 
--- Create users table with proper schema
+-- Create temporary stage for S3 access
+CREATE OR REPLACE TEMP STAGE _temp_stage
+  URL='{{BUCKET_URL}}'
+  CREDENTIALS=(AWS_KEY_ID='{{AWS_ACCESS_KEY}}' AWS_SECRET_KEY='{{AWS_SECRET_KEY}}');
+
+-- Create table with explicit schema (safer than INFER_SCHEMA)
 CREATE OR REPLACE TABLE USERS (
-    USER_ID NUMBER PRIMARY KEY,
-    FIRST_NAME VARCHAR(100) NOT NULL,
-    LAST_NAME VARCHAR(100) NOT NULL,
-    EMAIL VARCHAR(255) NOT NULL UNIQUE,
+    USER_ID NUMBER,
+    FIRST_NAME VARCHAR(100),
+    LAST_NAME VARCHAR(100),
+    EMAIL VARCHAR(255),
     AGE NUMBER,
     CITY VARCHAR(100),
     STATE VARCHAR(2),
-    SIGNUP_DATE DATE,
-    IS_ACTIVE BOOLEAN DEFAULT TRUE,
-    TOTAL_PURCHASES DECIMAL(10,2) DEFAULT 0.00,
-    CREATED_AT TIMESTAMP DEFAULT CURRENT_TIMESTAMP()
+    SIGNUP_DATE TIMESTAMP,  -- Changed from DATE to TIMESTAMP to handle parquet data
+    IS_ACTIVE BOOLEAN,
+    TOTAL_PURCHASES DECIMAL(10,2)
 );
 
--- Insert some initial test data
-INSERT INTO USERS (USER_ID, FIRST_NAME, LAST_NAME, EMAIL, AGE, CITY, STATE, SIGNUP_DATE, IS_ACTIVE, TOTAL_PURCHASES) VALUES 
-    (1, 'Alice', 'Smith', 'alice.smith@example.com', 25, 'New York', 'NY', '2024-01-15', TRUE, 150.50),
-    (2, 'Bob', 'Jones', 'bob.jones@example.com', 32, 'Los Angeles', 'CA', '2024-02-20', TRUE, 89.99),
-    (3, 'Carol', 'Brown', 'carol.brown@example.com', 28, 'Chicago', 'IL', '2024-03-10', FALSE, 0.00);
-
--- Optional: Load from S3 if S3 config is provided
--- This section will only work if S3 variables are substituted
--- CREATE TEMP STAGE _temp_stage
---   URL='{{BUCKET_URL}}'
---   CREDENTIALS=(AWS_KEY_ID='{{AWS_KEY_ID}}' AWS_SECRET_KEY='{{AWS_SECRET_KEY}}');
--- 
--- COPY INTO USERS
--- FROM @_temp_stage
--- FILES = ('{{S3_KEY}}')
--- FILE_FORMAT=(FORMAT_NAME=PARQUET_STD)
--- ON_ERROR=CONTINUE;
+-- Load data from S3 parquet file
+COPY INTO USERS
+FROM @_temp_stage
+FILES = ('{{S3_KEY}}')
+FILE_FORMAT=(FORMAT_NAME=PARQUET_STD)
+MATCH_BY_COLUMN_NAME=CASE_INSENSITIVE
+ON_ERROR=ABORT_STATEMENT;
 
 -- Verify data loaded
 SELECT COUNT(*) AS total_users FROM USERS;

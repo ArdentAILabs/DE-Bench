@@ -25,7 +25,13 @@ test_uuid = uuid.uuid4().hex[:8]
     "resource_id": f"snowflake_test_{test_timestamp}_{test_uuid}",
     "database": f"BENCH_DB_{test_timestamp}_{test_uuid}",
     "schema": f"TEST_SCHEMA_{test_timestamp}_{test_uuid}",
-    "sql_file": "users_schema.sql"
+    "sql_file": "users_schema.sql",
+    "s3_config": {
+        "bucket_url": "s3://de-bench/",
+        "s3_key": "v1/users_simple_20250901_233609.parquet",
+        "aws_key_id": "env:AWS_ACCESS_KEY",
+        "aws_secret_key": "env:AWS_SECRET_KEY"
+    }
 }], indirect=True)
 def test_snowflake_agent_add_record(request, snowflake_resource, supabase_account_resource):
     """
@@ -149,22 +155,22 @@ def test_snowflake_agent_add_record(request, snowflake_resource, supabase_accoun
             final_count = cursor.fetchone()[0]
             print(f"Final user count: {final_count}")
             
-            # Look for the new user (David Wilson)
+            # Look for the new user (Sarah Johnson)
             cursor.execute(f"""
                 SELECT USER_ID, FIRST_NAME, LAST_NAME, EMAIL, AGE, CITY, STATE, IS_ACTIVE, TOTAL_PURCHASES
-                FROM {snowflake_resource['database']}.{snowflake_resource['schema']}.USERS 
-                WHERE FIRST_NAME = 'David' AND LAST_NAME = 'Wilson'
+                FROM {snowflake_resource['database']}.{snowflake_resource['schema']}.USERS
+                WHERE FIRST_NAME = 'Sarah' AND LAST_NAME = 'Johnson'
             """)
             new_user = cursor.fetchone()
-            
+
             if new_user:
                 print(f"Found new user: {new_user}")
                 user_id, first_name, last_name, email, age, city, state, is_active, total_purchases = new_user
-                
+
                 # Verify the details match what we requested
-                assert first_name == 'David', f"Expected first name 'David', got '{first_name}'"
-                assert last_name == 'Wilson', f"Expected last name 'Wilson', got '{last_name}'"
-                assert email == 'david.wilson@newuser.com', f"Expected email 'david.wilson@newuser.com', got '{email}'"
+                assert first_name == 'Sarah', f"Expected first name 'Sarah', got '{first_name}'"
+                assert last_name == 'Johnson', f"Expected last name 'Johnson', got '{last_name}'"
+                assert email == 'sarah.johnson@newuser.com', f"Expected email 'sarah.johnson@newuser.com', got '{email}'"
                 assert age == 35, f"Expected age 35, got {age}"
                 assert city == 'Austin', f"Expected city 'Austin', got '{city}'"
                 assert state == 'TX', f"Expected state 'TX', got '{state}'"
