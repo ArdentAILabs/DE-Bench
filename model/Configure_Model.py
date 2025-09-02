@@ -88,6 +88,19 @@ def set_up_model_configs(Configs, custom_info=None):
                     }]
                 )
 
+            elif service == "snowflake":
+                service_result = Ardent_Client.set_config(
+                    config_type="snowflake",
+                    account=service_config["account"],
+                    user=service_config["user"],
+                    password=service_config["password"],
+                    warehouse=service_config["warehouse"],
+                    role=service_config.get("role", "SYSADMIN"),
+                    databases=[{
+                        "name": service_config["database"]
+                    }]
+                )
+
             # Add the result to our results dictionary
             if not results:
                 results = {service: service_result}
