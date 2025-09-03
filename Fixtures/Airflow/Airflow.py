@@ -51,30 +51,78 @@ class Airflow_Local:
     def verify_airflow_dag_exists(self, dag_id: str) -> bool:
         """
         Verify if a DAG exists using the dag_id in Airflow via API call.
+        Extended timeout for DAG synchronization after GitHub Actions deployment.
 
         :param dag_id: The ID of the DAG to check for.
         :return: True if the DAG exists, False otherwise.
         :rtype: bool
         """
-        max_retries = copy.deepcopy(self.max_retries)
+        # Extended retries for DAG synchronization - up to 12 minutes total
+        max_retries = 36  # Increased from default 5 to 36 (36 * 20s = 12 minutes)
+        wait_time = 20    # Increased from 10s to 20s per attempt
+        
         for attempt in range(max_retries):
-            print(f"Attempt {attempt + 1}/{max_retries}: Checking for DAG...")
+            print(f"Attempt {attempt + 1}/{max_retries}: Checking for DAG '{dag_id}'...")
             # Check if DAG exists
             dag_response = requests.get(
                 f"{self.AIRFLOW_HOST.rstrip('/')}/api/v1/dags/{dag_id}",
                 headers=self.API_HEADERS,
             )
 
-            if dag_response.status_code != 200:
-                print(f"DAG not found yet (status: {dag_response.status_code}), waiting...")
-                if attempt == max_retries - 1:
-                    raise Exception("DAG not found after max retries")
-                time.sleep(10)
-                continue
+            if dag_response.status_code == 200:
+                print(f"✅ DAG '{dag_id}' found!")
+                return True
+            elif dag_response.status_code == 404:
+                print(f"⏳ DAG '{dag_id}' not found yet (status: 404)")
+                
+                # On certain attempts, list available DAGs for debugging
+                if attempt % 6 == 5:  # Every 6th attempt (every 2 minutes)
+                    self._list_available_dags()
+                    
+            else:
+                print(f"⚠️ Unexpected response (status: {dag_response.status_code}): {dag_response.text}")
+                
+            if attempt == max_retries - 1:
+                # Final attempt - list all DAGs for debugging
+                print(f"❌ DAG '{dag_id}' not found after {max_retries} attempts ({max_retries * wait_time / 60:.1f} minutes)")
+                self._list_available_dags()
+                raise Exception(f"DAG '{dag_id}' not found after max retries. Check DAG deployment and syntax.")
+                
+            print(f"Waiting {wait_time} seconds before next attempt...")
+            time.sleep(wait_time)
 
-            print(f"DAG found!")
-            return True
         return False
+    
+    def _list_available_dags(self):
+        """Helper method to list all available DAGs for debugging purposes."""
+        try:
+            print("🔍 Listing all available DAGs for debugging...")
+            dags_response = requests.get(
+                f"{self.AIRFLOW_HOST.rstrip('/')}/api/v1/dags",
+                headers=self.API_HEADERS,
+            )
+            
+            if dags_response.status_code == 200:
+                dags_data = dags_response.json()
+                dags = dags_data.get('dags', [])
+                
+                if dags:
+                    print(f"📋 Found {len(dags)} DAGs in Airflow:")
+                    for dag in dags[:10]:  # Show first 10 DAGs
+                        dag_id = dag.get('dag_id', 'Unknown')
+                        is_paused = dag.get('is_paused', True)
+                        status = "⏸️ Paused" if is_paused else "▶️ Active"
+                        print(f"  - {dag_id} ({status})")
+                    
+                    if len(dags) > 10:
+                        print(f"  ... and {len(dags) - 10} more DAGs")
+                else:
+                    print("📭 No DAGs found in Airflow")
+            else:
+                print(f"❌ Failed to list DAGs (status: {dags_response.status_code}): {dags_response.text}")
+                
+        except Exception as e:
+            print(f"❌ Error listing DAGs: {e}")
     
     def unpause_and_trigger_airflow_dag(self, dag_id: str) -> Optional[str]:
         """

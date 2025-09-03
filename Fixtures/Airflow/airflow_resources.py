@@ -8,7 +8,6 @@ import shutil
 import subprocess
 import tempfile
 import time
-import random
 from pathlib import Path
 from typing import Optional, Union
 
@@ -273,9 +272,16 @@ def airflow_resource(request, astro_login, shared_cache_manager):
 
         api_token = os.getenv("ASTRO_API_TOKEN")
 
+        # Get the fresh deployment ID before creating API token (in case cache is stale)
+        fresh_deployment_id = _get_deployment_id_by_name(astro_deployment_name)
+        if not fresh_deployment_id:
+            raise EnvironmentError(f"Could not find deployment ID for deployment {astro_deployment_name}")
+        
+        print(f"Worker {os.getpid()}: Using fresh deployment ID {fresh_deployment_id} for {astro_deployment_name}")
+        
         # create a token for the airflow resource
         api_token = api_token or _create_astro_deployment_api_token(
-            deployment_id=astro_deployment_id,
+            deployment_id=fresh_deployment_id,
             deployment_name=astro_deployment_name,
         )
         # check if the token has any prefix
@@ -742,7 +748,28 @@ def _create_user_in_airflow_deployment(deployment_name: str) -> None:
         ],
     ]
     for command in user_creation_commands:
-        _ = _run_and_validate_subprocess(command, "creating user in Airflow deployment")
+        variable_name = command[4].split('=')[0]  # Extract variable name from command
+        try:
+            _ = _run_and_validate_subprocess(command, f"creating/updating variable {variable_name}")
+            print(f"Worker {os.getpid()}: Successfully created/updated variable {variable_name}")
+        except subprocess.CalledProcessError as e:
+            # Check if the error is because the variable already exists
+            error_output = e.stderr.decode('utf-8') if e.stderr else str(e)
+            if "already exists" in error_output.lower() or "conflict" in error_output.lower():
+                print(f"Worker {os.getpid()}: Variable {variable_name} already exists, skipping creation")
+            else:
+                print(f"Worker {os.getpid()}: Error creating variable {variable_name}: {error_output}")
+                # For critical variables, try to update instead of create
+                if variable_name in ['_AIRFLOW_WWW_USER_CREATE', 'AIRFLOW__API__AUTH_BACKENDS']:
+                    try:
+                        # Try to update the variable instead
+                        update_command = command.copy()
+                        update_command[3] = "update"  # Change "create" to "update"
+                        _ = _run_and_validate_subprocess(update_command, f"updating variable {variable_name}")
+                        print(f"Worker {os.getpid()}: Successfully updated variable {variable_name}")
+                    except Exception as update_error:
+                        print(f"Worker {os.getpid()}: Failed to update variable {variable_name}: {update_error}")
+                        # Continue with other variables rather than failing completely
     
 
 def cleanup_airflow_resource(
@@ -792,9 +819,46 @@ def cleanup_airflow_resource(
         print(f"Worker {os.getpid()}: Error cleaning up Airflow resource: {e}")
 
 
+def _get_deployment_id_by_name(deployment_name: str) -> Optional[str]:
+    """
+    Helper function to get the deployment ID by deployment name from Astronomer using inspect command.
+    
+    :param deployment_name: The name of the deployment.
+    :return: The deployment ID if found, None otherwise.
+    :rtype: Optional[str]
+    """
+    try:
+        # Use the astro deployment inspect command to get deployment ID directly
+        # This is more reliable than parsing the deployment list output
+        deployment_id = _run_and_validate_subprocess(
+            [
+                "astro", 
+                "deployment", 
+                "inspect",
+                "--deployment-name", deployment_name,
+                "--key", "metadata.deployment_id"
+            ],
+            f"getting deployment ID for {deployment_name}",
+            return_output=True,
+        )
+        
+        if deployment_id and deployment_id.strip():
+            deployment_id = deployment_id.strip()
+            print(f"Worker {os.getpid()}: Found deployment ID {deployment_id} for deployment {deployment_name}")
+            return deployment_id
+        else:
+            print(f"Worker {os.getpid()}: No deployment ID returned for deployment {deployment_name}")
+            return None
+            
+    except Exception as e:
+        print(f"Worker {os.getpid()}: Error fetching deployment ID for {deployment_name}: {e}")
+        return None
+
+
 def _create_astro_deployment_api_token(deployment_id: str, deployment_name: str, retries: int = 5) -> str:
     """
-    Creates an API token for a deployment in Astronomer.
+    Creates an API token for a deployment in Astronomer using file-based coordination 
+    to prevent parallel processes from hitting API rate limits.
 
     :param deployment_id: The ID of the deployment.
     :param deployment_name: The name of the deployment.
@@ -803,35 +867,103 @@ def _create_astro_deployment_api_token(deployment_id: str, deployment_name: str,
     :return: The API token.
     :rtype: str
     """
-    for retry in range(retries+1):
-        error_message = f"Failed to create Astro deployment API token for deployment {deployment_name} after {retry} retries"
+    import tempfile
+    import fcntl
+    
+    # Create a lock file for coordinating API token creation across processes
+    lock_file_path = os.path.join(tempfile.gettempdir(), "astro_token_creation.lock")
+    
+    with open(lock_file_path, 'w') as lock_file:
         try:
-            if api_token := _run_and_validate_subprocess(
-            [
-                "astro",
-                "deployment",
-                "token",
-                "create",
-                "--description",
-                f"{deployment_name} API access for deployment {deployment_name}",
-                "--name",
-                f"{deployment_name} API access",
-                "--role",
-                "DEPLOYMENT_ADMIN",
-                "--expiration",
-                "30",
-                "--deployment-id",
-                deployment_id,
-                "--clean-output",
-            ],
-            "creating Astro deployment API token",
-            return_output=True,
-        ):
-                return api_token
-            else:
-                print(f"Worker {os.getpid()}: {error_message}")
-                time.sleep(random.randint(5, 15))
-        except Exception as e:
-            print(f"Worker {os.getpid()}: {error_message}: {e}")
-            time.sleep(random.randint(5, 15))
-    raise EnvironmentError(error_message)
+            # Acquire an exclusive lock to serialize token creation
+            print(f"Worker {os.getpid()}: Acquiring lock for API token creation for deployment {deployment_name}")
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+            print(f"Worker {os.getpid()}: Lock acquired for API token creation for deployment {deployment_name}")
+            
+            # Now attempt to create the token with retry logic
+            for retry in range(retries + 1):
+                error_message = f"Failed to create Astro deployment API token for deployment {deployment_name} after {retry} retries"
+                try:
+                    print(f"Worker {os.getpid()}: Attempting to create API token for {deployment_name} (attempt {retry + 1}/{retries + 1})")
+                    
+                    # Try to run the command and capture both stdout and stderr for debugging
+                    try:
+                        api_token = _run_and_validate_subprocess(
+                            [
+                                "astro",
+                                "deployment",
+                                "token",
+                                "create",
+                                "--description",
+                                f"{deployment_name} API access for deployment {deployment_name}",
+                                "--name",
+                                f"{deployment_name} API access",
+                                "--role",
+                                "DEPLOYMENT_ADMIN",
+                                "--expiration",
+                                "30",
+                                "--deployment-id",
+                                deployment_id,
+                                "--clean-output",
+                            ],
+                            "creating Astro deployment API token",
+                            return_output=True,
+                        )
+                        if api_token:
+                            print(f"Worker {os.getpid()}: Successfully created API token for deployment {deployment_name}")
+                            return api_token
+                    except subprocess.CalledProcessError as cmd_error:
+                        # Capture the actual error output for debugging
+                        stderr_output = cmd_error.stderr.decode('utf-8') if cmd_error.stderr else "No stderr"
+                        stdout_output = cmd_error.stdout.decode('utf-8') if cmd_error.stdout else "No stdout"
+                        print(f"Worker {os.getpid()}: Command failed with return code {cmd_error.returncode}")
+                        print(f"Worker {os.getpid()}: STDOUT: {stdout_output}")
+                        print(f"Worker {os.getpid()}: STDERR: {stderr_output}")
+                        
+                        # Check if it's a known recoverable error
+                        if "rate limit" in stderr_output.lower() or "too many requests" in stderr_output.lower():
+                            print(f"Worker {os.getpid()}: Rate limit detected, will retry with longer backoff")
+                            if retry < retries:
+                                sleep_time = min(30 + (retry * 10), 60)  # Longer backoff for rate limits
+                                print(f"Worker {os.getpid()}: Waiting {sleep_time} seconds for rate limit...")
+                                time.sleep(sleep_time)
+                            continue
+                        elif "deployment with id" in stderr_output.lower() and "not found" in stderr_output.lower():
+                            print(f"Worker {os.getpid()}: Deployment ID mismatch detected, attempting to refresh deployment ID")
+                            # Try to get the correct deployment ID from Astronomer
+                            try:
+                                correct_deployment_id = _get_deployment_id_by_name(deployment_name)
+                                if correct_deployment_id and correct_deployment_id != deployment_id:
+                                    print(f"Worker {os.getpid()}: Found correct deployment ID: {correct_deployment_id}, updating for retry")
+                                    deployment_id = correct_deployment_id
+                                    if retry < retries:
+                                        print(f"Worker {os.getpid()}: Retrying with correct deployment ID...")
+                                        continue
+                            except Exception as refresh_error:
+                                print(f"Worker {os.getpid()}: Failed to refresh deployment ID: {refresh_error}")
+                            # If we can't refresh or this is the last retry, continue with normal error handling
+                            raise cmd_error
+                        else:
+                            # Other errors, use normal retry logic
+                            raise cmd_error
+                    
+                    print(f"Worker {os.getpid()}: {error_message}")
+                    if retry < retries:  # Don't sleep on the last attempt
+                        sleep_time = min(5 + (retry * 2), 15)  # Progressive backoff: 5, 7, 9, 11, 13, 15
+                        print(f"Worker {os.getpid()}: Waiting {sleep_time} seconds before retry...")
+                        time.sleep(sleep_time)
+                except Exception as e:
+                    print(f"Worker {os.getpid()}: {error_message}: {e}")
+                    if retry < retries:  # Don't sleep on the last attempt
+                        sleep_time = min(5 + (retry * 2), 15)  # Progressive backoff
+                        print(f"Worker {os.getpid()}: Waiting {sleep_time} seconds before retry...")
+                        time.sleep(sleep_time)
+            
+            # If we get here, all retries failed
+            final_error = f"Failed to create Astro deployment API token for deployment {deployment_name} after {retries + 1} attempts"
+            print(f"Worker {os.getpid()}: {final_error}")
+            raise EnvironmentError(final_error)
+            
+        finally:
+            # Lock will be automatically released when the file closes
+            print(f"Worker {os.getpid()}: Releasing lock for API token creation for deployment {deployment_name}")

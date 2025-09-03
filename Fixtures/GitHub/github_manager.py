@@ -225,26 +225,61 @@ class GitHubManager:
             print(f"✗ PR '{pr_title}' not found")
             return False, test_step
         
-        # Merge the PR
-        try:
-            if build_info:
-                # Get the branch name from the target PR
-                branch_name = target_pr.head.ref
-                self._update_build_info(build_info, branch_name)
-            merge_result = target_pr.merge(
-                commit_title=commit_title or pr_title,
-                merge_method=merge_method
-            )
-            
-            if not merge_result.merged:
-                raise Exception(f"Failed to merge PR: {merge_result.message}")
-            
-            print(f"✓ Successfully merged PR: {pr_title}")
-            return True, test_step
-            
-        except Exception as e:
-            print(f"✗ Failed to merge PR: {e}")
-            return False, test_step
+        # Merge the PR with retry logic for handling conflicts in parallel execution
+        merge_retries = 5  # Number of merge retries for conflicts
+        for merge_attempt in range(merge_retries):
+            try:
+                if build_info:
+                    # Get the branch name from the target PR
+                    branch_name = target_pr.head.ref
+                    self._update_build_info(build_info, branch_name)
+                
+                print(f"Attempting to merge PR '{pr_title}' (attempt {merge_attempt + 1}/{merge_retries})")
+                merge_result = target_pr.merge(
+                    commit_title=commit_title or pr_title,
+                    merge_method=merge_method
+                )
+                
+                if not merge_result.merged:
+                    raise Exception(f"Merge failed: {merge_result.message}")
+                
+                print(f"✓ Successfully merged PR: {pr_title}")
+                return True, test_step
+                
+            except Exception as e:
+                error_message = str(e).lower()
+                is_conflict = any(keyword in error_message for keyword in [
+                    "base branch was modified", "merge conflict", "conflict", 
+                    "405", "method not allowed", "review and try the merge again"
+                ])
+                
+                if is_conflict and merge_attempt < merge_retries - 1:
+                    # Wait with exponential backoff and jitter for parallel execution conflicts
+                    import random
+                    wait_time = (2 ** merge_attempt) + random.uniform(1, 3)  # 1-3s, 3-5s, 5-7s, etc.
+                    print(f"⚠️ Merge conflict detected (attempt {merge_attempt + 1}): {e}")
+                    print(f"⏳ Waiting {wait_time:.1f}s before retry...")
+                    time.sleep(wait_time)
+                    
+                    # Refresh the PR object to get latest state
+                    try:
+                        target_pr = self.repo.get_pull(target_pr.number)
+                        print(f"🔄 Refreshed PR state for retry")
+                    except Exception as refresh_error:
+                        print(f"⚠️ Could not refresh PR state: {refresh_error}")
+                    
+                    continue  # Retry the merge
+                else:
+                    # Non-conflict error or max retries reached
+                    if is_conflict:
+                        print(f"❌ Failed to merge PR after {merge_retries} attempts due to persistent conflicts: {e}")
+                    else:
+                        print(f"❌ Failed to merge PR due to non-conflict error: {e}")
+                    return False, test_step
+        
+        # Should not reach here, but just in case
+        print(f"❌ Failed to merge PR after all retry attempts")
+        return False, test_step
 
     def _update_build_info(self, build_info: Dict[str, str], branch_name: str) -> dict[str, Any]:
         """
