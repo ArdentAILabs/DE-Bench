@@ -81,6 +81,7 @@ def test_snowflake_agent_add_record(request, snowflake_resource, supabase_accoun
 
     # SECTION 1: SETUP THE TEST
     config_results = None
+    model_result = None  # Initialize to prevent cleanup errors
     try:
         print("Snowflake database and schema setup completed by fixture")
         
@@ -138,9 +139,17 @@ def test_snowflake_agent_add_record(request, snowflake_resource, supabase_accoun
                 "secretKey": supabase_account_resource["secretKey"],
             }
         )
+        print(f"Model result: {model_result}")
+
+        
         end_time = time.time()
         print(f"Model execution completed. Result: {model_result}")
         request.node.user_properties.append(("model_runtime", end_time - start_time))
+        
+        # Register the Braintrust root span ID for tracking
+        if model_result:
+            request.node.user_properties.append(("run_trace_id", model_result["bt_root_span_id"]))
+            print(f"Registered Braintrust root span ID: {model_result['bt_root_span_id']}")
         
         test_steps[1]["status"] = "passed"
         test_steps[1]["Result_Message"] = "Model executed successfully"

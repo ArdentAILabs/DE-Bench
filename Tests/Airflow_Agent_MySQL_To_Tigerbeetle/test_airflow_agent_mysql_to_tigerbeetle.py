@@ -133,6 +133,7 @@ def test_airflow_agent_mysql_to_tigerbeetle(request, airflow_resource, github_re
         print(f"Model execution completed. Result: {model_result}")
         request.node.user_properties.append(("model_runtime", end_time - start_time))
 
+
         # Check if the branch exists and verify PR creation/merge
         print("Waiting 10 seconds for model to create branch and PR...")
         time.sleep(10)  # Give the model time to create the branch and PR
@@ -150,6 +151,7 @@ def test_airflow_agent_mysql_to_tigerbeetle(request, airflow_resource, github_re
                 "deploymentId": airflow_resource["deployment_id"],
                 "deploymentName": airflow_resource["deployment_name"],
             }
+
         )
         if not pr_exists:
             raise Exception("Unable to find and merge PR. Please check the PR title and commit title.")
