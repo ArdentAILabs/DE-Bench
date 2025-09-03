@@ -1,25 +1,21 @@
-import os
 import importlib
+import os
 import pytest
-import mysql.connector
-from python_on_whales import DockerClient
 import time
-from datetime import datetime, timedelta
-import requests
-from github import Github
-from requests.auth import HTTPBasicAuth
-from python_on_whales.exceptions import NoSuchVolume
+import uuid
 
-from Configs.ArdentConfig import Ardent_Client
+from model.Configure_Model import remove_model_configs
+from model.Configure_Model import set_up_model_configs
 from model.Run_Model import run_model
-from Configs.MySQLConfig import connection
-from model.Configure_Model import set_up_model_configs, cleanup_model_artifacts
-from Environment.Airflow.Airflow import Airflow_Local
 
 current_dir = os.path.dirname(os.path.abspath(__file__))
 parent_dir_name = os.path.basename(current_dir)
 module_path = f"Tests.{parent_dir_name}.Test_Configs"
 Test_Configs = importlib.import_module(module_path)
+
+# Generate unique identifiers for parallel execution
+test_timestamp = int(time.time())
+test_uuid = uuid.uuid4().hex[:8]
 
 
 @pytest.mark.airflow
@@ -30,10 +26,43 @@ Test_Configs = importlib.import_module(module_path)
 @pytest.mark.api_integration
 @pytest.mark.database
 @pytest.mark.pipeline
+@pytest.mark.three  # Difficulty 3 - involves DAG creation, MySQL to TigerBeetle pipeline, and database validation
 @pytest.mark.parametrize("supabase_account_resource", [{"useArdent": True}], indirect=True)
-def test_airflow_agent_mysql_to_tigerbeetle(request, supabase_account_resource):
+@pytest.mark.parametrize("github_resource", [{
+    "resource_id": f"test_airflow_mysql_to_tigerbeetle_test_{test_timestamp}_{test_uuid}",
+}], indirect=True)
+@pytest.mark.parametrize("airflow_resource", [{
+    "resource_id": f"mysql_to_tigerbeetle_test_{test_timestamp}_{test_uuid}",
+}], indirect=True)
+@pytest.mark.parametrize("mysql_resource", [{
+    "resource_id": f"mysql_to_tigerbeetle_test_{test_timestamp}_{test_uuid}",
+    "databases": [
+        {
+            "name": f"access_tokens_{test_timestamp}_{test_uuid}",
+            "sql_file": "schema.sql"
+        }
+    ]
+}], indirect=True)
+def test_airflow_agent_mysql_to_tigerbeetle(request, airflow_resource, github_resource, supabase_account_resource, mysql_resource):
     input_dir = os.path.dirname(os.path.abspath(__file__))
+    github_manager = github_resource["github_manager"]
+    Test_Configs.User_Input = github_manager.add_merge_step_to_user_input(Test_Configs.User_Input)
     request.node.user_properties.append(("user_query", Test_Configs.User_Input))
+    dag_name = "mysql_to_tigerbeetle"
+    pr_title = "Add MySQL to TigerBeetle Pipeline"
+    github_manager.check_and_update_gh_secrets(
+        secrets={
+            "ASTRO_ACCESS_TOKEN": os.environ["ASTRO_ACCESS_TOKEN"],
+        }
+    )
+    
+    # Use the airflow_resource fixture - the Docker instance is already running
+    print("=== Starting MySQL to TigerBeetle Airflow Pipeline Test ===")
+    print(f"Using Airflow instance from fixture: {airflow_resource['resource_id']}")
+    print(f"Using GitHub instance from fixture: {github_resource['resource_id']}")
+    print(f"Using MySQL instance from fixture: {mysql_resource['resource_id']}")
+    print(f"Airflow base URL: {airflow_resource['base_url']}")
+    print(f"Test directory: {input_dir}")
 
     test_steps = [
         {
@@ -56,147 +85,44 @@ def test_airflow_agent_mysql_to_tigerbeetle(request, supabase_account_resource):
         },
     ]
 
-    request.node.user_properties.append(("test_steps", test_steps))
-
-    # Create a Docker client with the compose file configuration
-    docker = DockerClient(compose_files=[os.path.join(input_dir, "docker-compose.yml")])
-    config_results = None
-    airflow_local = Airflow_Local()
-    cursor = connection.cursor()
-
-    
-
-    # Pre-cleanup to ensure we start fresh
-    try:
-        print("Performing pre-cleanup...")
-        # Force down any existing containers and remove volumes
-        docker.compose.down(volumes=True)
-        
-        # Additional cleanup for any orphaned volumes using Python on Whales
-        try:
-            # Try without force parameter
-            docker.volume.remove("mysql_to_tigerbeetle_tigerbeetle_data")
-            print("Removed tigerbeetle volume")
-        except NoSuchVolume:
-            print("Volume doesn't exist, which is fine")
-        except Exception as vol_err:
-            print(f"Other error when removing volume: {vol_err}")
-        
-        print("Pre-cleanup completed")
-    except Exception as e:
-        print(f"Error during pre-cleanup: {e}")
-
     # SECTION 1: SETUP THE TEST
+    request.node.user_properties.append(("test_steps", test_steps))
+    created_db_name = mysql_resource["created_resources"][0]["name"]
+
+    config_results = None  # Initialize before try block
+    test_configs = None  # Initialize before try block
     try:
-        # Setup GitHub repository with empty dags folder
-        access_token = os.getenv("AIRFLOW_GITHUB_TOKEN")
-        airflow_github_repo = os.getenv("AIRFLOW_REPO")
+        # The dags folder is already set up by the fixture
+        # The MySQL database is already set up by the mysql_resource fixture
 
-        # Convert full URL to owner/repo format if needed
-        if "github.com" in airflow_github_repo:
-            # Extract owner/repo from URL
-            parts = airflow_github_repo.split("/")
-            airflow_github_repo = f"{parts[-2]}/{parts[-1]}"
+        # Get the actual database name from the fixture
+        print(f"Using MySQL database: {created_db_name}")
 
-        print("Using repo format:", airflow_github_repo)
-        g = Github(access_token)
-        repo = g.get_repo(airflow_github_repo)
+        # Set up model configurations with actual database name and test-specific credentials
+        test_configs = Test_Configs.Configs.copy()
+        test_configs["services"]["mysql"]["databases"] = [{"name": created_db_name}]
 
-        try:
-            # First, clear only the dags folder
-            dags_contents = repo.get_contents("dags")
-            for content in dags_contents:
-                if content.name != ".gitkeep":  # Keep the .gitkeep file if it exists
-                    repo.delete_file(
-                        path=content.path,
-                        message="Clear dags folder",
-                        sha=content.sha,
-                        branch="main",
-                    )
-
-            # Ensure .gitkeep exists in dags folder
-            try:
-                repo.get_contents("dags/.gitkeep")
-            except:
-                repo.create_file(
-                    path="dags/.gitkeep",
-                    message="Add .gitkeep to dags folder",
-                    content="",
-                    branch="main",
-                )
-        except Exception as e:
-            if "sha" not in str(e):  # If error is not about folder already existing
-                raise e
-
-        # Start docker-compose to set up tigerbeetle
-        docker.compose.up(detach=True)
-
-        # Give TigerBeetle a moment to start up
-        time.sleep(10)
-
-        # Set up model configs
-
-        # Now we set up the MySQL Instance
-
-        # Create a test database and then select it to execute the queries
-        cursor.execute("CREATE DATABASE IF NOT EXISTS Access_Tokens")
-        cursor.execute("USE Access_Tokens")
-
-        # Create tables for Plaid and Finch access tokens
-        cursor.execute(
-            """
-            CREATE TABLE IF NOT EXISTS plaid_access_tokens (
-                company_id VARCHAR(50) PRIMARY KEY,
-                access_token VARCHAR(255) NOT NULL
-            )
-        """
-        )
-
-        cursor.execute(
-            """
-            CREATE TABLE IF NOT EXISTS finch_access_tokens (
-                company_id VARCHAR(50) PRIMARY KEY,
-                access_token VARCHAR(255) NOT NULL
-            )
-        """
-        )
-
-        # Insert test data with IGNORE to skip duplicates
-        cursor.execute(
-            """
-            INSERT IGNORE INTO plaid_access_tokens (company_id, access_token) 
-            VALUES (%s, %s)
-        """,
-            ("123", "test_plaid_token"),
-        )
-
-        cursor.execute(
-            """
-            INSERT IGNORE INTO finch_access_tokens (company_id, access_token) 
-            VALUES (%s, %s)
-        """,
-            ("123", "test_finch_token"),
-        )
-
-        connection.commit()
-
+        # set the airflow folder with the correct configs
+        # this function is for you to take the configs for the test and set them up however you want. They follow a set structure
+        test_configs["services"]["airflow"]["host"] = airflow_resource["base_url"]
+        test_configs["services"]["airflow"]["username"] = airflow_resource["username"]
+        test_configs["services"]["airflow"]["password"] = airflow_resource["password"]
+        test_configs["services"]["airflow"]["api_token"] = airflow_resource["api_token"]
         config_results = set_up_model_configs(
-            Configs=Test_Configs.Configs,
+            Configs=test_configs,
             custom_info={
                 "publicKey": supabase_account_resource["publicKey"],
                 "secretKey": supabase_account_resource["secretKey"],
             }
         )
 
-        
-
-
         # SECTION 2: RUN THE MODEL
         start_time = time.time()
+        print("Running model to create DAG and PR...")
         model_result = run_model(
             container=None, 
             task=Test_Configs.User_Input, 
-            configs=Test_Configs.Configs,
+            configs=test_configs,
             extra_information={
                 "useArdent": True,
                 "publicKey": supabase_account_resource["publicKey"],
@@ -204,152 +130,59 @@ def test_airflow_agent_mysql_to_tigerbeetle(request, supabase_account_resource):
             }
         )
         end_time = time.time()
+        print(f"Model execution completed. Result: {model_result}")
         request.node.user_properties.append(("model_runtime", end_time - start_time))
 
-        # Check if the branch exists
-        try:
-            branch = repo.get_branch("feature/mysql_to_tigerbeetle")
-            test_steps[0]["status"] = "passed"
-            test_steps[0]["Result_Message"] = "Branch 'feature/mysql_to_tigerbeetle' was created successfully"
-        except Exception as e:
-            test_steps[0]["status"] = "failed"
-            test_steps[0]["Result_Message"] = f"Branch 'feature/mysql_to_tigerbeetle' was not created: {str(e)}"
-            raise Exception(f"Branch 'feature/mysql_to_tigerbeetle' was not created: {str(e)}")
-
-        # Find and merge the PR
-        pulls = repo.get_pulls(state="open")
-        target_pr = None
-        for pr in pulls:
-            if pr.title == "Add MySQL to TigerBeetle Pipeline":  # Look for PR by title
-                target_pr = pr
-                test_steps[1]["status"] = "passed"
-                test_steps[1]["Result_Message"] = "PR 'Add MySQL to TigerBeetle Pipeline' was created successfully"
-                break
-
-        if not target_pr:
-            test_steps[1]["status"] = "failed"
-            test_steps[1]["Result_Message"] = "PR 'Add MySQL to TigerBeetle Pipeline' not found"
-            raise Exception("PR 'Add MySQL to TigerBeetle Pipeline' not found")
-
-        # Merge the PR
-        merge_result = target_pr.merge(
-            commit_title="Add MySQL to TigerBeetle Pipeline", merge_method="squash"
-        )
-
-        if not merge_result.merged:
-            raise Exception(f"Failed to merge PR: {merge_result.message}")
+        # Check if the branch exists and verify PR creation/merge
+        print("Waiting 10 seconds for model to create branch and PR...")
+        time.sleep(10)  # Give the model time to create the branch and PR
         
-        #input("Prior to dag fetch. We should have merged the PR...")
+        branch_exists, test_steps[0] = github_manager.verify_branch_exists("feature/mysql_to_tigerbeetle", test_steps[0])
+        if not branch_exists:
+            raise Exception(test_steps[0]["Result_Message"])
 
-        # Get the DAGs from GitHub
-        airflow_local.Get_Airflow_Dags_From_Github()
+        pr_exists, test_steps[1] = github_manager.find_and_merge_pr(
+            pr_title=pr_title, 
+            test_step=test_steps[1], 
+            commit_title=pr_title, 
+            merge_method="squash",
+            build_info={
+                "deploymentId": airflow_resource["deployment_id"],
+                "deploymentName": airflow_resource["deployment_name"],
+            }
+        )
+        if not pr_exists:
+            raise Exception("Unable to find and merge PR. Please check the PR title and commit title.")
 
-        # After merging, wait for Airflow to detect changes
-        time.sleep(10)  # Give Airflow time to scan for new DAGs
+        # Use the airflow instance from the fixture to pull DAGs from GitHub
+        # The fixture already has the Docker instance running
+        airflow_instance = airflow_resource["airflow_instance"]
+        
+        if not github_manager.check_if_action_is_complete(pr_title=pr_title):
+            raise Exception("Action is not complete")
+        
+        # verify the airflow instance is ready after the github action redeployed
+        if not airflow_instance.wait_for_airflow_to_be_ready():
+            raise Exception("Airflow instance did not redeploy successfully.")
 
-        #input("We should see the dags in the folder now...")
-
-        # Trigger the DAG
-        airflow_base_url = os.getenv("AIRFLOW_HOST")
-        airflow_username = os.getenv("AIRFLOW_USERNAME")
-        airflow_password = os.getenv("AIRFLOW_PASSWORD")
+        # Use the connection details from the fixture
+        airflow_base_url = airflow_resource["base_url"]
+        airflow_api_token = airflow_resource["api_token"]
+        
+        print(f"Connecting to Airflow at: {airflow_base_url}")
+        print(f"Using API Token: {airflow_api_token}")
 
         # Wait for DAG to appear and trigger it
-        max_retries = 5
-        auth = HTTPBasicAuth(airflow_username, airflow_password)
-        headers = {"Content-Type": "application/json", "Cache-Control": "no-cache"}
+        if not airflow_instance.verify_airflow_dag_exists(dag_name):
+            raise Exception(f"DAG '{dag_name}' did not appear in Airflow")
 
-        for attempt in range(max_retries):
-            # Check if DAG exists
-            dag_response = requests.get(
-                f"{airflow_base_url.rstrip('/')}/api/v1/dags/mysql_to_tigerbeetle",
-                auth=auth,
-                headers=headers,
-            )
-
-            if dag_response.status_code != 200:
-                if attempt == max_retries - 1:
-                    
-                    # Check for import errors before giving up
-                    print("DAG not found after max retries, checking for import errors...")
-                    import_errors_response = requests.get(
-                        f"{airflow_base_url.rstrip('/')}/api/v1/importErrors",
-                        auth=auth,
-                        headers=headers
-                    )
-                    
-                    if import_errors_response.status_code == 200:
-                        import_errors = import_errors_response.json()['import_errors']
-
-                        print(import_errors)
-                        
-                        # Filter errors related to your specific DAG
-                        dag_errors = [error for error in import_errors 
-                                     if "mysql_to_tigerbeetle.py" in error['filename']]
-                        
-                        print(dag_errors)
-                        
-                        if dag_errors:
-                            error_message = f"DAG failed to load with import error: {dag_errors[0]['stack_trace']}"
-                            print(error_message)
-                            test_steps[2]["status"] = "failed"
-                            test_steps[2]["Result_Message"] = error_message
-                            raise Exception("Dag error which caused dag to not load")
-                    
-                    raise Exception("DAG not found after max retries")
-                time.sleep(10)
-                continue
-
-            # Unpause the DAG before triggering
-            unpause_response = requests.patch(
-                f"{airflow_base_url.rstrip('/')}/api/v1/dags/mysql_to_tigerbeetle",
-                auth=auth,
-                headers=headers,
-                json={"is_paused": False},
-            )
-
-            if unpause_response.status_code != 200:
-                if attempt == max_retries - 1:
-                    raise Exception(f"Failed to unpause DAG: {unpause_response.text}")
-                time.sleep(10)
-                continue
-
-            # Trigger the DAG
-            trigger_response = requests.post(
-                f"{airflow_base_url.rstrip('/')}/api/v1/dags/mysql_to_tigerbeetle/dagRuns",
-                auth=auth,
-                headers=headers,
-                json={"conf": {}},
-            )
-
-            if trigger_response.status_code == 200:
-                dag_run_id = trigger_response.json()["dag_run_id"]
-                break
-            else:
-                if attempt == max_retries - 1:
-                    raise Exception(f"Failed to trigger DAG: {trigger_response.text}")
-                time.sleep(10)
+        dag_run_id = airflow_instance.unpause_and_trigger_airflow_dag(dag_name)
+        if not dag_run_id:
+            raise Exception("Failed to trigger DAG")
 
         # Monitor the DAG run
-        max_wait = 120  # 2 minutes timeout
-        start_time = time.time()
-        while time.time() - start_time < max_wait:
-            status_response = requests.get(
-                f"{airflow_base_url.rstrip('/')}/api/v1/dags/mysql_to_tigerbeetle/dagRuns/{dag_run_id}",
-                auth=auth,
-                headers=headers,
-            )
-
-            if status_response.status_code == 200:
-                state = status_response.json()["state"]
-                if state == "success":
-                    break
-                elif state in ["failed", "error"]:
-                    raise Exception(f"DAG failed with state: {state}")
-
-            time.sleep(5)
-        else:
-            raise Exception("DAG run timed out")
+        print(f"Monitoring DAG run {dag_run_id} for completion...")
+        airflow_instance.verify_dag_id_ran(dag_name, dag_run_id)
 
         # SECTION 3: VERIFY THE OUTCOMES
         # In a real test, we would verify the data in TigerBeetle
@@ -366,95 +199,17 @@ def test_airflow_agent_mysql_to_tigerbeetle(request, supabase_account_resource):
 
     finally:
         try:
-            # Airflow cleanup
-            airflow_base_url = os.getenv("AIRFLOW_HOST")
-            auth = HTTPBasicAuth(
-                os.getenv("AIRFLOW_USERNAME"), os.getenv("AIRFLOW_PASSWORD")
-            )
-            headers = {"Content-Type": "application/json"}
-
-            # First pause the DAG
-            try:
-                requests.patch(
-                    f"{airflow_base_url.rstrip('/')}/api/v1/dags/mysql_to_tigerbeetle",
-                    auth=auth,
-                    headers=headers,
-                    json={"is_paused": True},
+            # this function is for you to remove the configs for the test. They follow a set structure.
+            if test_configs is not None and config_results is not None:
+                remove_model_configs(
+                    Configs=test_configs, 
+                    custom_info={
+                        **config_results,  # Spread all config results
+                        "publicKey": supabase_account_resource["publicKey"],
+                        "secretKey": supabase_account_resource["secretKey"],
+                    }
                 )
-                print("Paused the DAG")
-            except Exception as e:
-                print(f"Error pausing DAG: {e}")
-
-            # MySQL cleanup
-            cursor.execute("DROP DATABASE IF EXISTS Access_Tokens")
-            connection.commit()
-            cursor.close()
-            
-            # Pre-cleanup to ensure we start fresh
-            try:
-                print("Performing cleanup...")
-                # Stop and remove containers, networks, and volumes to clean up tigerbeetle
-                print("Cleaning up Docker containers and volumes...")
-                docker.compose.down(volumes=True)
-                
-                # Additional cleanup for any orphaned volumes using Python on Whales
-                try:
-                    # Try without force parameter
-                    docker.volume.remove("mysql_to_tigerbeetle_tigerbeetle_data")
-                    print("Removed tigerbeetle volume")
-                except NoSuchVolume:
-                    print("Volume doesn't exist, which is fine")
-                except Exception as vol_err:
-                    print(f"Other error when removing volume: {vol_err}")
-                
-                print("Cleanup completed")
-            except Exception as e:
-                print(f"Error during cleanup: {e}")
-
-            # Remove model configs
-            cleanup_model_artifacts(
-                Configs=Test_Configs.Configs, 
-                custom_info={
-                    **config_results,  # Spread all config results
-                    'job_id': model_result.get("id") if model_result else None,
-                    "publicKey": supabase_account_resource["publicKey"],
-                    "secretKey": supabase_account_resource["secretKey"],
-                }
-            )
-            
-            # Clean up GitHub - delete branch if it exists
-            try:
-                ref = repo.get_git_ref(f"heads/feature/mysql_to_tigerbeetle")
-                ref.delete()
-                print("Deleted feature branch")
-            except Exception as e:
-                print(f"Branch might not exist or other error: {e}")
-
-            # Reset the repo to the original state
-            dags_contents = repo.get_contents("dags")
-            for content in dags_contents:
-                if content.name != ".gitkeep":  # Keep the .gitkeep file if it exists
-                    repo.delete_file(
-                        path=content.path,
-                        message="Clear dags folder",
-                        sha=content.sha,
-                        branch="main",
-                    )
-
-            # Ensure .gitkeep exists in dags folder
-            try:
-                repo.get_contents("dags/.gitkeep")
-            except:
-                repo.create_file(
-                    path="dags/.gitkeep",
-                    message="Add .gitkeep to dags folder",
-                    content="",
-                    branch="main",
-                )
-            print("Cleaned dags folder")
-            
-            # Clean up Airflow
-            airflow_local.Cleanup_Airflow_Directories()
-            
+            # Delete the branch from github using the github manager
+            github_manager.delete_branch("feature/mysql_to_tigerbeetle")
         except Exception as e:
             print(f"Error during cleanup: {e}")

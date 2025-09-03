@@ -35,6 +35,12 @@ test_uuid = uuid.uuid4().hex[:8]
         }
     ]
 }], indirect=True)
+@pytest.mark.parametrize("github_resource", [{
+    "resource_id": f"test_airflow_advanced_data_pipeline_test_{test_timestamp}_{test_uuid}",
+}], indirect=True)
+@pytest.mark.parametrize("airflow_resource", [{
+    "resource_id": f"advanced_data_pipeline_test_{test_timestamp}_{test_uuid}",
+}], indirect=True)
 def test_airflow_agent_advanced_data_pipeline(request, airflow_resource, github_resource, supabase_account_resource, postgres_resource):
     input_dir = os.path.dirname(os.path.abspath(__file__))
     github_manager = github_resource["github_manager"]

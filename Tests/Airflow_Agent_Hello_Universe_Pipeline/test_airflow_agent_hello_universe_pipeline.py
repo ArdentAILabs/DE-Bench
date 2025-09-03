@@ -1,6 +1,8 @@
 import importlib
 import os
 import time
+import uuid
+from datetime import datetime
 
 import pytest
 
@@ -12,11 +14,19 @@ parent_dir_name = os.path.basename(current_dir)
 module_path = f"Tests.{parent_dir_name}.Test_Configs"
 Test_Configs = importlib.import_module(module_path)
 
+test_timestamp = int(time.time())
+test_uuid = uuid.uuid4().hex[:8]
 
 @pytest.mark.airflow
 @pytest.mark.pipeline
 @pytest.mark.two  # Difficulty 2 - involves DAG creation, PR management, and validation
 @pytest.mark.parametrize("supabase_account_resource", [{"useArdent": True}], indirect=True)
+@pytest.mark.parametrize("github_resource", [{
+    "resource_id": f"test_airflow_hello_universe_pipeline_test_{test_timestamp}_{test_uuid}",
+}], indirect=True)
+@pytest.mark.parametrize("airflow_resource", [{
+    "resource_id": f"hello_universe_pipeline_test_{test_timestamp}_{test_uuid}",
+}], indirect=True)
 def test_airflow_agent_hello_universe_pipeline(request, airflow_resource, github_resource, supabase_account_resource):
     input_dir = os.path.dirname(os.path.abspath(__file__))
     github_manager = github_resource["github_manager"]
