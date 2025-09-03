@@ -211,6 +211,5 @@ def test_airflow_agent_mysql_to_tigerbeetle(request, airflow_resource, github_re
                 )
             # Delete the branch from github using the github manager
             github_manager.delete_branch("feature/mysql_to_tigerbeetle")
-
         except Exception as e:
             print(f"Error during cleanup: {e}")

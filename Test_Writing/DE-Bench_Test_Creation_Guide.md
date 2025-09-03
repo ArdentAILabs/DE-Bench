@@ -44,7 +44,7 @@ All DE-Bench tests follow this **per-user isolation pattern** to prevent config 
 ```python
 # Import from the Model directory
 from model.Run_Model import run_model
-from model.Configure_Model import set_up_model_configs, remove_model_configs
+from model.Configure_Model import set_up_model_configs, cleanup_model_artifacts
 import os
 import importlib
 import pytest
@@ -119,16 +119,101 @@ def test_your_function_name(request, resource_fixture, supabase_account_resource
             raise AssertionError("Test failed because...")
 
     finally:
-        # CLEANUP - Include API keys for proper cleanup
+        # CLEANUP - Include API keys and job_id for proper cleanup
         if config_results:
-            remove_model_configs(
+            cleanup_model_artifacts(
                 Configs=Test_Configs.Configs, 
                 custom_info={
                     **config_results,  # Spread all config results
+                    'job_id': model_result.get("id") if model_result else None,  # For Ardent job cleanup
                     "publicKey": supabase_account_resource["publicKey"],
                     "secretKey": supabase_account_resource["secretKey"],
                 }
             )
+```
+
+## 🧹 Cleanup and Job Management
+
+### Ardent Job Cleanup
+
+All tests that use the Ardent backend must include proper job cleanup to prevent resource leaks. The `cleanup_model_artifacts` function now handles both configuration cleanup and Ardent job deletion.
+
+#### Required Pattern
+
+```python
+finally:
+    # CLEANUP - Include API keys and job_id for proper cleanup
+    if config_results:
+        cleanup_model_artifacts(
+            Configs=Test_Configs.Configs, 
+            custom_info={
+                **config_results,  # Spread all config results
+                'job_id': model_result.get("id") if model_result else None,  # For Ardent job cleanup
+                "publicKey": supabase_account_resource["publicKey"],
+                "secretKey": supabase_account_resource["secretKey"],
+            }
+        )
+```
+
+#### Key Components
+
+1. **`job_id`**: Extracted from `model_result.get("id")` after calling `run_model()`
+2. **`config_results`**: Contains service-specific configuration IDs for cleanup
+3. **Supabase credentials**: Required for authenticating with Ardent backend
+4. **Error handling**: Cleanup should be in `finally` block to ensure it runs even if test fails
+
+#### What Gets Cleaned Up
+
+- **Ardent Jobs**: Active jobs are terminated and deleted from the backend
+- **Service Configurations**: Database connections, API keys, and other service configs
+- **Temporary Resources**: Any resources created during the test execution
+
+#### Example with Job ID Extraction
+
+```python
+try:
+    # Set up configurations
+    config_results = set_up_model_configs(
+        Configs=Test_Configs.Configs,
+        custom_info={
+            "publicKey": supabase_account_resource["publicKey"],
+            "secretKey": supabase_account_resource["secretKey"],
+        }
+    )
+    
+    # Run the model and capture result with job_id
+    model_result = run_model(
+        container=None,
+        task=Test_Configs.User_Input,
+        configs=Test_Configs.Configs,
+        extra_information={
+            "useArdent": True,
+            "publicKey": supabase_account_resource["publicKey"],
+            "secretKey": supabase_account_resource["secretKey"],
+        }
+    )
+    
+    # Extract job ID for cleanup
+    job_id = model_result.get("id") if model_result else None
+    print(f"Job created with ID: {job_id}")
+    
+    # Your test assertions here...
+    
+finally:
+    try:
+        # Clean up model configs and jobs
+        if config_results:
+            cleanup_model_artifacts(
+                Configs=Test_Configs.Configs, 
+                custom_info={
+                    **config_results,
+                    'job_id': model_result.get("id") if model_result else None,
+                    "publicKey": supabase_account_resource["publicKey"],
+                    "secretKey": supabase_account_resource["secretKey"],
+                }
+            )
+    except Exception as e:
+        print(f"Error during cleanup: {e}")
 ```
 
 ## ⚙️ Test_Configs.py Structure
@@ -210,6 +295,40 @@ Configs = {
 }
 ```
 
+**Snowflake Test Config:**
+```python
+import os
+
+User_Input = """
+I need to add a new user record to the Snowflake users table.
+
+The new user details are:
+- Name: David Wilson
+- Email: david.wilson@newuser.com  
+- Age: 35
+- City: Austin
+- State: TX
+- Active: True
+- Initial purchases: 0.00
+
+Please add this user to the USERS table in Snowflake and verify it was added successfully.
+"""
+
+Configs = {
+    "services": {
+        "snowflake": {
+            "account": os.getenv("SNOWFLAKE_ACCOUNT"),
+            "user": os.getenv("SNOWFLAKE_USER"),
+            "password": os.getenv("SNOWFLAKE_PASSWORD"),
+            "warehouse": os.getenv("SNOWFLAKE_WAREHOUSE"),
+            "role": os.getenv("SNOWFLAKE_ROLE", "SYSADMIN"),
+            "database": "TEST_DB",  # Will be overridden by fixture
+            "schema": "TEST_SCHEMA"  # Will be overridden by fixture
+        }
+    }
+}
+```
+
 ## 🏷️ Test Markers
 
 Use appropriate pytest markers to categorize your tests:
@@ -228,6 +347,7 @@ Use appropriate pytest markers to categorize your tests:
 @pytest.mark.airflow
 @pytest.mark.postgres
 @pytest.mark.mysql
+@pytest.mark.snowflake
 @pytest.mark.databricks
 @pytest.mark.aws
 @pytest.mark.s3
@@ -295,6 +415,311 @@ def test_airflow_function(request, airflow_resource):
     base_url = airflow_resource["base_url"]
     api_token = airflow_resource["api_token"]
 ```
+
+**Snowflake (Fresh per test with S3 parquet loading):**
+
+The Snowflake fixture provides isolated databases and schemas per test with scalable S3 parquet data loading. This pattern is ideal for testing with large datasets (millions of rows) loaded efficiently from S3.
+
+```python
+@pytest.mark.parametrize("snowflake_resource", [{
+    "resource_id": "your_test_snowflake_resource",
+    "database": "TEST_DB_12345_ABC",
+    "schema": "TEST_SCHEMA_12345_ABC", 
+    "sql_file": "users_schema.sql",  # SQL file with S3 loading commands
+    "s3_config": {  # S3 configuration for data loading
+        "bucket_url": "s3://de-bench/",
+        "s3_key": "v1/users/users_simple_20250901_233609.parquet",
+        "aws_key_id": "env:AWS_ACCESS_KEY",
+        "aws_secret_key": "env:AWS_SECRET_KEY"
+    }
+}], indirect=True)
+def test_snowflake_function(request, snowflake_resource):
+    # Each test gets fresh Snowflake database + schema with S3 data
+    connection = snowflake_resource["connection"]
+    database = snowflake_resource["database"]
+    schema = snowflake_resource["schema"]
+```
+
+#### **Snowflake SQL File Patterns**
+
+**Key Features:**
+- **Variable substitution**: Use `{{VAR}}` placeholders for dynamic values
+- **S3 parquet loading**: Load large datasets efficiently from S3
+- **Multi-statement support**: Execute complex setup scripts
+- **Automatic cleanup**: Database/schema dropped after test
+- **Data type handling**: Proper mapping for timestamps, decimals, booleans
+
+**Required Environment Variables:**
+```bash
+# Snowflake connection
+SNOWFLAKE_ACCOUNT=xy12345.us-west-2
+SNOWFLAKE_USER=your_username
+SNOWFLAKE_PASSWORD=your_password
+SNOWFLAKE_WAREHOUSE=COMPUTE_WH
+SNOWFLAKE_ROLE=SYSADMIN
+
+# AWS S3 access
+AWS_ACCESS_KEY=AKIA...
+AWS_SECRET_KEY=...
+```
+
+#### **Writing Snowflake SQL Files**
+
+**1. File Structure Pattern:**
+```sql
+-- filename: users_schema.sql
+-- Variables: {{DB}}, {{SCHEMA}}, {{WAREHOUSE}}, {{ROLE}}
+-- S3 variables: {{BUCKET_URL}}, {{S3_KEY}}, {{AWS_ACCESS_KEY}}, {{AWS_SECRET_KEY}}
+
+-- Step 1: Set context
+USE ROLE {{ROLE}};
+USE WAREHOUSE {{WAREHOUSE}};
+USE DATABASE {{DB}};
+USE SCHEMA {{SCHEMA}};
+
+-- Step 2: Create file format
+CREATE OR REPLACE FILE FORMAT PARQUET_STD TYPE=PARQUET;
+
+-- Step 3: Create S3 stage
+CREATE OR REPLACE TEMP STAGE _temp_stage
+  URL='{{BUCKET_URL}}'
+  CREDENTIALS=(AWS_KEY_ID='{{AWS_ACCESS_KEY}}' AWS_SECRET_KEY='{{AWS_SECRET_KEY}}');
+
+-- Step 4: Create table with explicit schema
+CREATE OR REPLACE TABLE USERS (
+    USER_ID NUMBER,
+    FIRST_NAME VARCHAR(100),
+    LAST_NAME VARCHAR(100),
+    EMAIL VARCHAR(255),
+    AGE NUMBER,
+    CITY VARCHAR(100),
+    STATE VARCHAR(2),
+    SIGNUP_DATE TIMESTAMP,  -- Use TIMESTAMP for parquet date fields
+    IS_ACTIVE BOOLEAN,
+    TOTAL_PURCHASES DECIMAL(10,2)
+);
+
+-- Step 5: Load data from S3
+COPY INTO USERS
+FROM @_temp_stage
+FILES = ('{{S3_KEY}}')
+FILE_FORMAT=(FORMAT_NAME=PARQUET_STD)
+MATCH_BY_COLUMN_NAME=CASE_INSENSITIVE  -- Required for parquet
+ON_ERROR=ABORT_STATEMENT;
+
+-- Step 6: Verify data loaded
+SELECT COUNT(*) AS total_users FROM USERS;
+```
+
+**2. Data Type Best Practices:**
+
+| Parquet Type | Snowflake Type | Notes |
+|--------------|----------------|-------|
+| `int64` | `NUMBER` | Use for IDs, counts |
+| `string` | `VARCHAR(N)` | Specify appropriate length |
+| `timestamp[ns]` | `TIMESTAMP` | **Not DATE** - parquet stores nanoseconds |
+| `bool` | `BOOLEAN` | Direct mapping |
+| `double` | `DECIMAL(10,2)` | Use DECIMAL for currency |
+
+**3. S3 Loading Requirements:**
+
+```sql
+-- ✅ CORRECT: Use MATCH_BY_COLUMN_NAME for parquet files
+COPY INTO USERS
+FROM @_temp_stage
+FILES = ('{{S3_KEY}}')
+FILE_FORMAT=(FORMAT_NAME=PARQUET_STD)
+MATCH_BY_COLUMN_NAME=CASE_INSENSITIVE  -- Essential for multi-column parquet
+ON_ERROR=ABORT_STATEMENT;
+
+-- ❌ WRONG: Missing MATCH_BY_COLUMN_NAME will cause errors
+COPY INTO USERS
+FROM @_temp_stage
+FILES = ('{{S3_KEY}}')
+FILE_FORMAT=(FORMAT_NAME=PARQUET_STD)
+ON_ERROR=ABORT_STATEMENT;
+```
+
+**4. Variable Substitution Rules:**
+
+```sql
+-- Available variables (automatically substituted):
+{{DB}}              -- Database name (e.g., BENCH_DB_1756838228_0FD5CA2C)
+{{SCHEMA}}          -- Schema name (e.g., TEST_SCHEMA_1756838228_0FD5CA2C)
+{{WAREHOUSE}}       -- Warehouse name (from SNOWFLAKE_WAREHOUSE)
+{{ROLE}}            -- Role name (from SNOWFLAKE_ROLE, default: SYSADMIN)
+{{BUCKET_URL}}      -- S3 bucket URL (e.g., s3://de-bench/)
+{{S3_KEY}}          -- S3 object key (e.g., v1/users/file.parquet)
+{{AWS_ACCESS_KEY}}  -- AWS access key (from AWS_ACCESS_KEY env var)
+{{AWS_SECRET_KEY}}  -- AWS secret key (from AWS_SECRET_KEY env var)
+```
+
+**5. Common Patterns:**
+
+```sql
+-- Pattern 1: Simple table with S3 data
+CREATE OR REPLACE TABLE PRODUCTS (
+    PRODUCT_ID NUMBER,
+    NAME VARCHAR(200),
+    PRICE DECIMAL(10,2),
+    CREATED_AT TIMESTAMP
+);
+
+COPY INTO PRODUCTS
+FROM @_temp_stage
+FILES = ('{{S3_KEY}}')
+FILE_FORMAT=(FORMAT_NAME=PARQUET_STD)
+MATCH_BY_COLUMN_NAME=CASE_INSENSITIVE
+ON_ERROR=ABORT_STATEMENT;
+
+-- Pattern 2: Multiple tables from different S3 files
+-- Note: Use separate test configs for multiple files
+CREATE OR REPLACE TABLE ORDERS (
+    ORDER_ID NUMBER PRIMARY KEY,
+    USER_ID NUMBER,
+    TOTAL DECIMAL(10,2),
+    ORDER_DATE TIMESTAMP
+);
+
+-- Pattern 3: Data transformation during load
+CREATE OR REPLACE TABLE USERS_CLEAN AS
+SELECT 
+    USER_ID,
+    UPPER(FIRST_NAME) AS FIRST_NAME,
+    LOWER(EMAIL) AS EMAIL,
+    SIGNUP_DATE::DATE AS SIGNUP_DATE  -- Convert timestamp to date if needed
+FROM USERS;
+```
+
+**6. Error Handling:**
+
+```sql
+-- Use ON_ERROR=ABORT_STATEMENT for tests (fail fast)
+ON_ERROR=ABORT_STATEMENT;
+
+-- For production, consider:
+-- ON_ERROR=CONTINUE;  -- Skip bad records
+-- ON_ERROR=SKIP_FILE; -- Skip entire file on error
+```
+
+#### **S3 Data Preparation**
+
+**Creating Test Data:**
+```python
+# Example: Generate parquet test data
+import pandas as pd
+from datetime import datetime
+
+users_data = {
+    "user_id": [1, 2, 3, 4, 5],
+    "first_name": ["Alice", "Bob", "Carol", "David", "Eve"],
+    "last_name": ["Smith", "Jones", "Brown", "Wilson", "Davis"],
+    "email": ["alice@example.com", "bob@example.com", "carol@example.com", 
+              "david@example.com", "eve@example.com"],
+    "age": [25, 32, 28, 45, 31],
+    "city": ["New York", "Los Angeles", "Chicago", "Houston", "Phoenix"],
+    "state": ["NY", "CA", "IL", "TX", "AZ"],
+    "signup_date": pd.to_datetime(["2024-01-15", "2024-02-20", "2024-03-10", 
+                                   "2024-01-05", "2024-04-12"]),
+    "is_active": [True, True, False, True, True],
+    "total_purchases": [150.50, 89.99, 0.00, 245.75, 67.25]
+}
+
+df = pd.DataFrame(users_data)
+df.to_parquet("users_simple_20250901_233609.parquet", index=False)
+```
+
+**Upload to S3:**
+```bash
+# Upload parquet file to S3
+aws s3 cp users_simple_20250901_233609.parquet s3://de-bench/v1/users_simple_20250901_233609.parquet --sse AES256
+
+# Verify upload
+aws s3 ls s3://de-bench/v1/users_simple_20250901_233609.parquet
+```
+
+**S3 Path Structure:**
+```
+s3://de-bench/
+├── v1/
+│   ├── users_simple_20250901_233609.parquet
+│   ├── products_sample_20250901_234500.parquet
+│   └── orders_test_20250901_235000.parquet
+└── v2/
+    └── enhanced_datasets/
+```
+
+#### **Complete Test Example**
+
+**Directory Structure:**
+```
+Tests/Snowflake_Agent_Add_Record/
+├── test_snowflake_agent_add_record.py
+├── Test_Configs.py
+└── users_schema.sql
+```
+
+**Test Configuration:**
+```python
+@pytest.mark.snowflake
+@pytest.mark.database
+@pytest.mark.two
+@pytest.mark.parametrize("snowflake_resource", [{
+    "resource_id": f"snowflake_test_{test_timestamp}_{test_uuid}",
+    "database": f"BENCH_DB_{test_timestamp}_{test_uuid}",
+    "schema": f"TEST_SCHEMA_{test_timestamp}_{test_uuid}",
+    "sql_file": "users_schema.sql",
+    "s3_config": {
+        "bucket_url": "s3://de-bench/",
+        "s3_key": "v1/users/users_simple_20250901_233609.parquet",
+        "aws_key_id": "env:AWS_ACCESS_KEY",
+        "aws_secret_key": "env:AWS_SECRET_KEY"
+    }
+}], indirect=True)
+def test_snowflake_agent_add_record(request, snowflake_resource, supabase_account_resource):
+    # Test implementation here
+    connection = snowflake_resource["connection"]
+    database = snowflake_resource["database"]
+    schema = snowflake_resource["schema"]
+    
+    # Verify initial data loaded from S3
+    cursor = connection.cursor()
+    cursor.execute(f"SELECT COUNT(*) FROM {database}.{schema}.USERS")
+    initial_count = cursor.fetchone()[0]
+    assert initial_count > 0, "S3 data should be loaded"
+```
+
+#### **Troubleshooting Common Issues**
+
+**1. S3 File Not Found:**
+```
+Error: Remote file 's3://de-bench/v1/file.parquet' was not found
+```
+- Verify S3 path: `aws s3 ls s3://de-bench/v1/file.parquet`
+- Check AWS credentials are set correctly
+- Ensure `bucket_url` and `s3_key` combine correctly
+
+**2. Data Type Mismatch:**
+```
+Error: Failed to cast variant value 1705276800000000000 to DATE
+```
+- Use `TIMESTAMP` instead of `DATE` for parquet timestamp fields
+- Check parquet schema: `pd.read_parquet("file.parquet").dtypes`
+
+**3. Parquet Column Mapping:**
+```
+Error: PARQUET file format can produce one and only one column
+```
+- Add `MATCH_BY_COLUMN_NAME=CASE_INSENSITIVE` to COPY statement
+- Ensure table schema matches parquet columns
+
+**4. AWS Permissions:**
+```
+Error: Access Denied
+```
+- Verify AWS credentials have S3 read permissions
+- Check bucket policy allows Snowflake access
+- Test with: `aws s3 ls s3://de-bench/`
 
 #### **Authentication Fixtures (Function-Scoped)**
 
@@ -430,14 +855,37 @@ All DE-Bench tests require these environment variables in your test's README:
 ```markdown
 ## Environment Requirements
 
-Set the following environment variables for test isolation:
+### Core Framework Variables (Required for all tests)
 - `SUPABASE_URL`: Your Supabase project URL
 - `SUPABASE_SERVICE_ROLE_KEY`: Supabase service role key (for user management)
 - `SUPABASE_JWT_SECRET`: JWT secret for token generation
 - `ARDENT_BASE_URL`: Your Ardent backend base URL
 
+### Service-Specific Variables
 
-- `SERVICE_DB` (optional): Database name (defaults to 'test')
+#### Snowflake Tests
+- `SNOWFLAKE_ACCOUNT`: Your Snowflake account identifier (e.g., abc12345.us-west-2)
+- `SNOWFLAKE_USER`: Snowflake username
+- `SNOWFLAKE_PASSWORD`: Snowflake password
+- `SNOWFLAKE_WAREHOUSE`: Snowflake warehouse name
+- `SNOWFLAKE_ROLE`: Snowflake role (optional, defaults to SYSADMIN)
+
+#### MongoDB Tests  
+- `MONGODB_URI`: MongoDB connection string
+
+#### PostgreSQL Tests
+- `POSTGRES_HOSTNAME`: PostgreSQL host
+- `POSTGRES_PORT`: PostgreSQL port
+- `POSTGRES_USERNAME`: PostgreSQL username
+- `POSTGRES_PASSWORD`: PostgreSQL password
+
+#### Airflow Tests
+- `AIRFLOW_GITHUB_TOKEN`: GitHub token for DAG management
+- `AIRFLOW_REPO`: GitHub repository URL
+- `AIRFLOW_DAG_PATH`: Path to DAGs in repository
+- `AIRFLOW_HOST`: Airflow webserver URL
+- `AIRFLOW_USERNAME`: Airflow username
+- `AIRFLOW_PASSWORD`: Airflow password
 ```
 
 Add them to the main project's `.env` template in the root README.
@@ -617,6 +1065,7 @@ def test_function(request, shared_resource):
 - Examples: 
   - `PostgreSQL_Agent_Add_Record/` (simple task)
   - `MongoDB_Agent_Add_Record/` (simple task)
+  - `Snowflake_Agent_Add_Record/` (simple task)
   - `Airflow_Agent_Simple_Pipeline/` (simple task)
   - `Airflow_Agent_Amazon_SP_API_To_PostgreSQL/` (source → destination)
   - `Airflow_Agent_PostgreSQL_To_MySQL/` (source → destination)

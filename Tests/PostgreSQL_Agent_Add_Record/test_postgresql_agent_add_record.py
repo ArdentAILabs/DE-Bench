@@ -1,6 +1,6 @@
 # Import from the Model directory
 from model.Run_Model import run_model
-from model.Configure_Model import set_up_model_configs, remove_model_configs
+from model.Configure_Model import set_up_model_configs, cleanup_model_artifacts
 import os
 import importlib
 import pytest
@@ -63,6 +63,7 @@ def test_postgresql_agent_add_record(request, postgres_resource, supabase_accoun
 
     # SECTION 1: SETUP THE TEST
     config_results = None
+    model_result = None  # Initialize for cleanup
     created_db_name = postgres_resource["created_resources"][0]["name"]
     
     try:
@@ -79,8 +80,6 @@ def test_postgresql_agent_add_record(request, postgres_resource, supabase_accoun
 
 
         print(test_configs)
-
-        input("Press Enter to continue...")
 
         # SECTION 2: RUN THE MODEL
         start_time = time.time()
@@ -169,11 +168,12 @@ def test_postgresql_agent_add_record(request, postgres_resource, supabase_accoun
     finally:
         # CLEANUP
         if config_results:
-            remove_model_configs(
+            cleanup_model_artifacts(
                 Configs=test_configs, 
                 custom_info={
-                    **config_results,
+                    **config_results,  # Spread all config results
+                    'job_id': model_result.get("id") if model_result else None,
                     "publicKey": supabase_account_resource["publicKey"],
                     "secretKey": supabase_account_resource["secretKey"],
                 }
-            ) 
+            )

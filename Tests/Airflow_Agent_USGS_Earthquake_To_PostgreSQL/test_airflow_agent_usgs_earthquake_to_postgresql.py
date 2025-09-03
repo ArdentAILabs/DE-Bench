@@ -7,7 +7,7 @@ import uuid
 import psycopg2
 
 
-from model.Configure_Model import remove_model_configs
+from model.Configure_Model import cleanup_model_artifacts
 from model.Configure_Model import set_up_model_configs
 from model.Run_Model import run_model
 
@@ -274,7 +274,15 @@ def test_airflow_agent_usgs_earthquake_to_postgresql(request, airflow_resource, 
         # SECTION 4: CLEANUP
         if config_results:
             try:
-                remove_model_configs(config_results)
+                cleanup_model_artifacts(
+                    Configs=Test_Configs.Configs, 
+                    custom_info={
+                        **config_results,  # Spread all config results
+                        'job_id': model_result.get("id") if model_result else None,
+                        "publicKey": supabase_account_resource["publicKey"],
+                        "secretKey": supabase_account_resource["secretKey"],
+                    }
+                )
                 print("✅ Model configs cleaned up")
             except Exception as cleanup_error:
                 print(f"⚠️ Error during model config cleanup: {cleanup_error}")

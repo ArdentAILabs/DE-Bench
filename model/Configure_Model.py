@@ -88,6 +88,19 @@ def set_up_model_configs(Configs, custom_info=None):
                     }]
                 )
 
+            elif service == "snowflake":
+                service_result = Ardent_Client.set_config(
+                    config_type="snowflake",
+                    account=service_config["account"],
+                    user=service_config["user"],
+                    password=service_config["password"],
+                    warehouse=service_config["warehouse"],
+                    role=service_config.get("role", "SYSADMIN"),
+                    databases=[{
+                        "name": service_config["database"]
+                    }]
+                )
+
             # Add the result to our results dictionary
             if not results:
                 results = {service: service_result}
@@ -97,20 +110,24 @@ def set_up_model_configs(Configs, custom_info=None):
     return results
 
 
-def remove_model_configs(Configs, custom_info=None):
+def cleanup_model_artifacts(Configs, custom_info=None):
     # This is a place where we can remove the model configs
         
 
 
 
-    if custom_info and "services" in Configs:
+    if custom_info:
         Ardent_Client = ArdentClient(
             public_key=custom_info["publicKey"],
             secret_key=custom_info["secretKey"],
             base_url=os.getenv("ARDENT_BASE_URL"),
         )
-        
-        for service in Configs["services"]:
-            if service in custom_info:
-                id = custom_info[service]["specific_config"]["id"]
-                Ardent_Client.delete_config(config_id=id)
+
+        if "services" in Configs:
+            for service in Configs["services"]:
+                if service in custom_info:
+                    id = custom_info[service]["specific_config"]["id"]
+                    Ardent_Client.delete_config(config_id=id)
+
+        if "job_id" in custom_info:
+            Ardent_Client.delete_job(job_id=custom_info["job_id"])
