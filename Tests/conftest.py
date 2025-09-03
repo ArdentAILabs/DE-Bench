@@ -117,6 +117,7 @@ def pytest_runtest_logreport(report):
         model_runtime = None
         user_query = None
         test_steps = None
+        run_trace_id = None
         
         # Get values from user_properties if they exist
         for name, value in report.user_properties:
@@ -126,6 +127,8 @@ def pytest_runtest_logreport(report):
                 user_query = value
             elif name == "test_steps":
                 test_steps = value
+            elif name == "run_trace_id":
+                run_trace_id = value
 
         test_result = {
             "nodeid": report.nodeid,
@@ -133,6 +136,7 @@ def pytest_runtest_logreport(report):
             "outcome": report.outcome,
             "duration": report.duration,
             "model_runtime": model_runtime,
+            "run_trace_id": run_trace_id,
             "longrepr": str(report.longrepr) if report.failed else None,
             "test_steps": test_steps,
         }
