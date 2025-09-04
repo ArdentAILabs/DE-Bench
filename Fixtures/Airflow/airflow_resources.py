@@ -2,6 +2,7 @@
 This module provides a pytest fixture for creating isolated Airflow instances using Docker Compose.
 """
 
+import fcntl
 import os
 import re
 import shutil
@@ -12,24 +13,26 @@ from pathlib import Path
 from typing import Optional, Union
 
 import github
+import pytest
+from dotenv import load_dotenv
 from github import Github
 
-import pytest
-
+from Fixtures import parse_test_name
 from Fixtures.Airflow.Airflow import Airflow_Local
 from Fixtures.Databricks.cache_manager import CacheManager
-from Fixtures import parse_test_name
 
 VALIDATE_ASTRO_INSTALL = "Please check if the Astro CLI is installed and in PATH."
+load_dotenv()
 
 
-def _ensure_astro_login():
+def _ensure_astro_login() -> None:
     """
     Ensure Astro is logged in using file-based coordination to prevent multiple logins in parallel.
+
+    :raises ValueError: If ASTRO_ACCESS_TOKEN is not found in .env file.
+    :raises EnvironmentError: If login fails.
+    :rtype: None
     """
-    import tempfile
-    import fcntl
-    
     # Create a lock file for coordination
     lock_file_path = os.path.join(tempfile.gettempdir(), "astro_login.lock")
     
@@ -49,27 +52,13 @@ def _ensure_astro_login():
                 )
                 if result.returncode == 0:
                     print(f"Worker {os.getpid()}: Astro already logged in")
-                    return True
+                    return None
             except (subprocess.TimeoutExpired, FileNotFoundError):
                 pass
             
             # Not logged in, perform login
             # Load environment variables from .env file
-            astro_token = None
-            try:
-                with open('.env', 'r') as env_file:
-                    for line in env_file:
-                        line = line.strip()
-                        if line.startswith('ASTRO_ACCESS_TOKEN'):
-                            # Handle both formats: ASTRO_ACCESS_TOKEN=value and ASTRO_ACCESS_TOKEN = value
-                            if '=' in line:
-                                # Split on first = and handle spaces around it
-                                parts = line.split('=', 1)
-                                if len(parts) == 2:
-                                    astro_token = parts[1].strip().strip('"\'')
-                                    break
-            except FileNotFoundError:
-                pass
+            astro_token = os.getenv("ASTRO_ACCESS_TOKEN")
             
             if not astro_token:
                 raise ValueError("ASTRO_ACCESS_TOKEN not found in .env file")
@@ -80,8 +69,6 @@ def _ensure_astro_login():
                 "login to Astro (session-wide)",
             )
             print(f"Worker {os.getpid()}: Successfully logged into Astro")
-            return True
-            
         except (IOError, OSError):
             # Another process has the lock, wait for login to complete
             print(f"Worker {os.getpid()}: Waiting for another process to complete Astro login...")
@@ -89,7 +76,7 @@ def _ensure_astro_login():
                 # Wait for the lock to be released
                 fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
                 print(f"Worker {os.getpid()}: Astro login completed by another process")
-                return True
+                return None
             except Exception as e:
                 print(f"Worker {os.getpid()}: Error waiting for Astro login: {e}")
                 raise
@@ -101,43 +88,34 @@ def astro_login():
     A session-scoped fixture that ensures Astro is logged in once for the entire test session.
     Uses file-based coordination to prevent multiple logins in parallel execution.
     """
-    _ensure_astro_login()
-    return True
+    return _ensure_astro_login()
 
 
-def _ensure_cache_manager_initialized():
+def _ensure_cache_manager_initialized() -> CacheManager:
     """
     Ensure CacheManager is initialized using file-based coordination to prevent multiple initializations in parallel.
+
+    :return: The initialized CacheManager instance.
+    :rtype: CacheManager
     """
-    import tempfile
-    import fcntl
-    import time
-    
     # Create a lock file for coordination
     lock_file_path = os.path.join(tempfile.gettempdir(), "cache_manager_init.lock")
     
     # First, check if already initialized without acquiring lock
     cache_manager = CacheManager()
-    existing_deployments = cache_manager.get_all_astronomer_deployments()
-    if existing_deployments:
-        print(f"Worker {os.getpid()}: CacheManager already initialized with {len(existing_deployments)} deployments")
-        return cache_manager
-    
+
     # Not initialized, need to coordinate
     with open(lock_file_path, 'w') as lock_file:
         try:
             # Try to acquire an exclusive lock
             fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-            
-            # Double-check that it's still not initialized (another process might have done it)
-            existing_deployments = cache_manager.get_all_astronomer_deployments()
-            if existing_deployments:
-                print(f"Worker {os.getpid()}: CacheManager already initialized by another process with {len(existing_deployments)} deployments")
+            if astro_deployments := fetch_astro_deployments():
+                cache_manager.populate_astronomer_deployments(astro_deployments)
+                print(f"Worker {os.getpid()}: CacheManager already initialized with {len(astro_deployments)} deployments")
                 return cache_manager
-            
+
             # Not initialized, populate deployments
             print(f"Worker {os.getpid()}: Initializing shared CacheManager for test session")
-            astro_deployments = fetch_astro_deployments()
             print(f"Worker {os.getpid()}: Fetched {len(astro_deployments)} deployments from Astro")
             
             # Debug: Print deployment details
@@ -164,9 +142,9 @@ def _ensure_cache_manager_initialized():
                     # Try to acquire the lock
                     fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
                     # Lock acquired, check if deployments are now available
-                    existing_deployments = cache_manager.get_all_astronomer_deployments()
-                    if existing_deployments:
+                    if existing_deployments := fetch_astro_deployments():
                         print(f"Worker {os.getpid()}: CacheManager initialization completed by another process ({len(existing_deployments)} deployments)")
+                        cache_manager.populate_astronomer_deployments(existing_deployments)
                         return cache_manager
                     # Still no deployments, release lock and wait
                     fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
@@ -175,7 +153,10 @@ def _ensure_cache_manager_initialized():
                     # Lock not available, wait and try again
                     time.sleep(2)
                     continue
-            
+            # fallback to existing data
+            if existing_deployments := fetch_astro_deployments():
+                print(f"Worker {os.getpid()}: CacheManager initialization fallback after wait ({len(existing_deployments)} deployments)")
+                return cache_manager
             # If we get here, something went wrong
             raise Exception(f"Timeout waiting for CacheManager initialization after {max_wait_time} seconds")
 
@@ -228,13 +209,7 @@ def airflow_resource(request, astro_login, shared_cache_manager):
     try:
         # Try to allocate a hibernating deployment from shared cache
         print(f"Worker {os.getpid()}: Attempting to allocate hibernating deployment for {resource_id}")
-        
-        # Debug: Check what deployments are available
-        all_deployments = shared_cache_manager.get_all_astronomer_deployments()
-        print(f"Worker {os.getpid()}: Total deployments in cache: {len(all_deployments)}")
-        for dep in all_deployments:
-            print(f"Worker {os.getpid()}: Deployment: {dep['deployment_name']} - Status: {dep['status']} - In use: {dep['in_use']}")
-        
+
         if deployment_info := shared_cache_manager.allocate_astronomer_deployment(resource_id, os.getpid()):
             # Got an existing hibernating deployment
             astro_deployment_id = deployment_info["deployment_id"]
@@ -582,52 +557,6 @@ def fetch_astro_deployments() -> list[dict[str, str]]:
     return astro_deployments
 
 
-def _find_hibernating_deployment(test_name: str) -> dict:
-    """
-    Helper method to find the hibernating deployment in Astronomer.
-
-    :param str test_name: The name of the test, used to create a new deployment if none is found.
-    :return: The name and id of the hibernating deployment, or the name of the new deployment if none is found.
-    :rtype: Union[tuple[str, str], str]
-    """
-    result = {
-        "created": False,
-        "deployment_name": test_name,
-        "deployment_id": "",
-    }
-    # get all deployments
-    deployment_command_output = _run_and_validate_subprocess(
-        ["astro", "deployment", "list"],
-        "listing deployments in Astronomer",
-        return_output=True,
-    )
-    # parse the output to get the name and id of the hibernating deployment
-    deployments = deployment_command_output.split("\n")
-    # remove the headers to get only the deployments by finding name in the list
-    if index := next((i for i, line in enumerate(deployments) if "NAME" in line), None):
-        deployments = deployments[index + 1:]
-    deployments = [deployment.split() for deployment in deployments if deployment.strip()]
-    # Filter out header row and empty rows, only keep actual deployment rows
-    deployments = [deployment for deployment in deployments if len(deployment) > 5 and deployment[0] != 'NAME']
-    deployments = {deployment[0]: deployment[5] for deployment in deployments}
-    for deployment_name, deployment_id in deployments.items():
-        status = _check_deployment_status(deployment_name)
-        if status.lower() == "hibernating":
-            # found a hibernating deployment, wake it up and return its name and id
-            print(f"Worker {os.getpid()}: Found hibernating deployment, waking it up: {deployment_name}")
-            _wake_up_deployment(deployment_name)
-
-            result["deployment_id"] = deployment_id
-            result["deployment_name"] = deployment_name
-            return result
-    # no hibernating deployment found, create a new one
-    print(f"Worker {os.getpid()}: No hibernating deployment found, creating a new one: {test_name}")
-    deployment_id = _create_deployment_in_astronomer(test_name)
-    result["created"] = True
-    result["deployment_id"] = deployment_id
-    return result
-
-
 def _check_deployment_status(deployment_name: str) -> str:
     """
     Helper method to check the status of a deployment in Astronomer.
@@ -867,9 +796,6 @@ def _create_astro_deployment_api_token(deployment_id: str, deployment_name: str,
     :return: The API token.
     :rtype: str
     """
-    import tempfile
-    import fcntl
-    
     # Create a lock file for coordinating API token creation across processes
     lock_file_path = os.path.join(tempfile.gettempdir(), "astro_token_creation.lock")
     

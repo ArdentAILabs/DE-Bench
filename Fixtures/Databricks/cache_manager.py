@@ -798,10 +798,11 @@ class CacheManager:
                                 WHERE deployment_name = ?
                             """, (deployment["deployment_name"],))
                             
-                            if cursor.fetchone():
+                            if row := cursor.fetchone():
+                                deployment = dict(row)
                                 cursor.execute("""
                                     UPDATE astronomer_deployments 
-                                    SET deployment_id = ?, deployment_name = ?, status = ?, test_name = NULL, in_use = 0, created_at = datetime('now')
+                                    SET deployment_id = ?, deployment_name = ?, status = ?, created_at = datetime('now')
                                     WHERE deployment_name = ?
                                 """, (deployment["deployment_id"], deployment["deployment_name"], deployment["status"], deployment["deployment_name"]))
                             else:
@@ -927,8 +928,8 @@ class CacheManager:
                         cursor.execute("""
                             UPDATE astronomer_deployments 
                             SET worker_pid = NULL, test_name = NULL, status = 'HIBERNATING', in_use = 0
-                            WHERE deployment_id = ? AND worker_pid = ?
-                        """, (deployment_id, worker_pid))
+                            WHERE deployment_id = ?
+                        """, (deployment_id,))
                         
                         cursor.execute("COMMIT")
                         print(f"Worker {worker_pid}: Released deployment {deployment_id}")
