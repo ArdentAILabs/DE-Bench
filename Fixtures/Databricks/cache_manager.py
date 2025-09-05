@@ -799,11 +799,21 @@ class CacheManager:
                             """, (deployment["deployment_name"],))
                             
                             if cursor.fetchone():
-                                cursor.execute("""
-                                    UPDATE astronomer_deployments 
-                                    SET deployment_id = ?, deployment_name = ?, status = ?, created_at = datetime('now')
-                                    WHERE deployment_name = ?
-                                """, (deployment["deployment_id"], deployment["deployment_name"], deployment["status"], deployment["deployment_name"]))
+                                # Reset in_use status for hibernating deployments to fix stuck deployments from catastrophic failures
+                                if deployment["status"] == "HIBERNATING":
+                                    cursor.execute("""
+                                        UPDATE astronomer_deployments 
+                                        SET deployment_id = ?, deployment_name = ?, status = ?, created_at = datetime('now'), 
+                                            in_use = 0, worker_pid = NULL, test_name = NULL
+                                        WHERE deployment_name = ?
+                                    """, (deployment["deployment_id"], deployment["deployment_name"], deployment["status"], deployment["deployment_name"]))
+                                    print(f"Worker {os.getpid()}: Reset stuck deployment {deployment['deployment_name']} to available state")
+                                else:
+                                    cursor.execute("""
+                                        UPDATE astronomer_deployments 
+                                        SET deployment_id = ?, deployment_name = ?, status = ?, created_at = datetime('now')
+                                        WHERE deployment_name = ?
+                                    """, (deployment["deployment_id"], deployment["deployment_name"], deployment["status"], deployment["deployment_name"]))
                             else:
                                 # For new deployments, in_use should be 0 since no test is using them yet
                                 cursor.execute("""
@@ -904,12 +914,13 @@ class CacheManager:
         
         return None
 
-    def release_astronomer_deployment(self, deployment_id: str, new_id: str, worker_pid: int) -> None:
+    def release_astronomer_deployment(self, deployment_name: str, worker_pid: int, new_id: Optional[str] = None) -> None:
         """
         Release an astronomer deployment back to hibernating state.
 
-        :param str deployment_id: ID of the deployment to release.
+        :param str deployment_name: Name of the deployment to release.
         :param int worker_pid: Process ID of the worker releasing the deployment.
+        :param Optional[str] new_id: New deployment ID after recreation.
         :rtype: None
         """
         max_retries = 3
@@ -923,15 +934,23 @@ class CacheManager:
                     cursor.execute("BEGIN TRANSACTION")
                     
                     try:
-                        # Release the deployment
-                        cursor.execute("""
-                            UPDATE astronomer_deployments 
-                            SET worker_pid = NULL, test_name = NULL, status = 'HIBERNATING', in_use = 0, deployment_id = ?
-                            WHERE deployment_id = ?
-                        """, (new_id, deployment_id))
+                        # Release the deployment - always clear in_use, worker_pid, test_name
+                        # Only update deployment_id if new_id is provided
+                        if new_id:
+                            cursor.execute("""
+                                UPDATE astronomer_deployments 
+                                SET worker_pid = NULL, test_name = NULL, status = 'HIBERNATING', in_use = 0, deployment_id = ?
+                                WHERE deployment_name = ?
+                            """, (new_id, deployment_name))
+                        else:
+                            cursor.execute("""
+                                UPDATE astronomer_deployments 
+                                SET worker_pid = NULL, test_name = NULL, status = 'HIBERNATING', in_use = 0
+                                WHERE deployment_name = ?
+                            """, (deployment_name,))
                         
                         cursor.execute("COMMIT")
-                        print(f"Worker {worker_pid}: Released deployment {deployment_id} and set new ID to {new_id}")
+                        print(f"Worker {worker_pid}: Released deployment {deployment_name} and set new ID to {new_id}")
                         return
                         
                     except Exception as e:
