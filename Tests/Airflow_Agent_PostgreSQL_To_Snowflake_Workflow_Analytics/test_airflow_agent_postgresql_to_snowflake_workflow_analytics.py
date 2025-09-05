@@ -27,7 +27,6 @@ test_uuid = uuid.uuid4().hex[:8]
 @pytest.mark.pipeline
 @pytest.mark.database
 @pytest.mark.three  # Difficulty 3 - involves multi-database ETL, JSON processing, and analytics
-@pytest.mark.parametrize("supabase_account_resource", [{"useArdent": True}], indirect=True)
 @pytest.mark.parametrize("postgres_resource", [{
     "resource_id": f"workflow_analytics_test_{test_timestamp}_{test_uuid}",
     "databases": [
@@ -44,6 +43,7 @@ test_uuid = uuid.uuid4().hex[:8]
     "sql_file": "snowflake_schema.sql"
 }], indirect=True)
 def test_airflow_agent_postgresql_to_snowflake_workflow_analytics(request, airflow_resource, github_resource, supabase_account_resource, postgres_resource, snowflake_resource):
+    model_result = None  # Initialize before try block
     input_dir = os.path.dirname(os.path.abspath(__file__))
     github_manager = github_resource["github_manager"]
     Test_Configs.User_Input = github_manager.add_merge_step_to_user_input(Test_Configs.User_Input)
@@ -111,13 +111,17 @@ def test_airflow_agent_postgresql_to_snowflake_workflow_analytics(request, airfl
         Test_Configs.Configs["services"]["airflow"]["password"] = airflow_resource["password"]
         Test_Configs.Configs["services"]["airflow"]["api_token"] = airflow_resource["api_token"]
 
-        config_results = set_up_model_configs(
-            Configs=Test_Configs.Configs,
-            custom_info={
-                "publicKey": supabase_account_resource["publicKey"],
-                "secretKey": supabase_account_resource["secretKey"],
-            }
-        )
+        custom_info = {"mode": request.config.getoption("--mode")}
+        if request.config.getoption("--mode") == "Ardent":
+            custom_info["publicKey"] = supabase_account_resource["publicKey"]
+            custom_info["secretKey"] = supabase_account_resource["secretKey"]
+
+        config_results = set_up_model_configs(Configs=Test_Configs.Configs, custom_info=custom_info)
+
+        custom_info = {
+            **custom_info,
+            **config_results,
+        }
 
         # SECTION 2: RUN THE MODEL - following exact pattern
         start_time = time.time()
@@ -125,11 +129,7 @@ def test_airflow_agent_postgresql_to_snowflake_workflow_analytics(request, airfl
             container=None, 
             task=Test_Configs.User_Input, 
             configs=Test_Configs.Configs,
-            extra_information={
-                "useArdent": True,
-                "publicKey": supabase_account_resource["publicKey"],
-                "secretKey": supabase_account_resource["secretKey"],
-            }
+            extra_information=custom_info
         )
         end_time = time.time()
         request.node.user_properties.append(("model_runtime", end_time - start_time))
@@ -228,15 +228,9 @@ def test_airflow_agent_postgresql_to_snowflake_workflow_analytics(request, airfl
     finally:
         try:
             # CLEANUP - following exact pattern from working tests
-            cleanup_model_artifacts(
-                Configs=Test_Configs.Configs, 
-                custom_info={
-                    **config_results,  # Spread all config results
-                    'job_id': model_result.get("id") if model_result else None,
-                    "publicKey": supabase_account_resource["publicKey"],
-                    "secretKey": supabase_account_resource["secretKey"],
-                }
-            )
+            if request.config.getoption("--mode") == "Ardent":
+                custom_info['job_id'] = model_result.get("id") if model_result else None
+            cleanup_model_artifacts(Configs=Test_Configs.Configs, custom_info=custom_info)
             # Delete the branch from github using the github manager
             github_manager.delete_branch("feature/workflow_analytics_etl")
 
