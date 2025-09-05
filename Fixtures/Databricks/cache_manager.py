@@ -34,8 +34,8 @@ class CacheManager:
         :return: Path to the SQLite database file.
         :rtype: str
         """
-        cwd = Path(os.getcwd()).parents[1]
-        cache_dir = os.path.join(cwd, "Environment", "CacheManager")
+        cwd = Path(os.getcwd())
+        cache_dir = os.path.join(cwd.absolute(), "Environment", "CacheManager")
         print(f"CacheManager: Using cache directory: {cache_dir}")
         if not os.path.exists(cache_dir):
             os.makedirs(cache_dir)
@@ -905,7 +905,7 @@ class CacheManager:
         
         return None
 
-    def release_astronomer_deployment(self, deployment_id: str, worker_pid: int) -> None:
+    def release_astronomer_deployment(self, deployment_id: str, new_id: str, worker_pid: int) -> None:
         """
         Release an astronomer deployment back to hibernating state.
 
@@ -927,12 +927,12 @@ class CacheManager:
                         # Release the deployment
                         cursor.execute("""
                             UPDATE astronomer_deployments 
-                            SET worker_pid = NULL, test_name = NULL, status = 'HIBERNATING', in_use = 0
+                            SET worker_pid = NULL, test_name = NULL, status = 'HIBERNATING', in_use = 0, deployment_id = ?
                             WHERE deployment_id = ?
-                        """, (deployment_id,))
+                        """, (new_id, deployment_id))
                         
                         cursor.execute("COMMIT")
-                        print(f"Worker {worker_pid}: Released deployment {deployment_id}")
+                        print(f"Worker {worker_pid}: Released deployment {deployment_id} and set new ID to {new_id}")
                         return
                         
                     except Exception as e:
