@@ -90,6 +90,11 @@ def test_mongodb_agent_add_record(request, mongo_resource, supabase_account_reso
         end_time = time.time()
         request.node.user_properties.append(("model_runtime", end_time - start_time))
 
+        # Register the Braintrust root span ID for tracking
+        if model_result:
+            request.node.user_properties.append(("run_trace_id", model_result["bt_root_span_id"]))
+            print(f"Registered Braintrust root span ID: {model_result['bt_root_span_id']}")
+
         # SECTION 3: VERIFY THE OUTCOMES
         # we then check the record was added
         db = syncMongoClient["test_database"]

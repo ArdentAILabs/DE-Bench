@@ -35,6 +35,12 @@ test_uuid = uuid.uuid4().hex[:8]
         }
     ]
 }], indirect=True)
+@pytest.mark.parametrize("github_resource", [{
+    "resource_id": f"test_airflow_enterprise_data_platform_test_{test_timestamp}_{test_uuid}",
+}], indirect=True)
+@pytest.mark.parametrize("airflow_resource", [{
+    "resource_id": f"enterprise_data_platform_test_{test_timestamp}_{test_uuid}",
+}], indirect=True)
 def test_airflow_agent_enterprise_data_platform(request, airflow_resource, github_resource, supabase_account_resource, postgres_resource):
     input_dir = os.path.dirname(os.path.abspath(__file__))
     github_manager = github_resource["github_manager"]
@@ -171,6 +177,11 @@ def test_airflow_agent_enterprise_data_platform(request, airflow_resource, githu
         end_time = time.time()
         print(f"Model execution completed. Result: {model_result}")
         request.node.user_properties.append(("model_runtime", end_time - start_time))
+
+        # Register the Braintrust root span ID for tracking
+        if model_result:
+            request.node.user_properties.append(("run_trace_id", model_result["bt_root_span_id"]))
+            print(f"Registered Braintrust root span ID: {model_result['bt_root_span_id']}")
 
         # Check if the branch exists and verify PR creation/merge
         print("Waiting 10 seconds for model to create branch and PR...")

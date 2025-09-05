@@ -82,10 +82,15 @@ def test_todo_s3_agent_upload_pdf(request):
 
     # SECTION 2: RUN THE MODEL
     start_time = time.time()
-    run_model(
+    model_result = run_model(
         container=None, task=Test_Configs.User_Input, configs=Test_Configs.Configs
     )
     end_time = time.time()
     request.node.user_properties.append(("model_runtime", end_time - start_time))
+    
+    # Register the Braintrust root span ID for tracking
+    if model_result:
+        request.node.user_properties.append(("run_trace_id", model_result["bt_root_span_id"]))
+        print(f"Registered Braintrust root span ID: {model_result['bt_root_span_id']}")
 
     assert True
