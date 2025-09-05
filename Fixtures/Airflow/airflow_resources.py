@@ -109,20 +109,17 @@ def _ensure_cache_manager_initialized() -> CacheManager:
         try:
             # Try to acquire an exclusive lock
             fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            
+            # Always fetch deployments first
             if astro_deployments := fetch_astro_deployments():
                 cache_manager.populate_astronomer_deployments(astro_deployments)
-                print(f"Worker {os.getpid()}: CacheManager already initialized with {len(astro_deployments)} deployments")
-                return cache_manager
-
-            # Not initialized, populate deployments
-            print(f"Worker {os.getpid()}: Initializing shared CacheManager for test session")
-            print(f"Worker {os.getpid()}: Fetched {len(astro_deployments)} deployments from Astro")
-            
-            # Debug: Print deployment details
-            for deployment in astro_deployments:
-                print(f"Worker {os.getpid()}: Deployment: {deployment['deployment_name']} ({deployment['deployment_id']}) - Status: {deployment['status']}")
-            
-            cache_manager.populate_astronomer_deployments(astro_deployments)
+                print(f"Worker {os.getpid()}: CacheManager initialized with {len(astro_deployments)} deployments")
+                
+                # Debug: Print deployment details
+                for deployment in astro_deployments:
+                    print(f"Worker {os.getpid()}: Deployment: {deployment['deployment_name']} ({deployment['deployment_id']}) - Status: {deployment['status']}")
+            else:
+                print(f"Worker {os.getpid()}: No existing deployments found, CacheManager initialized with empty deployment list")
             
             # Verify population worked
             verification_deployments = cache_manager.get_all_astronomer_deployments()
@@ -736,9 +733,9 @@ def cleanup_airflow_resource(
                 "delete Astronomer deployment",
                 check=True,
             )
-            _create_deployment_in_astronomer(deployment_name, wait=False)
+            new_id =_create_deployment_in_astronomer(deployment_name, wait=False)
             _hibernate_deployment(deployment_name)
-            cache_manager.release_astronomer_deployment(deployment_name, os.getpid())
+            cache_manager.release_astronomer_deployment(deployment_name, new_id, os.getpid())
             print(f"Worker {os.getpid()}: Deployment {deployment_name} - hibernated successfully.")
                     
         print(
