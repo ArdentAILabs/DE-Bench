@@ -110,6 +110,11 @@ def test_mysql_agent_update_records(request, mysql_resource, supabase_account_re
         end_time = time.time()
         request.node.user_properties.append(("model_runtime", end_time - start_time))
         
+        # Register the Braintrust root span ID for tracking
+        if model_result:
+            request.node.user_properties.append(("run_trace_id", model_result["bt_root_span_id"]))
+            print(f"Registered Braintrust root span ID: {model_result['bt_root_span_id']}")
+        
         test_steps[0]["status"] = "passed"
         test_steps[0]["Result_Message"] = "AI Agent completed task execution"
 

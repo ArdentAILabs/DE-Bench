@@ -5,6 +5,7 @@ import re
 import time
 import uuid
 import psycopg2
+import snowflake.connector
 
 from model.Configure_Model import cleanup_model_artifacts
 from model.Configure_Model import set_up_model_configs
@@ -21,43 +22,46 @@ test_uuid = uuid.uuid4().hex[:8]
 
 
 @pytest.mark.airflow
+@pytest.mark.postgres
+@pytest.mark.snowflake
 @pytest.mark.pipeline
 @pytest.mark.database
-@pytest.mark.two  # Difficulty 2 - involves DAG creation, PR management, and database validation
+@pytest.mark.three  # Difficulty 3 - involves multi-database ETL, JSON processing, and analytics
 @pytest.mark.parametrize("supabase_account_resource", [{"useArdent": True}], indirect=True)
 @pytest.mark.parametrize("postgres_resource", [{
-    "resource_id": f"yfinance_test_{test_timestamp}_{test_uuid}",
+    "resource_id": f"workflow_analytics_test_{test_timestamp}_{test_uuid}",
     "databases": [
         {
-            "name": f"stock_data_{test_timestamp}_{test_uuid}",
-            "sql_file": "schema.sql"
+            "name": f"workflow_db_{test_timestamp}_{test_uuid}",
+            "sql_file": "postgres_schema.sql"
         }
     ]
 }], indirect=True)
-@pytest.mark.parametrize("github_resource", [{
-    "resource_id": f"test_airflow_yfinance_to_postgresql_test_{test_timestamp}_{test_uuid}",
+@pytest.mark.parametrize("snowflake_resource", [{
+    "resource_id": f"snowflake_analytics_test_{test_timestamp}_{test_uuid}",
+    "database": f"ANALYTICS_DB_{test_timestamp}_{test_uuid}",
+    "schema": f"WORKFLOW_ANALYTICS_{test_timestamp}_{test_uuid}",
+    "sql_file": "snowflake_schema.sql"
 }], indirect=True)
-@pytest.mark.parametrize("airflow_resource", [{
-    "resource_id": f"yfinance_to_postgresql_test_{test_timestamp}_{test_uuid}",
-}], indirect=True)
-def test_airflow_agent_yfinance_to_postgresql(request, airflow_resource, github_resource, supabase_account_resource, postgres_resource):
+def test_airflow_agent_postgresql_to_snowflake_workflow_analytics(request, airflow_resource, github_resource, supabase_account_resource, postgres_resource, snowflake_resource):
     input_dir = os.path.dirname(os.path.abspath(__file__))
     github_manager = github_resource["github_manager"]
     Test_Configs.User_Input = github_manager.add_merge_step_to_user_input(Test_Configs.User_Input)
     request.node.user_properties.append(("user_query", Test_Configs.User_Input))
-    dag_name = "tesla_stock_dag"
-    pr_title = "Add Tesla Stock Data Pipeline"
+    dag_name = "workflow_analytics_etl"
+    pr_title = "Add_Workflow_Analytics_ETL"
     github_manager.check_and_update_gh_secrets(
         secrets={
             "ASTRO_ACCESS_TOKEN": os.environ["ASTRO_ACCESS_TOKEN"],
         }
     )
     
-    # Use the airflow_resource fixture - the Docker instance is already running
-    print("=== Starting YFinance Airflow Pipeline Test ===")
+    # Use the fixtures - following the exact pattern from working tests
+    print("=== Starting PostgreSQL to Snowflake Workflow Analytics Pipeline Test ===")
     print(f"Using Airflow instance from fixture: {airflow_resource['resource_id']}")
     print(f"Using GitHub instance from fixture: {github_resource['resource_id']}")
     print(f"Using PostgreSQL instance from fixture: {postgres_resource['resource_id']}")
+    print(f"Using Snowflake instance from fixture: {snowflake_resource['resource_id']}")
     print(f"Airflow base URL: {airflow_resource['base_url']}")
     print(f"Test directory: {input_dir}")
 
@@ -75,8 +79,8 @@ def test_airflow_agent_yfinance_to_postgresql(request, airflow_resource, github_
             "Result_Message": "",
         },
         {
-            "name": "Checking Database Results",
-            "description": "Checking if the Tesla stock data was properly stored in PostgreSQL",
+            "name": "Checking DAG Results",
+            "description": "Checking if the DAG produces the expected results",
             "status": "did not reach",
             "Result_Message": "",
         },
@@ -84,25 +88,29 @@ def test_airflow_agent_yfinance_to_postgresql(request, airflow_resource, github_
 
     request.node.user_properties.append(("test_steps", test_steps))
 
-    # SECTION 1: SETUP THE TEST
+    # SECTION 1: SETUP THE TEST - following exact pattern from working tests
     config_results = None  # Initialize before try block
     try:
-        # The dags folder is already set up by the fixture
-        # The PostgreSQL database is already set up by the postgres_resource fixture
+        # Get the actual database names from the fixtures
+        postgres_db_name = postgres_resource["created_resources"][0]["name"]
+        snowflake_db_name = snowflake_resource["database"]
+        snowflake_schema_name = snowflake_resource["schema"]
+        
+        print(f"Using PostgreSQL database: {postgres_db_name}")
+        print(f"Using Snowflake database: {snowflake_db_name}")
+        print(f"Using Snowflake schema: {snowflake_schema_name}")
 
-        # Get the actual database name from the fixture
-        db_name = postgres_resource["created_resources"][0]["name"]
-        print(f"Using PostgreSQL database: {db_name}")
-
-        # Update the configs to use the fixture-created database
-        Test_Configs.Configs["services"]["postgreSQL"]["databases"][0]["name"] = db_name
-
-        # set the airflow folder with the correct configs
-        # this function is for you to take the configs for the test and set them up however you want. They follow a set structure
+        # Update the configs to use the fixture-created databases
+        Test_Configs.Configs["services"]["postgreSQL"]["databases"][0]["name"] = postgres_db_name
+        Test_Configs.Configs["services"]["snowflake"]["database"] = snowflake_db_name
+        Test_Configs.Configs["services"]["snowflake"]["schema"] = snowflake_schema_name
+        
+        # Update Airflow configs with values from airflow_resource fixture - following exact pattern
         Test_Configs.Configs["services"]["airflow"]["host"] = airflow_resource["base_url"]
         Test_Configs.Configs["services"]["airflow"]["username"] = airflow_resource["username"]
         Test_Configs.Configs["services"]["airflow"]["password"] = airflow_resource["password"]
         Test_Configs.Configs["services"]["airflow"]["api_token"] = airflow_resource["api_token"]
+
         config_results = set_up_model_configs(
             Configs=Test_Configs.Configs,
             custom_info={
@@ -111,9 +119,8 @@ def test_airflow_agent_yfinance_to_postgresql(request, airflow_resource, github_
             }
         )
 
-        # SECTION 2: RUN THE MODEL
+        # SECTION 2: RUN THE MODEL - following exact pattern
         start_time = time.time()
-        print("Running model to create DAG and PR...")
         model_result = run_model(
             container=None, 
             task=Test_Configs.User_Input, 
@@ -125,19 +132,19 @@ def test_airflow_agent_yfinance_to_postgresql(request, airflow_resource, github_
             }
         )
         end_time = time.time()
-        print(f"Model execution completed. Result: {model_result}")
         request.node.user_properties.append(("model_runtime", end_time - start_time))
-
+        
         # Register the Braintrust root span ID for tracking
         if model_result:
             request.node.user_properties.append(("run_trace_id", model_result["bt_root_span_id"]))
             print(f"Registered Braintrust root span ID: {model_result['bt_root_span_id']}")
 
+        # SECTION 3: VERIFY THE OUTCOMES - following exact pattern from working tests
         # Check if the branch exists and verify PR creation/merge
         print("Waiting 10 seconds for model to create branch and PR...")
         time.sleep(10)  # Give the model time to create the branch and PR
         
-        branch_exists, test_steps[0] = github_manager.verify_branch_exists("feature/tesla_stock", test_steps[0])
+        branch_exists, test_steps[0] = github_manager.verify_branch_exists("feature/workflow_analytics_etl", test_steps[0])
         if not branch_exists:
             raise Exception(test_steps[0]["Result_Message"])
 
@@ -173,6 +180,7 @@ def test_airflow_agent_yfinance_to_postgresql(request, airflow_resource, github_
         print(f"Using API Token: {airflow_api_token}")
 
         # Wait for DAG to appear and trigger it
+        dag_name = "workflow_analytics_etl"
         if not airflow_instance.verify_airflow_dag_exists(dag_name):
             raise Exception(f"DAG '{dag_name}' did not appear in Airflow")
 
@@ -184,49 +192,42 @@ def test_airflow_agent_yfinance_to_postgresql(request, airflow_resource, github_
         print(f"Monitoring DAG run {dag_run_id} for completion...")
         airflow_instance.verify_dag_id_ran(dag_name, dag_run_id)
 
-        # SECTION 3: VERIFY THE OUTCOMES
-        print("Verifying database results...")
-        conn = psycopg2.connect(
-            host=os.getenv("POSTGRES_HOSTNAME"),
-            port=os.getenv("POSTGRES_PORT"),
-            user=os.getenv("POSTGRES_USERNAME"),
-            password=os.getenv("POSTGRES_PASSWORD"),
-            database=db_name,
-            sslmode="require"
-        )
-        cur = conn.cursor()
+        # Verify the data was loaded to Snowflake correctly
+        print("Verifying data was loaded to Snowflake...")
+        snowflake_conn = snowflake_resource["connection"]
+        cursor = snowflake_conn.cursor()
         
-        # Check if table exists and has data
-        cur.execute("""
-            SELECT COUNT(*) 
-            FROM tesla_stock 
-            WHERE date >= CURRENT_DATE - INTERVAL '10 days'
-        """)
-        row_count = cur.fetchone()[0]
-        
-        # TODO: need to update this check because the DAG was hitting the API too much and getting rate limited
-        assert row_count > 0, "No Tesla stock data found in the database"
-        assert row_count >= 10, "Less than 10 days of data found"
-
-        # Check table structure
-        cur.execute("""
-            SELECT column_name, data_type 
-            FROM information_schema.columns 
-            WHERE table_name = 'tesla_stock'
-        """)
-        columns = cur.fetchall()
-        expected_columns = {'date', 'open', 'high', 'low', 'close', 'volume'}
-        actual_columns = {col[0] for col in columns}
-        
-        assert expected_columns.issubset(actual_columns), "Missing expected columns in tesla_stock table"
-        
-        print(f"✓ Successfully verified {row_count} days of Tesla stock data")
-        test_steps[2]["status"] = "passed"
-        test_steps[2]["Result_Message"] = f"Successfully stored {row_count} days of Tesla stock data"
+        try:
+            # Check workflow_definitions table
+            cursor.execute(f"SELECT COUNT(*) FROM {snowflake_db_name}.{snowflake_schema_name}.workflow_definitions")
+            workflow_count = cursor.fetchone()[0]
+            print(f"Found {workflow_count} workflows in Snowflake")
+            
+            # Check workflow_edges table
+            cursor.execute(f"SELECT COUNT(*) FROM {snowflake_db_name}.{snowflake_schema_name}.workflow_edges")
+            edge_count = cursor.fetchone()[0]
+            print(f"Found {edge_count} edges in Snowflake")
+            
+            # Check workflow_node_details table
+            cursor.execute(f"SELECT COUNT(*) FROM {snowflake_db_name}.{snowflake_schema_name}.workflow_node_details")
+            node_count = cursor.fetchone()[0]
+            print(f"Found {node_count} nodes in Snowflake")
+            
+            if workflow_count > 0 and edge_count > 0 and node_count > 0:
+                test_steps[2]["status"] = "passed"
+                test_steps[2]["Result_Message"] = f"Data successfully loaded: {workflow_count} workflows, {edge_count} edges, {node_count} nodes"
+                print("✅ All validations passed! Workflow analytics ETL pipeline created and executed successfully.")
+            else:
+                test_steps[2]["status"] = "failed"
+                test_steps[2]["Result_Message"] = "No data found in Snowflake tables"
+                raise Exception("ETL pipeline did not load data correctly")
+                
+        finally:
+            cursor.close()
 
     finally:
         try:
-            # this function is for you to remove the configs for the test. They follow a set structure.
+            # CLEANUP - following exact pattern from working tests
             cleanup_model_artifacts(
                 Configs=Test_Configs.Configs, 
                 custom_info={
@@ -237,7 +238,7 @@ def test_airflow_agent_yfinance_to_postgresql(request, airflow_resource, github_
                 }
             )
             # Delete the branch from github using the github manager
-            github_manager.delete_branch("feature/tesla_stock")
+            github_manager.delete_branch("feature/workflow_analytics_etl")
 
         except Exception as e:
             print(f"Error during cleanup: {e}")
