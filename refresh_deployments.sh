@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Script to refresh all Astro deployments
-# This script will delete, recreate, and hibernate all deployments
+# This script will delete, recreate, and hibernate all existing deployments in Astronomer
 
 set -e  # Exit on any error
 
