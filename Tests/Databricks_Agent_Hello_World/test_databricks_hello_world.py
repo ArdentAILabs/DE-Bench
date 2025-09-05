@@ -151,7 +151,6 @@ def update_test_step(test_steps, step_name, status, message):
 ], indirect=True)
 @pytest.mark.databricks
 @pytest.mark.hello_world
-@pytest.mark.parametrize("supabase_account_resource", [{"useArdent": True}], indirect=True)
 def test_databricks_hello_world(request, databricks_resource, supabase_account_resource):
     """
     Test Databricks Hello World with unique string validation:
@@ -219,27 +218,22 @@ def test_databricks_hello_world(request, databricks_resource, supabase_account_r
         update_test_step(test_steps, "Environment Setup", "passed", f"Environment setup completed for test ID: {config['test_id']}")
         
         # Step 3: Set up model configuration
-        config_results = set_up_model_configs(
-            Configs=Test_Configs.Configs,
-            custom_info={
-                "publicKey": supabase_account_resource["publicKey"],
-                "secretKey": supabase_account_resource["secretKey"],
-            }
-        )
+        custom_info = {"mode": request.config.getoption("--mode")}
+        if request.config.getoption("--mode") == "Ardent":
+            custom_info["publicKey"] = supabase_account_resource["publicKey"]
+            custom_info["secretKey"] = supabase_account_resource["secretKey"]
+        config_results = set_up_model_configs(Configs=Test_Configs.Configs, custom_info=custom_info)
+        
+        custom_info = {
+            **custom_info,
+            **config_results,
+        }
+        
         update_test_step(test_steps, "Model Configuration", "passed", "Model configuration completed successfully")
         
         # Step 4: Run model
         model_start_time = time.time()
-        model_result = run_model(
-            container=None,
-            task=Test_Configs.User_Input,
-            configs=Test_Configs.Configs,
-            extra_information={
-                "useArdent": True,
-                "publicKey": supabase_account_resource["publicKey"],
-                "secretKey": supabase_account_resource["secretKey"],
-            }
-        )
+        model_result = run_model(container=None, task=Test_Configs.User_Input, configs=Test_Configs.Configs, extra_information=custom_info)
         model_end_time = time.time()
         request.node.user_properties.append(("model_runtime", model_end_time - model_start_time))
         
@@ -309,14 +303,9 @@ def test_databricks_hello_world(request, databricks_resource, supabase_account_r
         databricks_manager.cleanup_databricks_environment(config)
         
         # Clean up model configs
-        cleanup_model_artifacts(
-            Configs=Test_Configs.Configs,
-            custom_info={
-                "publicKey": supabase_account_resource["publicKey"],
-                "secretKey": supabase_account_resource["secretKey"],
-                'job_id': model_result.get("id") if model_result else None,
-            }
-        )
+        if request.config.getoption("--mode") == "Ardent":
+            custom_info['job_id'] = model_result.get("id") if model_result else None
+        cleanup_model_artifacts(Configs=Test_Configs.Configs, custom_info=custom_info)
         
         # Store execution time
         request.node.user_properties.append(

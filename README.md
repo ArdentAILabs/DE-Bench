@@ -96,6 +96,46 @@ ASTRO_WORKSPACE_ID="YOUR_ASTRO_WORKSPACE_ID"
 ASTRO_ACCESS_TOKEN="YOUR_ASTRO_ACCESS_TOKEN"
 ASTRO_CLOUD_PROVIDER="aws"
 ASTRO_REGION="us-east-1"
+
+# Azure Configuration (for Claude_Code mode and container services)
+# Azure Service Principal (for AKS access)
+AZURE_CLIENT_ID="YOUR_AZURE_SERVICE_PRINCIPAL_CLIENT_ID"
+AZURE_CLIENT_SECRET="YOUR_AZURE_SERVICE_PRINCIPAL_CLIENT_SECRET"
+AZURE_TENANT_ID="YOUR_AZURE_TENANT_ID"
+AZURE_SUBSCRIPTION_ID="YOUR_AZURE_SUBSCRIPTION_ID"
+
+# Azure Container Services
+ACI_RESOURCE_GROUP="YOUR_AKS_RESOURCE_GROUP_NAME"
+ACI_CONTAINER_GROUP_NAME="YOUR_CONTAINER_GROUP_NAME"
+ACR_REGISTRY_SERVER="YOUR_ACR_REGISTRY_SERVER"
+ACR_REGISTRY_USERNAME="YOUR_ACR_USERNAME"
+ACR_REGISTRY_PASSWORD="YOUR_ACR_PASSWORD"
+
+# Azure Kubernetes Service
+AKS_CLUSTER_NAME="YOUR_AKS_CLUSTER_NAME"
+AKS_IMAGE_NAME="YOUR_AKS_IMAGE_NAME"
+
+# Azure Storage Account
+AZURE_STORAGE_ACCOUNT_NAME="YOUR_STORAGE_ACCOUNT_NAME"
+AZURE_STORAGE_ACCOUNT_KEY="YOUR_STORAGE_ACCOUNT_KEY"
+
+# Azure Key Vault
+AZURE_KEY_VAULT_NAME="YOUR_KEY_VAULT_NAME"
+
+# AWS Credentials for Claude Code (Bedrock access)
+AWS_ACCESS_KEY_ID_CLAUDE="YOUR_AWS_ACCESS_KEY_FOR_CLAUDE_BEDROCK"
+AWS_SECRET_ACCESS_KEY_CLAUDE="YOUR_AWS_SECRET_KEY_FOR_CLAUDE_BEDROCK"
+AWS_DEFAULT_REGION_CLAUDE="us-east-1"
+
+# Claude Code Configuration
+IS_SANDBOX=1
+
+# OpenAI Configuration (for OpenAI_Codex mode - Coming Soon)
+OPENAI_API_KEY="YOUR_OPENAI_API_KEY"
+AZURE_OPENAI_API_KEY="YOUR_AZURE_OPENAI_API_KEY"
+AZURE_OPENAI_ENDPOINT="YOUR_AZURE_OPENAI_ENDPOINT"
+AZURE_OPENAI_API_VERSION="2023-12-01-preview"
+AZURE_OPENAI_CHAT_DEPLOYMENT_NAME="YOUR_DEPLOYMENT_NAME"
 </code></pre>
 
 ### Custom Variables for Your Setup
@@ -135,6 +175,85 @@ pytest -n auto -sv                    # Run with default settings (parallel)
 pytest -sv -k "keyword"               # Run tests by keyword
 pytest -m "postgres"                  # Run tests by marker
 pytest                                # Run all tests without parallelization (not recommended)
+```
+
+## Execution Modes
+
+The test suite supports multiple AI model execution modes via the `--mode` flag:
+
+### Available Modes:
+
+1. **Ardent** (Default) - Uses Ardent AI's backend service
+2. **Claude_Code** - Uses Anthropic's Claude Code CLI in Kubernetes containers  
+3. **OpenAI_Codex** - Uses OpenAI's Codex CLI (coming soon)
+
+### Running Tests with Different Modes:
+
+```bash
+# Run with Ardent AI (default mode)
+pytest Tests/MongoDB_Agent_Add_Record/ --mode Ardent -v
+
+# Run with Claude Code in Kubernetes
+pytest Tests/MongoDB_Agent_Add_Record/ --mode Claude_Code -v
+
+# Run multiple tests in parallel with Claude Code
+pytest -n auto --mode Claude_Code -v
+
+# Run specific test categories with different modes
+pytest -m "postgres" --mode Claude_Code -v
+pytest -m "airflow" --mode Ardent -v
+```
+
+### Mode-Specific Requirements:
+
+**Ardent Mode:**
+- Requires `ARDENT_PUBLIC_KEY` and `ARDENT_SECRET_KEY` environment variables
+- Uses Supabase for account management
+
+**Claude_Code Mode:**
+- Requires Azure Kubernetes Service (AKS) access
+- Uses Kubernetes pods with Claude Code CLI installed
+- Automatically handles container lifecycle and cleanup
+- **Required Environment Variables:**
+  - `AZURE_CLIENT_ID` - Azure service principal client ID
+  - `AZURE_CLIENT_SECRET` - Azure service principal client secret  
+  - `AZURE_TENANT_ID` - Azure tenant ID
+  - `AZURE_SUBSCRIPTION_ID` - Azure subscription ID
+  - `ACI_RESOURCE_GROUP` - Azure resource group containing AKS cluster
+  - `AKS_CLUSTER_NAME` - Name of the AKS cluster
+  - `AWS_ACCESS_KEY_ID_CLAUDE` - AWS access key for Claude Code (Bedrock access)
+  - `AWS_SECRET_ACCESS_KEY_CLAUDE` - AWS secret key for Claude Code
+  - `AWS_DEFAULT_REGION_CLAUDE` - AWS region for Claude Code (defaults to us-east-1)
+  - `IS_SANDBOX=1` - Required for Claude Code non-interactive execution
+
+**OpenAI_Codex Mode:** (Coming Soon)
+- Will require OpenAI API credentials
+- Will support Azure OpenAI deployments
+
+### Performance & Usage Tips:
+
+**Parallel Execution:**
+```bash
+# Run 4 tests in parallel with Claude Code (recommended)
+pytest -n auto --mode Claude_Code Tests/MongoDB_Agent_Add_Record/ Tests/PostgreSQL_Agent_Add_Record/ Tests/MySQL_Agent_Update_Records/ Tests/Snowflake_Agent_Add_Record/ -v
+
+# Compare performance between modes
+pytest Tests/MongoDB_Agent_Add_Record/ --mode Ardent -v
+pytest Tests/MongoDB_Agent_Add_Record/ --mode Claude_Code -v
+```
+
+**Resource Management:**
+- **Claude_Code mode** automatically creates and destroys Kubernetes pods for each test
+- **Ardent mode** uses persistent backend connections
+- Both modes support parallel execution with `pytest-xdist` (`-n auto`)
+- Cleanup is handled automatically even if tests are interrupted with Ctrl+C
+
+**Benchmarking:**
+```bash
+# Benchmark all modes on the same test
+pytest Tests/MongoDB_Agent_Add_Record/ --mode Ardent -v --tb=short
+pytest Tests/MongoDB_Agent_Add_Record/ --mode Claude_Code -v --tb=short
+# pytest Tests/MongoDB_Agent_Add_Record/ --mode OpenAI_Codex -v --tb=short  # Coming soon
 ```
 
 Pytest supports `and` & `or` operators too. Something like `pytest -m "one and two"` will work.
