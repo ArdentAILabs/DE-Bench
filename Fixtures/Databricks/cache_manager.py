@@ -798,8 +798,7 @@ class CacheManager:
                                 WHERE deployment_name = ?
                             """, (deployment["deployment_name"],))
                             
-                            if row := cursor.fetchone():
-                                deployment = dict(row)
+                            if cursor.fetchone():
                                 cursor.execute("""
                                     UPDATE astronomer_deployments 
                                     SET deployment_id = ?, deployment_name = ?, status = ?, created_at = datetime('now')
