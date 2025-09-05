@@ -309,6 +309,7 @@ class GitHubManager:
                 sha=contents.sha,
             )
             print(f"✓ Build info updated successfully for branch {branch_name}")
+            print(f"Build info: {build_info_txt}")
         except Exception as e:
             if e.status == 404:
                 try:
