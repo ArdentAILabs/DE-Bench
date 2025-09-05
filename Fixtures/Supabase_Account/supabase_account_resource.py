@@ -10,7 +10,10 @@ from Configs.SupabaseConfig import supabase_client
 
 @pytest.fixture(scope="function")
 def supabase_account_resource(request):
-    isArdent = request.param.get("useArdent", False)
+
+    mode = request.config.getoption("--mode")
+
+
 
     # Create unique email for this test to avoid conflicts
     test_id = str(uuid.uuid4())[:8]
@@ -37,7 +40,7 @@ def supabase_account_resource(request):
     
 
     # Test the JWT token with your backend
-    if isArdent:
+    if mode == "Ardent":
 
         jwt_payload = {
         "sub": user_id,                    # User ID (subject)
@@ -100,7 +103,7 @@ def supabase_account_resource(request):
     
     try:
         # Only delete keys if they were created
-        if isArdent and 'publicKey' in response:
+        if mode == "Ardent" and 'publicKey' in response:
             delete_key_response = requests.delete(
                 f"{os.getenv('ARDENT_BASE_URL')}/v1/api/deleteKey",
                 json={

@@ -26,7 +26,6 @@ test_uuid = uuid.uuid4().hex[:8]
 @pytest.mark.database
 @pytest.mark.api_integration
 @pytest.mark.three  # Difficulty 3 - involves API integration, DAG creation, PR management, and database validation
-@pytest.mark.parametrize("supabase_account_resource", [{"useArdent": True}], indirect=True)
 @pytest.mark.parametrize("postgres_resource", [{
     "resource_id": f"earthquake_test_{test_timestamp}_{test_uuid}",
     "databases": [
@@ -77,6 +76,7 @@ def test_airflow_agent_usgs_earthquake_to_postgresql(request, airflow_resource, 
 
     # SECTION 1: SETUP THE TEST
     config_results = None
+    custom_info = {"mode": request.config.getoption("--mode")}
     try:
         # Get the actual database name from the fixture
         db_name = postgres_resource["created_resources"][0]["name"]
@@ -90,23 +90,22 @@ def test_airflow_agent_usgs_earthquake_to_postgresql(request, airflow_resource, 
         Test_Configs.Configs["services"]["airflow"]["username"] = airflow_resource["username"]
         Test_Configs.Configs["services"]["airflow"]["password"] = airflow_resource["password"]
         Test_Configs.Configs["services"]["airflow"]["api_token"] = airflow_resource["api_token"]
+        if request.config.getoption("--mode") == "Ardent":
+            custom_info["publicKey"] = supabase_account_resource["publicKey"]
+            custom_info["secretKey"] = supabase_account_resource["secretKey"]
         
         # Set up model configs using the configuration from Test_Configs
-        config_results = set_up_model_configs(Configs=Test_Configs.Configs, custom_info={
-            "publicKey": supabase_account_resource["publicKey"],
-            "secretKey": supabase_account_resource["secretKey"],
-        })
+        config_results = set_up_model_configs(Configs=Test_Configs.Configs, custom_info=custom_info)
+
+        custom_info = {
+            **custom_info,
+            **config_results,
+        }
 
         # SECTION 2: RUN THE MODEL
         # Run the model which should create the earthquake data pipeline
         start_time = time.time()
-        model_result = run_model(
-            container=None, task=Test_Configs.User_Input, configs=Test_Configs.Configs, extra_information={
-                "useArdent": True,
-                "publicKey": supabase_account_resource["publicKey"],
-                "secretKey": supabase_account_resource["secretKey"],
-            }
-        )
+        model_result = run_model(container=None, task=Test_Configs.User_Input, configs=Test_Configs.Configs, extra_information = custom_info)
         end_time = time.time()
         model_runtime = end_time - start_time
 
@@ -268,15 +267,9 @@ def test_airflow_agent_usgs_earthquake_to_postgresql(request, airflow_resource, 
         # SECTION 4: CLEANUP
         if config_results:
             try:
-                cleanup_model_artifacts(
-                    Configs=Test_Configs.Configs, 
-                    custom_info={
-                        **config_results,  # Spread all config results
-                        'job_id': model_result.get("id") if model_result else None,
-                        "publicKey": supabase_account_resource["publicKey"],
-                        "secretKey": supabase_account_resource["secretKey"],
-                    }
-                )
+                if request.config.getoption("--mode") == "Ardent":
+                    custom_info['job_id'] = model_result.get("id") if model_result else None
+                cleanup_model_artifacts(Configs=Test_Configs.Configs, custom_info=custom_info)
                 print("✅ Model configs cleaned up")
             except Exception as cleanup_error:
                 print(f"⚠️ Error during model config cleanup: {cleanup_error}")

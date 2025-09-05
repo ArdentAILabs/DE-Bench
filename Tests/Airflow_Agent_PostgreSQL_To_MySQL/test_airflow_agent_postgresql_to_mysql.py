@@ -32,7 +32,6 @@ test_uuid = uuid.uuid4().hex[:8]
 @pytest.mark.pipeline
 @pytest.mark.database
 @pytest.mark.three  # Difficulty 3 - involves database operations, DAG creation, and data validation
-@pytest.mark.parametrize("supabase_account_resource", [{"useArdent": True}], indirect=True)
 @pytest.mark.parametrize("postgres_resource", [{
     "resource_id": f"postgresql_to_mysql_test_{test_timestamp}_{test_uuid}",
     "databases": [
@@ -88,6 +87,7 @@ def test_airflow_agent_postgresql_to_mysql(request, airflow_resource, github_res
 
     # SECTION 1: SETUP THE TEST
     config_results = None  # Initialize before try block
+    custom_info = {"mode": request.config.getoption("--mode")}
     try:
         # The dags folder is already set up by the fixture
         # The PostgreSQL database is already set up by the postgres_resource fixture
@@ -132,27 +132,20 @@ def test_airflow_agent_postgresql_to_mysql(request, airflow_resource, github_res
         Test_Configs.Configs["services"]["airflow"]["username"] = airflow_resource["username"]
         Test_Configs.Configs["services"]["airflow"]["password"] = airflow_resource["password"]
         Test_Configs.Configs["services"]["airflow"]["api_token"] = airflow_resource["api_token"]
-        config_results = set_up_model_configs(
-            Configs=Test_Configs.Configs,
-            custom_info={
-                "publicKey": supabase_account_resource["publicKey"],
-                "secretKey": supabase_account_resource["secretKey"],
-            }
-        )
+        if request.config.getoption("--mode") == "Ardent":
+            custom_info["publicKey"] = supabase_account_resource["publicKey"]
+            custom_info["secretKey"] = supabase_account_resource["secretKey"]
+        config_results = set_up_model_configs(Configs=Test_Configs.Configs,custom_info=custom_info)
+
+        custom_info = {
+            **custom_info,
+            **config_results,
+        }
 
         # SECTION 2: RUN THE MODEL
         start_time = time.time()
         print("Running model to create DAG and PR...")
-        model_result = run_model(
-            container=None, 
-            task=Test_Configs.User_Input, 
-            configs=Test_Configs.Configs,
-            extra_information={
-                "useArdent": True,
-                "publicKey": supabase_account_resource["publicKey"],
-                "secretKey": supabase_account_resource["secretKey"],
-            }
-        )
+        model_result = run_model(container=None, task=Test_Configs.User_Input, configs=Test_Configs.Configs,extra_information = custom_info)
         end_time = time.time()
         print(f"Model execution completed. Result: {model_result}")
         request.node.user_properties.append(("model_runtime", end_time - start_time))
@@ -244,15 +237,9 @@ def test_airflow_agent_postgresql_to_mysql(request, airflow_resource, github_res
     finally:
         try:
             # this function is for you to remove the configs for the test. They follow a set structure.
-            cleanup_model_artifacts(
-                Configs=Test_Configs.Configs, 
-                custom_info={
-                    **config_results,  # Spread all config results
-                    'job_id': model_result.get("id") if model_result else None,
-                    "publicKey": supabase_account_resource["publicKey"],
-                    "secretKey": supabase_account_resource["secretKey"],
-                }
-            )
+            if request.config.getoption("--mode") == "Ardent":
+                custom_info['job_id'] = model_result.get("id") if model_result else None
+            cleanup_model_artifacts(Configs=Test_Configs.Configs, custom_info=custom_info)
             
             # Clean up MySQL database
             print("Starting MySQL cleanup...")

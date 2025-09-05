@@ -30,7 +30,6 @@ Test_Configs = importlib.import_module(module_path)
 @pytest.mark.api_integration
 @pytest.mark.database
 @pytest.mark.pipeline
-@pytest.mark.parametrize("supabase_account_resource", [{"useArdent": True}], indirect=True)
 def test_airflow_agent_mysql_to_tigerbeetle(request, supabase_account_resource):
     input_dir = os.path.dirname(os.path.abspath(__file__))
     request.node.user_properties.append(("user_query", Test_Configs.User_Input))
@@ -61,6 +60,8 @@ def test_airflow_agent_mysql_to_tigerbeetle(request, supabase_account_resource):
     # Create a Docker client with the compose file configuration
     docker = DockerClient(compose_files=[os.path.join(input_dir, "docker-compose.yml")])
     config_results = None
+    model_result = None
+    custom_info = {"mode": request.config.getoption("--mode")}
     airflow_local = Airflow_Local()
     cursor = connection.cursor()
 
@@ -180,29 +181,19 @@ def test_airflow_agent_mysql_to_tigerbeetle(request, supabase_account_resource):
 
         connection.commit()
 
-        config_results = set_up_model_configs(
-            Configs=Test_Configs.Configs,
-            custom_info={
-                "publicKey": supabase_account_resource["publicKey"],
-                "secretKey": supabase_account_resource["secretKey"],
-            }
-        )
+        if request.config.getoption("--mode") == "Ardent":
+            custom_info["publicKey"] = supabase_account_resource["publicKey"]
+            custom_info["secretKey"] = supabase_account_resource["secretKey"]
+        config_results = set_up_model_configs(Configs=Test_Configs.Configs,custom_info=custom_info)
 
-        
-
+        custom_info = {
+            **custom_info,
+            **config_results,
+        }
 
         # SECTION 2: RUN THE MODEL
         start_time = time.time()
-        model_result = run_model(
-            container=None, 
-            task=Test_Configs.User_Input, 
-            configs=Test_Configs.Configs,
-            extra_information={
-                "useArdent": True,
-                "publicKey": supabase_account_resource["publicKey"],
-                "secretKey": supabase_account_resource["secretKey"],
-            }
-        )
+        model_result = run_model(container=None, task=Test_Configs.User_Input, configs=Test_Configs.Configs,extra_information = custom_info)
         end_time = time.time()
         request.node.user_properties.append(("model_runtime", end_time - start_time))
 
@@ -412,15 +403,9 @@ def test_airflow_agent_mysql_to_tigerbeetle(request, supabase_account_resource):
                 print(f"Error during cleanup: {e}")
 
             # Remove model configs
-            cleanup_model_artifacts(
-                Configs=Test_Configs.Configs, 
-                custom_info={
-                    **config_results,  # Spread all config results
-                    'job_id': model_result.get("id") if model_result else None,
-                    "publicKey": supabase_account_resource["publicKey"],
-                    "secretKey": supabase_account_resource["secretKey"],
-                }
-            )
+            if request.config.getoption("--mode") == "Ardent":
+                custom_info['job_id'] = model_result.get("id") if model_result else None
+            cleanup_model_artifacts(Configs=Test_Configs.Configs, custom_info=custom_info)
             
             # Clean up GitHub - delete branch if it exists
             try:

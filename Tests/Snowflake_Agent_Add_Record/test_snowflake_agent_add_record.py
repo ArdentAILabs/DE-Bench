@@ -20,7 +20,6 @@ test_uuid = uuid.uuid4().hex[:8]
 @pytest.mark.snowflake
 @pytest.mark.database
 @pytest.mark.two  # Difficulty 2 - involves database operations and validation
-@pytest.mark.parametrize("supabase_account_resource", [{"useArdent": True}], indirect=True)
 @pytest.mark.parametrize("snowflake_resource", [{
     "resource_id": f"snowflake_test_{test_timestamp}_{test_uuid}",
     "database": f"BENCH_DB_{test_timestamp}_{test_uuid}",
@@ -81,6 +80,7 @@ def test_snowflake_agent_add_record(request, snowflake_resource, supabase_accoun
 
     # SECTION 1: SETUP THE TEST
     config_results = None
+    custom_info = {"mode": request.config.getoption("--mode")}
     try:
         print("Snowflake database and schema setup completed by fixture")
         
@@ -88,13 +88,16 @@ def test_snowflake_agent_add_record(request, snowflake_resource, supabase_accoun
         Test_Configs.Configs["services"]["snowflake"]["database"] = snowflake_resource["database"]
         Test_Configs.Configs["services"]["snowflake"]["schema"] = snowflake_resource["schema"]
         
-        config_results = set_up_model_configs(
-            Configs=Test_Configs.Configs,
-            custom_info={
-                "publicKey": supabase_account_resource["publicKey"],
-                "secretKey": supabase_account_resource["secretKey"],
-            }
-        )
+        if request.config.getoption("--mode") == "Ardent":
+            custom_info["publicKey"] = supabase_account_resource["publicKey"]
+            custom_info["secretKey"] = supabase_account_resource["secretKey"]
+
+        config_results = set_up_model_configs(Configs=Test_Configs.Configs,custom_info=custom_info)
+
+        custom_info = {
+            **custom_info,
+            **config_results,
+        }
 
         # SECTION 2: VERIFY INITIAL STATE
         print("Verifying initial database state...")
@@ -128,16 +131,7 @@ def test_snowflake_agent_add_record(request, snowflake_resource, supabase_accoun
         # SECTION 3: RUN THE MODEL
         start_time = time.time()
         print("Running model to add new user record...")
-        model_result = run_model(
-            container=None,
-            task=Test_Configs.User_Input,
-            configs=Test_Configs.Configs,
-            extra_information={
-                "useArdent": True,
-                "publicKey": supabase_account_resource["publicKey"],
-                "secretKey": supabase_account_resource["secretKey"],
-            }
-        )
+        model_result = run_model(container=None, task=Test_Configs.User_Input, configs=Test_Configs.Configs,extra_information = custom_info)
         end_time = time.time()
         print(f"Model execution completed. Result: {model_result}")
         request.node.user_properties.append(("model_runtime", end_time - start_time))
@@ -198,15 +192,8 @@ def test_snowflake_agent_add_record(request, snowflake_resource, supabase_accoun
     finally:
         try:
             # Clean up model configs
-            if config_results:
-                cleanup_model_artifacts(
-                    Configs=Test_Configs.Configs, 
-                    custom_info={
-                        **config_results,
-                        "publicKey": supabase_account_resource["publicKey"],
-                        "secretKey": supabase_account_resource["secretKey"],
-                        'job_id': model_result.get("id") if model_result else None,
-                    }
-                )
+            if request.config.getoption("--mode") == "Ardent":
+                custom_info['job_id'] = model_result.get("id") if model_result else None
+            cleanup_model_artifacts(Configs=Test_Configs.Configs, custom_info=custom_info)
         except Exception as e:
             print(f"Error during cleanup: {e}")

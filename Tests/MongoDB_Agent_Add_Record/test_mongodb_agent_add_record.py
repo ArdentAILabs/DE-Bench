@@ -39,7 +39,6 @@ Test_Configs = importlib.import_module(module_path)
         }
     ]
 }], indirect=True)
-@pytest.mark.parametrize("supabase_account_resource", [{"useArdent": True}], indirect=True)
 def test_mongodb_agent_add_record(request, mongo_resource, supabase_account_resource):
     input_dir = os.path.dirname(os.path.abspath(__file__))
 
@@ -58,6 +57,14 @@ def test_mongodb_agent_add_record(request, mongo_resource, supabase_account_reso
 
     # SECTION 1: SETUP THE TEST
     config_results = None
+    custom_info = {"mode": request.config.getoption("--mode")}
+
+
+    if request.config.getoption("--mode") == "Ardent":
+        custom_info["publicKey"] = supabase_account_resource["publicKey"]
+        custom_info["secretKey"] = supabase_account_resource["secretKey"]
+
+
     try:
         # we can add an option to do local runs with this container
         # container = load_docker(input_directory=input_dir)
@@ -65,20 +72,20 @@ def test_mongodb_agent_add_record(request, mongo_resource, supabase_account_reso
         # MongoDB setup is now handled by the fixture
         
         # Set up model configs using the configuration from Test_Configs
-        config_results = set_up_model_configs(Configs=Test_Configs.Configs,custom_info={
-            "publicKey": supabase_account_resource["publicKey"],
-            "secretKey": supabase_account_resource["secretKey"],
-        })
+        config_results = set_up_model_configs(Configs=Test_Configs.Configs,custom_info=custom_info)
+
+        custom_info = {
+            **custom_info,
+            **config_results,
+        }
+        print("This is the custom info")
+        print(custom_info)
 
         # SECTION 2: RUN THE MODEL
         # Run the model which should add the record
         start_time = time.time()
         model_result = run_model(
-            container=None, task=Test_Configs.User_Input, configs=Test_Configs.Configs,extra_information = {
-                "useArdent": True,
-                "publicKey": supabase_account_resource["publicKey"],
-                "secretKey": supabase_account_resource["secretKey"],
-            }
+            container=None, task=Test_Configs.User_Input, configs=Test_Configs.Configs,extra_information = custom_info
         )
         end_time = time.time()
         request.node.user_properties.append(("model_runtime", end_time - start_time))
@@ -104,17 +111,16 @@ def test_mongodb_agent_add_record(request, mongo_resource, supabase_account_reso
         try:
             # MongoDB cleanup is now handled by the fixture
 
+            if request.config.getoption("--mode") == "Ardent":
+                custom_info['job_id'] = model_result.get("id") if model_result else None
+
+
             # Remove model configs
-            if config_results:
-                cleanup_model_artifacts(
-                    Configs=Test_Configs.Configs, 
-                    custom_info={
-                        **config_results,  # Spread all the config results
-                        'job_id': model_result.get("id") if model_result else None,
-                        "publicKey": supabase_account_resource["publicKey"],
-                        "secretKey": supabase_account_resource["secretKey"],
-                    }
-                )
+
+            cleanup_model_artifacts(
+                Configs=Test_Configs.Configs, 
+                custom_info=custom_info
+            )
 
         except Exception as e:
             pass  # Cleanup error handled silently

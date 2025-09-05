@@ -22,7 +22,6 @@ test_uuid = uuid.uuid4().hex[:8]
 @pytest.mark.postgresql
 @pytest.mark.database
 @pytest.mark.three
-@pytest.mark.parametrize("supabase_account_resource", [{"useArdent": True}], indirect=True)
 @pytest.mark.parametrize("postgres_resource", [{
     "resource_id": f"integer_division_fix_{test_timestamp}_{test_uuid}",
     "databases": [
@@ -69,6 +68,7 @@ def test_postgresql_agent_integer_division_fix(request, postgres_resource, supab
 
     # SECTION 1: SETUP THE TEST
     config_results = None
+    custom_info = {"mode": request.config.getoption("--mode")}
     created_db_name = postgres_resource["created_resources"][0]["name"]
     print(f"PostgreSQL Agent Integer Division Fix test using database: {created_db_name}")
     
@@ -76,13 +76,15 @@ def test_postgresql_agent_integer_division_fix(request, postgres_resource, supab
         # Set up model configurations with actual database name and test-specific credentials
         test_configs = Test_Configs.Configs.copy()
         test_configs["services"]["postgreSQL"]["databases"] = [{"name": created_db_name}]
-        config_results = set_up_model_configs(
-            Configs=test_configs,
-            custom_info={
-                "publicKey": supabase_account_resource["publicKey"],
-                "secretKey": supabase_account_resource["secretKey"],
-            }
-        )
+        if request.config.getoption("--mode") == "Ardent":
+            custom_info["publicKey"] = supabase_account_resource["publicKey"]
+            custom_info["secretKey"] = supabase_account_resource["secretKey"]
+        config_results = set_up_model_configs(Configs=test_configs,custom_info=custom_info)
+
+        custom_info = {
+            **custom_info,
+            **config_results,
+        }
 
         # DEMONSTRATE THE INTEGER DIVISION PROBLEM FIRST
         db_connection = psycopg2.connect(
@@ -137,16 +139,7 @@ def test_postgresql_agent_integer_division_fix(request, postgres_resource, supab
 
         # SECTION 2: RUN THE MODEL
         start_time = time.time()
-        model_result = run_model(
-            container=None,
-            task=Test_Configs.User_Input,
-            configs=test_configs,
-            extra_information={
-                "useArdent": True,
-                "publicKey": supabase_account_resource["publicKey"],
-                "secretKey": supabase_account_resource["secretKey"],
-            }
-        )
+        model_result = run_model(container=None, task=Test_Configs.User_Input, configs=test_configs, extra_information = custom_info)
         end_time = time.time()
         request.node.user_properties.append(("model_runtime", end_time - start_time))
 
@@ -470,13 +463,10 @@ def test_postgresql_agent_integer_division_fix(request, postgres_resource, supab
     
     finally:
         # CLEANUP
-        if config_results:
-            cleanup_model_artifacts(
-                Configs=test_configs, 
-                custom_info={
-                    **config_results,  # Spread all config results
-                    'job_id': model_result.get("id") if model_result else None,
-                    "publicKey": supabase_account_resource["publicKey"],
-                    "secretKey": supabase_account_resource["secretKey"],
-                }
-            )
+        if request.config.getoption("--mode") == "Ardent":
+            custom_info['job_id'] = model_result.get("id") if model_result else None
+
+        cleanup_model_artifacts(
+            Configs=test_configs, 
+            custom_info=custom_info
+        )
