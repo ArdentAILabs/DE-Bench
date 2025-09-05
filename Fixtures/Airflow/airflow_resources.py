@@ -562,21 +562,25 @@ def _check_deployment_status(deployment_name: str) -> str:
     :return: The status of the deployment.
     :rtype: str
     """
-    status = _run_and_validate_subprocess(
-        [
-            "astro",
-            "deployment",
-            "inspect",
-            "--deployment-name",
-            deployment_name,
-            "--key",
-            "metadata.status",
-        ],
-        "getting Astro deployment status",
-        return_output=True,
-    )
-    print(f"Worker {os.getpid()}: Deployment {deployment_name} status: {status}")
-    return status
+    try:
+        status = _run_and_validate_subprocess(
+            [
+                "astro",
+                "deployment",
+                "inspect",
+                "--deployment-name",
+                deployment_name,
+                "--key",
+                "metadata.status",
+            ],
+            "getting Astro deployment status",
+            return_output=True,
+        )
+        print(f"Worker {os.getpid()}: Deployment {deployment_name} status: {status}")
+        return status
+    except Exception as e:
+        print(f"Worker {os.getpid()}: Error getting Astro deployment status: {e}")
+        return "UNKNOWN"
 
 
 def _wake_up_deployment(deployment_name: str) -> None:
@@ -733,9 +737,13 @@ def cleanup_airflow_resource(
                 "delete Astronomer deployment",
                 check=True,
             )
-            new_id =_create_deployment_in_astronomer(deployment_name, wait=False)
+            _create_deployment_in_astronomer(deployment_name, wait=False)
             _hibernate_deployment(deployment_name)
-            cache_manager.release_astronomer_deployment(deployment_name, new_id, os.getpid())
+            
+            # Get the actual deployment ID after creation and hibernation
+            new_id = _get_deployment_id_by_name(deployment_name)
+            
+            cache_manager.release_astronomer_deployment(deployment_name, os.getpid(), new_id)
             print(f"Worker {os.getpid()}: Deployment {deployment_name} - hibernated successfully.")
                     
         print(
