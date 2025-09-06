@@ -41,6 +41,234 @@ DE-Bench uses a **standardized isolated test structure** to prevent resource con
 
 All DE-Bench tests follow this **per-user isolation pattern** to prevent config conflicts:
 
+## 🚀 Airflow Test Structure
+
+Airflow tests follow a specialized pattern that integrates GitHub repository management with Airflow DAG deployment and execution. This structure supports the full CI/CD pipeline for Airflow DAGs.
+
+### **Airflow Test Pattern (GitHub + Airflow Integration)**
+
+```python
+import importlib
+import os
+import pytest
+import time
+import uuid
+
+from model.Configure_Model import cleanup_model_artifacts, set_up_model_configs
+from model.Run_Model import run_model
+
+# Dynamic config loading
+current_dir = os.path.dirname(os.path.abspath(__file__))
+parent_dir_name = os.path.basename(current_dir)
+module_path = f"Tests.{parent_dir_name}.Test_Configs"
+Test_Configs = importlib.import_module(module_path)
+
+# Generate unique identifiers for parallel execution
+test_timestamp = int(time.time())
+test_uuid = uuid.uuid4().hex[:8]
+
+@pytest.mark.airflow
+@pytest.mark.pipeline
+@pytest.mark.difficulty        # e.g., @pytest.mark.two
+@pytest.mark.parametrize("airflow_resource", [{
+    "resource_id": f"test_name_{test_timestamp}_{test_uuid}",
+}], indirect=True)
+@pytest.mark.parametrize("github_resource", [{
+    "resource_id": f"test_airflow_test_name_{test_timestamp}_{test_uuid}",
+}], indirect=True)
+@pytest.mark.parametrize("supabase_account_resource", [{"useArdent": True}], indirect=True)
+def test_airflow_function(request, airflow_resource, github_resource, supabase_account_resource):
+    """Airflow test with GitHub integration and backend authentication."""
+    
+    # SECTION 1: SETUP THE TEST
+    input_dir = os.path.dirname(os.path.abspath(__file__))
+    github_manager = github_resource["github_manager"]
+    
+    # Add merge step to user input for GitHub workflow
+    Test_Configs.User_Input = github_manager.add_merge_step_to_user_input(Test_Configs.User_Input)
+    request.node.user_properties.append(("user_query", Test_Configs.User_Input))
+    
+    # Define test-specific variables
+    dag_name = "your_dag_name"
+    pr_title = f"Add Your DAG {test_timestamp}_{test_uuid}"
+    branch_name = f"feature/your-dag-{test_timestamp}_{test_uuid}"
+    
+    # Replace placeholders in user input
+    Test_Configs.User_Input = Test_Configs.User_Input.replace("BRANCH_NAME", branch_name)
+    Test_Configs.User_Input = Test_Configs.User_Input.replace("PR_NAME", pr_title)
+    
+    # Update GitHub secrets for deployment
+    github_manager.check_and_update_gh_secrets(
+        secrets={
+            "ASTRO_ACCESS_TOKEN": os.environ["ASTRO_ACCESS_TOKEN"],
+        }
+    )
+    
+    # Define test steps for validation tracking
+    test_steps = [
+        {
+            "name": "Checking Git Branch Existence",
+            "description": "Checking if the git branch exists with the right name",
+            "status": "did not reach",
+            "Result_Message": "",
+        },
+        {
+            "name": "Checking PR Creation",
+            "description": "Checking if the PR was created with the right name",
+            "status": "did not reach",
+            "Result_Message": "",
+        },
+        {
+            "name": "Checking DAG Results",
+            "description": "Checking if the DAG produces the expected results",
+            "status": "did not reach",
+            "Result_Message": "",
+        },
+    ]
+    request.node.user_properties.append(("test_steps", test_steps))
+
+    config_results = None
+    custom_info = {"mode": request.config.getoption("--mode")}
+    
+    try:
+        # Configure Airflow connection details from fixture
+        Test_Configs.Configs["services"]["airflow"]["host"] = airflow_resource["base_url"]
+        Test_Configs.Configs["services"]["airflow"]["username"] = airflow_resource["username"]
+        Test_Configs.Configs["services"]["airflow"]["password"] = airflow_resource["password"]
+        Test_Configs.Configs["services"]["airflow"]["api_token"] = airflow_resource["api_token"]
+        
+        # Add backend authentication if using Ardent mode
+        if request.config.getoption("--mode") == "Ardent":
+            custom_info["publicKey"] = supabase_account_resource["publicKey"]
+            custom_info["secretKey"] = supabase_account_resource["secretKey"]
+
+        # Set up model configurations
+        config_results = set_up_model_configs(
+            Configs=Test_Configs.Configs,
+            custom_info=custom_info
+        )
+
+        custom_info = {
+            **custom_info,
+            **config_results,
+        }
+
+        # SECTION 2: RUN THE MODEL
+        start_time = time.time()
+        model_result = run_model(
+            container=None, 
+            task=Test_Configs.User_Input, 
+            configs=Test_Configs.Configs,
+            extra_information=custom_info
+        )
+        end_time = time.time()
+        request.node.user_properties.append(("model_runtime", end_time - start_time))
+
+        # Register Braintrust tracking
+        if model_result:
+            request.node.user_properties.append(("run_trace_id", model_result["bt_root_span_id"]))
+
+        # SECTION 3: VERIFY GITHUB WORKFLOW
+        # Wait for model to create branch and PR
+        time.sleep(10)
+        
+        # Verify branch exists
+        branch_exists, test_steps[0] = github_manager.verify_branch_exists(branch_name, test_steps[0])
+        if not branch_exists:
+            raise Exception(test_steps[0]["Result_Message"])
+
+        # Find and merge PR
+        pr_exists, test_steps[1] = github_manager.find_and_merge_pr(
+            pr_title=pr_title, 
+            test_step=test_steps[1], 
+            commit_title=pr_title, 
+            merge_method="squash",
+            build_info={
+                "deploymentId": airflow_resource["deployment_id"],
+                "deploymentName": airflow_resource["deployment_name"],
+            }
+        )
+        if not pr_exists:
+            raise Exception("Unable to find and merge PR")
+
+        # Wait for GitHub Action to complete
+        if not github_manager.check_if_action_is_complete(pr_title=pr_title):
+            raise Exception("GitHub Action is not complete")
+        
+        # Wait for Airflow to redeploy
+        airflow_instance = airflow_resource["airflow_instance"]
+        if not airflow_instance.wait_for_airflow_to_be_ready():
+            raise Exception("Airflow instance did not redeploy successfully")
+
+        # SECTION 4: VERIFY DAG EXECUTION
+        # Verify DAG exists
+        if not airflow_instance.verify_airflow_dag_exists(dag_name):
+            raise Exception(f"DAG '{dag_name}' did not appear in Airflow")
+
+        # Trigger and monitor DAG
+        dag_run_id = airflow_instance.unpause_and_trigger_airflow_dag(dag_name)
+        if not dag_run_id:
+            raise Exception("Failed to trigger DAG")
+
+        # Monitor DAG completion
+        airflow_instance.verify_dag_id_ran(dag_name, dag_run_id)
+
+        # SECTION 5: VALIDATE RESULTS
+        # Get task logs and validate output
+        logs = airflow_instance.get_task_instance_logs(
+            dag_id=dag_name, 
+            dag_run_id=dag_run_id, 
+            task_id="your_task_name"
+        )
+        
+        # Your validation logic here
+        assert "expected_output" in logs, "Expected output not found in logs"
+        test_steps[2]["status"] = "passed"
+        test_steps[2]["Result_Message"] = "DAG produced expected results"
+
+    finally:
+        # CLEANUP
+        try:
+            if request.config.getoption("--mode") == "Ardent":
+                custom_info['job_id'] = model_result.get("id") if model_result else None
+            cleanup_model_artifacts(Configs=Test_Configs.Configs, custom_info=custom_info)
+            github_manager.delete_branch(branch_name)
+        except Exception as e:
+            print(f"Error during cleanup: {e}")
+```
+
+### **Key Airflow Test Components**
+
+1. **Dual Fixtures**: Both `airflow_resource` and `github_resource` are required
+2. **GitHub Integration**: Automatic branch creation, PR management, and deployment
+3. **Astro Integration**: Uses `ASTRO_ACCESS_TOKEN` for cloud deployment
+4. **Dynamic Naming**: Unique branch names and PR titles for parallel execution
+5. **Full CI/CD**: Tests the complete pipeline from code to deployment to execution
+
+### **Airflow Test with Database Integration**
+
+For tests that require database connectivity:
+
+```python
+@pytest.mark.parametrize("postgres_resource", [{
+    "resource_id": f"test_name_{test_timestamp}_{test_uuid}",
+    "databases": [
+        {
+            "name": f"test_db_{test_timestamp}_{test_uuid}",
+            "sql_file": "schema.sql"
+        }
+    ]
+}], indirect=True)
+def test_airflow_with_database(request, airflow_resource, github_resource, supabase_account_resource, postgres_resource):
+    # Access database connection
+    created_db_name = postgres_resource["created_resources"][0]["name"]
+    
+    # Update configs with actual database name
+    Test_Configs.Configs["services"]["postgreSQL"]["databases"][0]["name"] = created_db_name
+    
+    # Rest of test implementation...
+```
+
 ```python
 # Import from the Model directory
 from model.Run_Model import run_model
@@ -267,7 +495,7 @@ Configs = {
 }
 ```
 
-**Airflow Test Config:**
+**Airflow Test Config (Simple Pipeline):**
 ```python
 import os
 
@@ -277,8 +505,8 @@ Create a simple Airflow DAG that:
 2. Runs daily at midnight
 3. Has a single task named 'print_hello'
 4. Name the DAG 'hello_world_dag'
-5. Create it in a branch called 'feature/hello_world_dag'
-6. Name the PR 'Add Hello World DAG'
+5. Create it in a branch called 'BRANCH_NAME'
+6. Name the PR 'PR_NAME'
 """
 
 Configs = {
@@ -287,9 +515,51 @@ Configs = {
             "github_token": os.getenv("AIRFLOW_GITHUB_TOKEN"),
             "repo": os.getenv("AIRFLOW_REPO"),
             "dag_path": os.getenv("AIRFLOW_DAG_PATH"),
+            "requirements_path": os.getenv("AIRFLOW_REQUIREMENTS_PATH"),
             "host": os.getenv("AIRFLOW_HOST", "http://localhost:8080"),
             "username": os.getenv("AIRFLOW_USERNAME", "airflow"),
             "password": os.getenv("AIRFLOW_PASSWORD", "airflow"),
+            "api_token": os.getenv("AIRFLOW_API_TOKEN"),
+        }
+    }
+}
+```
+
+**Airflow Test Config (With Database Integration):**
+```python
+import os
+from dotenv import load_dotenv
+
+load_dotenv()
+
+User_Input = """
+Create an Airflow DAG that:
+1. Deduplicate users into a single user table called 'deduplicated_users'
+2. Runs daily at midnight
+3. Has a single task named 'deduplicate_users'
+4. Name the DAG 'user_deduplication_dag'
+5. Create it in a branch called 'BRANCH_NAME'
+6. Name the PR 'PR_NAME'
+"""
+
+Configs = {
+    "services": {
+        "airflow": {
+            "github_token": os.getenv("AIRFLOW_GITHUB_TOKEN"),
+            "repo": os.getenv("AIRFLOW_REPO"),
+            "dag_path": os.getenv("AIRFLOW_DAG_PATH"),
+            "requirements_path": os.getenv("AIRFLOW_REQUIREMENTS_PATH"),
+            "host": os.getenv("AIRFLOW_HOST", "http://localhost:8080"),
+            "username": os.getenv("AIRFLOW_USERNAME", "airflow"),
+            "password": os.getenv("AIRFLOW_PASSWORD", "airflow"),
+            "api_token": os.getenv("AIRFLOW_API_TOKEN"),
+        },
+        "postgreSQL": {
+            "hostname": os.getenv("POSTGRES_HOSTNAME"),
+            "port": os.getenv("POSTGRES_PORT"),
+            "username": os.getenv("POSTGRES_USERNAME"),
+            "password": os.getenv("POSTGRES_PASSWORD"),
+            "databases": [{"name": "user_data"}],  # Will be updated with actual database name from fixture
         }
     }
 }
@@ -407,11 +677,20 @@ def test_mongodb_function(request, mongo_resource):
     # Each test gets fresh MongoDB collections
 ```
 
-**Airflow (Fresh per test):**
+**Airflow (Fresh per test with GitHub integration):**
 ```python
 @pytest.mark.airflow
-def test_airflow_function(request, airflow_resource):
-    # Each test gets its own Airflow instance
+@pytest.mark.pipeline
+@pytest.mark.parametrize("airflow_resource", [{
+    "resource_id": f"test_name_{test_timestamp}_{test_uuid}",
+}], indirect=True)
+@pytest.mark.parametrize("github_resource", [{
+    "resource_id": f"test_airflow_test_name_{test_timestamp}_{test_uuid}",
+}], indirect=True)
+def test_airflow_function(request, airflow_resource, github_resource, supabase_account_resource):
+    # Each test gets its own Airflow instance + GitHub repository
+    github_manager = github_resource["github_manager"]
+    airflow_instance = airflow_resource["airflow_instance"]
     base_url = airflow_resource["base_url"]
     api_token = airflow_resource["api_token"]
 ```
@@ -886,6 +1165,7 @@ All DE-Bench tests require these environment variables in your test's README:
 - `AIRFLOW_HOST`: Airflow webserver URL
 - `AIRFLOW_USERNAME`: Airflow username
 - `AIRFLOW_PASSWORD`: Airflow password
+- `AIRFLOW_API_TOKEN`: Airflow API token for programmatic access
 ```
 
 Add them to the main project's `.env` template in the root README.
@@ -982,6 +1262,109 @@ pytest -n auto -sv
 - Document environment requirements
 - Explain validation criteria clearly
 
+## 🚀 Airflow-Specific Best Practices
+
+### 1. **GitHub Integration**
+- Always use unique branch names with timestamps to prevent conflicts
+- Include `BRANCH_NAME` and `PR_NAME` placeholders in `User_Input` for dynamic replacement
+- Use descriptive PR titles that include the test timestamp for easy identification
+- Ensure GitHub secrets are properly configured with `ASTRO_ACCESS_TOKEN`
+
+### 2. **DAG Development**
+- Use clear, descriptive DAG names that match the test purpose
+- Include specific task names that can be easily validated in logs
+- Set appropriate scheduling (daily at midnight is common for tests)
+- Ensure DAGs are idempotent and can run multiple times safely
+
+### 3. **Test Validation Strategy**
+- **Layer 1**: Verify GitHub branch creation and PR management
+- **Layer 2**: Verify DAG appears in Airflow after deployment
+- **Layer 3**: Verify DAG execution and task completion
+- **Layer 4**: Verify specific output in task logs or database changes
+
+### 4. **Timing and Synchronization**
+- Add appropriate wait times for GitHub Actions to complete (typically 10+ seconds)
+- Wait for Airflow to redeploy after PR merge before triggering DAGs
+- Use `wait_for_airflow_to_be_ready()` to ensure deployment completion
+- Monitor DAG runs with proper timeout handling
+
+### 5. **Database Integration**
+- For database-connected DAGs, use PostgreSQL fixtures with unique database names
+- Update configuration with actual database names from fixtures
+- Include SQL schema files for database setup
+- Validate both DAG execution and database state changes
+
+### 6. **Error Recovery**
+- Implement comprehensive cleanup in `finally` blocks
+- Delete GitHub branches after test completion
+- Handle partial failures gracefully with detailed error messages
+- Log deployment and execution details for debugging
+
+### 7. **Parallel Execution**
+- Use unique resource IDs with timestamps and UUIDs
+- Ensure no shared state between concurrent test runs
+- Test branch names and PR titles must be globally unique
+- Database names and schemas should be isolated per test
+
+### 8. **Environment Configuration**
+- Use `api_token` for programmatic Airflow access
+- Configure both local and cloud deployment options
+- Ensure all required environment variables are documented
+
+## 🔧 Airflow Troubleshooting
+
+### Common Issues and Solutions
+
+**1. DAG Not Appearing in Airflow**
+```
+Error: DAG 'your_dag_name' did not appear in Airflow
+```
+- **Cause**: GitHub Action deployment failed or incomplete
+- **Solution**: Check GitHub Action logs, verify `ASTRO_ACCESS_TOKEN`, ensure DAG syntax is correct
+
+**2. GitHub Action Not Completing**
+```
+Error: GitHub Action is not complete
+```
+- **Cause**: Deployment taking longer than expected
+- **Solution**: Increase wait time, check GitHub Action status, verify repository permissions
+
+**3. DAG Execution Fails**
+```
+Error: Failed to trigger DAG
+```
+- **Cause**: DAG has syntax errors or missing dependencies
+- **Solution**: Check DAG logs, verify requirements.txt, if possible: test DAG locally first
+
+**4. Task Logs Not Found**
+```
+Error: Expected output not found in logs
+```
+- **Cause**: Task failed or output format changed
+- **Solution**: Check task status, verify log content, adjust validation logic
+
+**5. Database Connection Issues**
+```
+Error: Database connection failed
+```
+- **Cause**: Database not ready or connection parameters incorrect
+- **Solution**: Verify database fixture setup, check connection parameters, ensure database is accessible
+
+**6. Branch/PR Conflicts**
+```
+Error: Branch already exists
+```
+- **Cause**: Non-unique branch names in parallel execution
+- **Solution**: Use timestamps and UUIDs in branch names, ensure proper cleanup
+
+### Debugging Tips
+
+1. **Enable Verbose Logging**: Add print statements to track execution flow
+2. **Check GitHub Actions**: Monitor deployment progress in GitHub repository
+3. **Verify Airflow UI**: Check DAG status and logs in Airflow web interface
+4. **Test Incrementally**: Start with simple DAGs before complex integrations
+5. **Use Local Testing**: Test DAGs locally before running full integration tests
+
 ## 📊 Common Patterns
 
 ### Database Tests
@@ -1051,6 +1434,18 @@ def test_function(request, mongo_resource):
     # Each test gets fresh, isolated resource
 ```
 
+**For Airflow Tests (GitHub + Airflow Integration):**
+```python
+@pytest.mark.parametrize("airflow_resource", [{
+    "resource_id": f"test_name_{test_timestamp}_{test_uuid}",
+}], indirect=True)
+@pytest.mark.parametrize("github_resource", [{
+    "resource_id": f"test_airflow_test_name_{test_timestamp}_{test_uuid}",
+}], indirect=True)
+def test_airflow_function(request, airflow_resource, github_resource, supabase_account_resource):
+    # Each test gets fresh Airflow instance + GitHub repository
+```
+
 **For Shared Resources:**
 ```python
 @pytest.mark.parametrize("shared_resource", ["meaningful_shared_id"], indirect=True)
@@ -1066,9 +1461,15 @@ def test_function(request, shared_resource):
   - `PostgreSQL_Agent_Add_Record/` (simple task)
   - `MongoDB_Agent_Add_Record/` (simple task)
   - `Snowflake_Agent_Add_Record/` (simple task)
-  - `Airflow_Agent_Simple_Pipeline/` (simple task)
+  - `Airflow_Agent_Simple_Pipeline/` (simple DAG creation)
+  - `Airflow_Agent_Hello_Universe_Pipeline/` (simple DAG with specific output)
+  - `Airflow_Agent_Pandas_Pipeline/` (DAG with pandas processing)
+  - `Airflow_Agent_Data_Deduplication/` (DAG with database operations)
+  - `Airflow_Agent_Sales_Fact_Table/` (DAG with fact table creation)
   - `Airflow_Agent_Amazon_SP_API_To_PostgreSQL/` (source → destination)
   - `Airflow_Agent_PostgreSQL_To_MySQL/` (source → destination)
+  - `Airflow_Agent_PostgreSQL_To_Snowflake_Workflow_Analytics/` (source → destination with analytics)
+  - `Airflow_Agent_Enterprise_Data_Platform/` (complex multi-step pipeline)
   - `PostgreSQL_Agent_Denormalized_Normalized_ManyToMany/` (schema transformation)
   - `Databricks_Hello_World/` (simple task)
 
@@ -1089,8 +1490,15 @@ def test_function(request, shared_resource):
 - Resource fixture parameter: Choose based on lifecycle needs:
   - `mongo_resource` (per-test isolation)
   - `postgres_resource` (per-test isolation)
-  - `airflow_resource` (per-test isolation)  
+  - `airflow_resource` (per-test isolation)
+  - `github_resource` (per-test isolation for tests)
   - `shared_resource` (cross-test sharing)
+- Airflow-specific variables:
+  - `dag_name`: The name of the DAG being created (e.g., "hello_world_dag")
+  - `pr_title`: Unique PR title with timestamp (e.g., "Add Hello World DAG 1234567890_ABC12345")
+  - `branch_name`: Unique branch name with timestamp (e.g., "feature/hello_world_dag-1234567890_ABC12345")
+  - `test_timestamp`: Unix timestamp for uniqueness
+  - `test_uuid`: Short UUID for additional uniqueness
 - Shared resource IDs: Use descriptive names like `"read_only_mongo_setup"`, `"shared_test_database"`
 - Test steps: Descriptive names that clearly indicate what's being validated
 
