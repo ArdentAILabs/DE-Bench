@@ -1,10 +1,10 @@
-# Databricks SQLite Cache Manager
+# SQLite Cache Manager
 
-This document describes the SQLite-based cache manager for Databricks clusters, which replaces the previous JSON-based caching system.
+This document describes the SQLite-based cache manager for Databricks clusters and Astronomer deployments, which replaces the previous JSON-based caching system.
 
 ## Overview
 
-The SQLite-based cache manager provides improved data integrity, atomic operations, and better performance for storing Databricks cluster information. It maintains backward compatibility with the existing API while adding new features.
+The SQLite-based cache manager provides improved data integrity, atomic operations, and better performance for storing Databricks cluster and Astronomer deployment information. It maintains backward compatibility with the existing API while adding new features for multi-service resource management.
 
 ## Key Improvements
 
@@ -38,6 +38,13 @@ The SQLite-based cache manager provides improved data integrity, atomic operatio
 - **Status Management**: Real-time status updates (creating, ready, failed)
 - **Cross-process Safety**: Coordination works across multiple processes and threads
 
+### 6. **Astronomer Deployment Management** ✅ **NEW**
+- **Deployment Caching**: Tracks hibernating Astronomer deployments for reuse
+- **Allocation System**: Intelligent deployment allocation across test processes
+- **Hibernation Management**: Automatic deployment hibernation and wake-up coordination
+- **Cross-Session Persistence**: Deployment cache survives across test sessions
+- **Stuck Deployment Recovery**: Automatic recovery from catastrophic test failures
+
 ## Database Schema
 
 The cache manager creates a SQLite database with the following structure:
@@ -70,6 +77,18 @@ CREATE TABLE shared_cluster_registry (
     FOREIGN KEY (cluster_id) REFERENCES clusters(cluster_id)
 );
 
+CREATE TABLE astronomer_deployments (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    deployment_id TEXT UNIQUE NOT NULL,
+    deployment_name TEXT UNIQUE NOT NULL,
+    status TEXT DEFAULT 'HEALTHY',
+    worker_pid INTEGER,
+    in_use BOOLEAN DEFAULT 0,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    last_accessed TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    test_name TEXT
+);
+
 -- Indexes for performance
 CREATE INDEX idx_cluster_id ON clusters(cluster_id);
 CREATE INDEX idx_expiry_time ON clusters(expiry_time);
@@ -77,6 +96,10 @@ CREATE INDEX idx_is_active ON clusters(is_active);
 CREATE INDEX idx_config_hash ON shared_cluster_registry(config_hash);
 CREATE INDEX idx_registry_status ON shared_cluster_registry(status);
 CREATE INDEX idx_registry_usage_count ON shared_cluster_registry(usage_count);
+CREATE INDEX idx_deployment_id ON astronomer_deployments(deployment_id);
+CREATE INDEX idx_deployment_status ON astronomer_deployments(status);
+CREATE INDEX idx_deployment_in_use ON astronomer_deployments(in_use);
+CREATE INDEX idx_deployment_name ON astronomer_deployments(deployment_name);
 ```
 
 ## Usage
@@ -162,9 +185,50 @@ success = cache_manager.cleanup_shared_cluster_registry("config_hash_123")
 all_shared = cache_manager.get_all_shared_clusters()
 ```
 
+### Astronomer Deployment Management
+
+```python
+# Populate cache with existing deployments
+deployments = [
+    {
+        "deployment_id": "dep-123",
+        "deployment_name": "test-deployment-1",
+        "status": "HIBERNATING"
+    },
+    {
+        "deployment_id": "dep-456", 
+        "deployment_name": "test-deployment-2",
+        "status": "HEALTHY"
+    }
+]
+cache_manager.populate_astronomer_deployments(deployments)
+
+# Allocate a hibernating deployment for a test
+deployment = cache_manager.allocate_astronomer_deployment("test_name", os.getpid())
+if deployment:
+    print(f"Allocated deployment: {deployment['deployment_name']}")
+    # Use the deployment...
+    
+    # Release the deployment back to hibernating state
+    cache_manager.release_astronomer_deployment(
+        deployment['deployment_name'], 
+        os.getpid(), 
+        new_id="dep-789"  # Optional: new deployment ID after recreation
+    )
+
+# Get deployment status
+status = cache_manager.get_astronomer_deployment_status("dep-123")
+
+# Get all deployments
+all_deployments = cache_manager.get_all_astronomer_deployments()
+
+# Get only hibernating deployments
+hibernating = cache_manager.get_all_astronomer_deployments("status = 'HIBERNATING'")
+```
+
 ## CLI Commands
 
-The Databricks CLI provides commands for managing the cache:
+The cache manager CLI provides commands for managing both Databricks clusters and Astronomer deployments:
 
 ```bash
 # Show cache status and statistics
@@ -190,6 +254,18 @@ python Environment/Databricks/cli.py shared
 
 # Clean up shared cluster registry
 python Environment/Databricks/cli.py cleanup-shared
+
+# Show Astronomer deployments
+python Environment/Databricks/cli.py deployments
+
+# Show only hibernating deployments
+python Environment/Databricks/cli.py deployments --status HIBERNATING
+
+# Clear Astronomer deployment cache
+python Environment/Databricks/cli.py clear-deployments
+
+# Reset stuck deployments (force release)
+python Environment/Databricks/cli.py reset-deployments
 ```
 
 ### Example CLI Output
@@ -203,6 +279,8 @@ $ python Environment/Databricks/cli.py status
   Expired Clusters: 4
   Total Accesses: 12
   Shared Clusters: 2
+  Astronomer Deployments: 3
+  Hibernating Deployments: 2
   Cache File Size: 8192 bytes
 
 === Active Cached Cluster ===
@@ -214,6 +292,29 @@ $ python Environment/Databricks/cli.py status
   Is Shared: Yes
   Last Accessed: 2024-01-15T10:45:00
   Time Remaining: 45 minutes
+
+=== Astronomer Deployments ===
+  Deployment: test-deployment-1 (dep-123)
+  Status: HIBERNATING
+  In Use: No
+  Last Accessed: 2024-01-15T10:30:00
+  
+  Deployment: test-deployment-2 (dep-456)
+  Status: HEALTHY
+  In Use: Yes (Worker PID: 12345)
+  Test: test_airflow_function
+  Last Accessed: 2024-01-15T10:45:00
+```
+
+```bash
+$ python Environment/Databricks/cli.py deployments
+
+=== Astronomer Deployments ===
+ID: 1 | Name: test-deployment-1 | Status: HIBERNATING | In Use: No
+ID: 2 | Name: test-deployment-2 | Status: HEALTHY | In Use: Yes (PID: 12345)
+ID: 3 | Name: test-deployment-3 | Status: HIBERNATING | In Use: No
+
+Total: 3 deployments (2 hibernating, 1 active)
 ```
 
 ## Migration from JSON
@@ -246,8 +347,10 @@ The cache manager uses the same environment variables as before:
 
 ### Cache Settings
 - **Default Expiry**: 1 hour (configurable via `default_expiry_hours`)
-- **Database Location**: `Environment/Databricks/cluster_cache.db`
+- **Database Location**: `Environment/CacheManager/cluster_cache.db`
 - **Auto-cleanup**: Expired clusters are automatically filtered out
+- **Deployment Persistence**: Astronomer deployments persist across test sessions
+- **Stuck Deployment Recovery**: Automatic recovery from catastrophic test failures
 
 ## Testing
 
@@ -289,6 +392,12 @@ This will run comprehensive tests covering:
    - Use the `optimize` command to clean up WAL files periodically
    - Monitor WAL file size with the `dbinfo` command
 
+5. **Astronomer Deployment Issues** ✅ **NEW**
+   - **Stuck Deployments**: Use `reset-deployments` command to force release stuck deployments
+   - **Allocation Failures**: Check for hibernating deployments with `deployments --status HIBERNATING`
+   - **Cache Inconsistency**: Use `clear-deployments` to reset deployment cache
+   - **Cross-Session Issues**: Deployment cache persists across sessions; clear if needed
+
 ### Debug Information
 
 Enable debug output by setting the log level:
@@ -303,10 +412,33 @@ logging.basicConfig(level=logging.DEBUG)
 You can inspect the SQLite database directly:
 
 ```bash
-sqlite3 Environment/Databricks/cluster_cache.db
+sqlite3 Environment/CacheManager/cluster_cache.db
 .tables
 SELECT * FROM clusters;
+SELECT * FROM shared_cluster_registry;
+SELECT * FROM astronomer_deployments;
 .quit
+```
+
+### Example Queries
+
+```sql
+-- Check all hibernating deployments
+SELECT deployment_name, deployment_id, last_accessed 
+FROM astronomer_deployments 
+WHERE status = 'HIBERNATING' AND in_use = 0;
+
+-- Find stuck deployments (in use but no recent access)
+SELECT deployment_name, worker_pid, test_name, last_accessed
+FROM astronomer_deployments 
+WHERE in_use = 1 AND last_accessed < datetime('now', '-1 hour');
+
+-- Get cache statistics
+SELECT 
+    (SELECT COUNT(*) FROM clusters) as total_clusters,
+    (SELECT COUNT(*) FROM clusters WHERE is_active = 1) as active_clusters,
+    (SELECT COUNT(*) FROM astronomer_deployments) as total_deployments,
+    (SELECT COUNT(*) FROM astronomer_deployments WHERE status = 'HIBERNATING') as hibernating_deployments;
 ```
 
 ## Benefits Over JSON
@@ -320,6 +452,10 @@ SELECT * FROM clusters;
 | **Statistics** | ❌ Manual calculation | ✅ Automatic stats |
 | **Expiry Management** | ❌ Basic | ✅ Advanced cleanup |
 | **Multiple Clusters** | ❌ Single cluster only | ✅ Multiple clusters |
+| **Shared Coordination** | ❌ Not available | ✅ Cross-process coordination |
+| **Astronomer Deployments** | ❌ Not supported | ✅ Full deployment management |
+| **Cross-Session Persistence** | ❌ Session-only | ✅ Persistent across sessions |
+| **Stuck Resource Recovery** | ❌ Manual intervention | ✅ Automatic recovery |
 
 ## Future Enhancements
 
@@ -329,3 +465,7 @@ Potential improvements for future versions:
 - **Backup/Restore**: Database backup and restore functionality
 - **Metrics Export**: Export cache statistics to monitoring systems
 - **Cluster History**: Maintain historical cluster information
+- **Deployment Health Monitoring**: Monitor deployment health and auto-recovery
+- **Resource Usage Analytics**: Track resource usage patterns and optimization opportunities
+- **Multi-Cloud Support**: Extend deployment management to other cloud providers
+- **Automated Cleanup**: Intelligent cleanup based on usage patterns and cost optimization
