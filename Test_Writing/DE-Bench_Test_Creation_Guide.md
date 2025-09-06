@@ -59,7 +59,6 @@ Test_Configs = importlib.import_module(module_path)
 @pytest.mark.your_technology    # e.g., @pytest.mark.mongodb
 @pytest.mark.your_category     # e.g., @pytest.mark.database
 @pytest.mark.difficulty        # e.g., @pytest.mark.three
-@pytest.mark.parametrize("supabase_account_resource", [{"useArdent": True}], indirect=True)
 def test_your_function_name(request, resource_fixture, supabase_account_resource):
     """Your test description with backend authentication."""
     
@@ -78,31 +77,34 @@ def test_your_function_name(request, resource_fixture, supabase_account_resource
     request.node.user_properties.append(("test_steps", test_steps))
 
     # SECTION 1: SETUP THE TEST
-    config_results = None
-    try:
-        # Set up model configurations with test-specific API keys
-        config_results = set_up_model_configs(
-            Configs=Test_Configs.Configs,
-            custom_info={
-                "publicKey": supabase_account_resource["publicKey"],
-                "secretKey": supabase_account_resource["secretKey"],
-            }
-        )
+    model_result = None  # Initialize before try block
+    custom_info = {"mode": request.config.getoption("--mode")}
+    if request.config.getoption("--mode") == "Ardent":
+        custom_info["publicKey"] = supabase_account_resource["publicKey"]
+        custom_info["secretKey"] = supabase_account_resource["secretKey"]
+    
+    config_results = set_up_model_configs(Configs=Test_Configs.Configs, custom_info=custom_info)
+    custom_info = {
+        **custom_info,
+        **config_results,
+    }
 
+    try:
         # SECTION 2: RUN THE MODEL
         start_time = time.time()
         model_result = run_model(
             container=None, 
             task=Test_Configs.User_Input, 
             configs=Test_Configs.Configs,
-            extra_information={
-                "useArdent": True,
-                "publicKey": supabase_account_resource["publicKey"],
-                "secretKey": supabase_account_resource["secretKey"],
-            }
+            extra_information=custom_info
         )
         end_time = time.time()
         request.node.user_properties.append(("model_runtime", end_time - start_time))
+        
+        # Register the Braintrust root span ID for tracking (Ardent mode only)
+        if model_result and "bt_root_span_id" in model_result:
+            request.node.user_properties.append(("run_trace_id", model_result.get("bt_root_span_id")))
+            print(f"Registered Braintrust root span ID: {model_result.get('bt_root_span_id')}")
 
         # SECTION 3: VERIFY THE OUTCOMES
         # Your validation logic here
@@ -119,101 +121,138 @@ def test_your_function_name(request, resource_fixture, supabase_account_resource
             raise AssertionError("Test failed because...")
 
     finally:
-        # CLEANUP - Include API keys and job_id for proper cleanup
-        if config_results:
-            cleanup_model_artifacts(
-                Configs=Test_Configs.Configs, 
-                custom_info={
-                    **config_results,  # Spread all config results
-                    'job_id': model_result.get("id") if model_result else None,  # For Ardent job cleanup
-                    "publicKey": supabase_account_resource["publicKey"],
-                    "secretKey": supabase_account_resource["secretKey"],
-                }
-            )
+        # CLEANUP - Include mode-specific cleanup information
+        if request.config.getoption("--mode") == "Ardent":
+            custom_info['job_id'] = model_result.get("id") if model_result else None
+        cleanup_model_artifacts(Configs=Test_Configs.Configs, custom_info=custom_info)
+```
+
+## 🎯 Execution Modes
+
+DE-Bench supports multiple AI execution modes via the `--mode` flag:
+
+### Available Modes
+
+1. **Ardent** (default): Uses the Ardent backend with full Braintrust tracking
+2. **Claude_Code**: Uses Claude Code CLI in Kubernetes containers  
+3. **OpenAI_Codex**: Uses OpenAI Codex CLI (requires Azure OpenAI setup)
+
+### Mode-Specific Behavior
+
+**Ardent Mode:**
+- Requires Supabase authentication (`publicKey`, `secretKey`)
+- Provides Braintrust tracking with `bt_root_span_id`
+- Full backend integration with job management
+
+**Claude_Code Mode:**
+- Runs in isolated Kubernetes pods
+- No Supabase authentication required
+- No Braintrust tracking (no `bt_root_span_id`)
+- Automatic Kubernetes resource cleanup
+
+**OpenAI_Codex Mode:**
+- Runs in isolated Kubernetes pods
+- Uses Azure OpenAI deployment
+- No Supabase authentication required
+- No Braintrust tracking (no `bt_root_span_id`)
+
+### Running Tests with Different Modes
+
+```bash
+# Run with Ardent (default)
+pytest Tests/MongoDB_Agent_Add_Record/test_mongodb_agent_add_record.py --mode=Ardent
+
+# Run with Claude Code
+pytest Tests/MongoDB_Agent_Add_Record/test_mongodb_agent_add_record.py --mode=Claude_Code
+
+# Run with OpenAI Codex
+pytest Tests/MongoDB_Agent_Add_Record/test_mongodb_agent_add_record.py --mode=OpenAI_Codex
+
+# Run multiple tests in parallel with specific mode
+pytest Tests/ -n auto --mode=Claude_Code
 ```
 
 ## 🧹 Cleanup and Job Management
 
-### Ardent Job Cleanup
+### Mode-Aware Cleanup
 
-All tests that use the Ardent backend must include proper job cleanup to prevent resource leaks. The `cleanup_model_artifacts` function now handles both configuration cleanup and Ardent job deletion.
+The `cleanup_model_artifacts` function handles cleanup for all execution modes. The new pattern automatically manages mode-specific resources:
 
 #### Required Pattern
 
 ```python
 finally:
-    # CLEANUP - Include API keys and job_id for proper cleanup
-    if config_results:
-        cleanup_model_artifacts(
-            Configs=Test_Configs.Configs, 
-            custom_info={
-                **config_results,  # Spread all config results
-                'job_id': model_result.get("id") if model_result else None,  # For Ardent job cleanup
-                "publicKey": supabase_account_resource["publicKey"],
-                "secretKey": supabase_account_resource["secretKey"],
-            }
-        )
+    # CLEANUP - Mode-aware cleanup
+    if request.config.getoption("--mode") == "Ardent":
+        custom_info['job_id'] = model_result.get("id") if model_result else None
+    cleanup_model_artifacts(Configs=Test_Configs.Configs, custom_info=custom_info)
 ```
 
 #### Key Components
 
-1. **`job_id`**: Extracted from `model_result.get("id")` after calling `run_model()`
-2. **`config_results`**: Contains service-specific configuration IDs for cleanup
-3. **Supabase credentials**: Required for authenticating with Ardent backend
+1. **`custom_info`**: Contains all mode-specific information and configuration results
+2. **Mode detection**: Uses `request.config.getoption("--mode")` to determine cleanup needs
+3. **Ardent job_id**: Only added for Ardent mode from `model_result.get("id")`
 4. **Error handling**: Cleanup should be in `finally` block to ensure it runs even if test fails
 
-#### What Gets Cleaned Up
+#### What Gets Cleaned Up by Mode
 
-- **Ardent Jobs**: Active jobs are terminated and deleted from the backend
+**Ardent Mode:**
+- **Backend Jobs**: Active jobs are terminated and deleted from Ardent backend
 - **Service Configurations**: Database connections, API keys, and other service configs
-- **Temporary Resources**: Any resources created during the test execution
+- **Supabase Resources**: User accounts and API keys
 
-#### Example with Job ID Extraction
+**Claude_Code Mode:**
+- **Kubernetes Jobs**: Pods and jobs are deleted from AKS cluster
+- **Service Configurations**: Database connections and other service configs
+- **File Shares**: Azure file shares created for the session
+
+**OpenAI_Codex Mode:**
+- **Kubernetes Jobs**: Pods and jobs are deleted from AKS cluster  
+- **Service Configurations**: Database connections and other service configs
+- **File Shares**: Azure file shares created for the session
+
+#### Complete Example with New Pattern
 
 ```python
-try:
-    # Set up configurations
-    config_results = set_up_model_configs(
-        Configs=Test_Configs.Configs,
-        custom_info={
-            "publicKey": supabase_account_resource["publicKey"],
-            "secretKey": supabase_account_resource["secretKey"],
-        }
-    )
+def test_example_with_mode_support(request, mongo_resource, supabase_account_resource):
+    """Example test showing the new mode-aware pattern."""
     
-    # Run the model and capture result with job_id
-    model_result = run_model(
-        container=None,
-        task=Test_Configs.User_Input,
-        configs=Test_Configs.Configs,
-        extra_information={
-            "useArdent": True,
-            "publicKey": supabase_account_resource["publicKey"],
-            "secretKey": supabase_account_resource["secretKey"],
-        }
-    )
+    # Initialize variables
+    model_result = None
+    custom_info = {"mode": request.config.getoption("--mode")}
+    if request.config.getoption("--mode") == "Ardent":
+        custom_info["publicKey"] = supabase_account_resource["publicKey"]
+        custom_info["secretKey"] = supabase_account_resource["secretKey"]
     
-    # Extract job ID for cleanup
-    job_id = model_result.get("id") if model_result else None
-    print(f"Job created with ID: {job_id}")
-    
-    # Your test assertions here...
-    
-finally:
+    # Set up configurations and merge results
+    config_results = set_up_model_configs(Configs=Test_Configs.Configs, custom_info=custom_info)
+    custom_info = {
+        **custom_info,
+        **config_results,
+    }
+
     try:
-        # Clean up model configs and jobs
-        if config_results:
-            cleanup_model_artifacts(
-                Configs=Test_Configs.Configs, 
-                custom_info={
-                    **config_results,
-                    'job_id': model_result.get("id") if model_result else None,
-                    "publicKey": supabase_account_resource["publicKey"],
-                    "secretKey": supabase_account_resource["secretKey"],
-                }
-            )
-    except Exception as e:
-        print(f"Error during cleanup: {e}")
+        # Run the model
+        model_result = run_model(
+            container=None,
+            task=Test_Configs.User_Input,
+            configs=Test_Configs.Configs,
+            extra_information=custom_info
+        )
+        
+        # Register Braintrust tracking (Ardent mode only)
+        if model_result and "bt_root_span_id" in model_result:
+            request.node.user_properties.append(("run_trace_id", model_result.get("bt_root_span_id")))
+            print(f"Registered Braintrust root span ID: {model_result.get('bt_root_span_id')}")
+        
+        # Your test assertions here...
+        
+    finally:
+        # Mode-aware cleanup
+        if request.config.getoption("--mode") == "Ardent":
+            custom_info['job_id'] = model_result.get("id") if model_result else None
+        cleanup_model_artifacts(Configs=Test_Configs.Configs, custom_info=custom_info)
 ```
 
 ## ⚙️ Test_Configs.py Structure
@@ -723,17 +762,19 @@ Error: Access Denied
 
 #### **Authentication Fixtures (Function-Scoped)**
 
-**Supabase Account Resource (NEW):**
+**Supabase Account Resource (Mode-Aware):**
 ```python
-@pytest.mark.parametrize("supabase_account_resource", [{"useArdent": True}], indirect=True)
 def test_with_backend_auth(request, mongo_resource, supabase_account_resource):
-    # Each test gets unique Supabase user + API keys
-    public_key = supabase_account_resource["publicKey"]    # e.g., "ardent_pk_..."
-    secret_key = supabase_account_resource["secretKey"]    # e.g., "ardent_sk_..."  
-    user_id = supabase_account_resource["userID"]          # Unique user ID
+    # Mode-aware authentication setup
+    custom_info = {"mode": request.config.getoption("--mode")}
+    if request.config.getoption("--mode") == "Ardent":
+        # Each test gets unique Supabase user + API keys for Ardent mode
+        custom_info["publicKey"] = supabase_account_resource["publicKey"]    # e.g., "ardent_pk_..."
+        custom_info["secretKey"] = supabase_account_resource["secretKey"]    # e.g., "ardent_sk_..."  
+        user_id = supabase_account_resource["userID"]                        # Unique user ID
     
-    # Use in your test for backend authentication
-    # Automatic cleanup handles user + API key deletion
+    # For Claude_Code and OpenAI_Codex modes, no Supabase authentication needed
+    # Automatic cleanup handles mode-specific resource deletion
 ```
 
 **Key Benefits:**
@@ -859,7 +900,34 @@ All DE-Bench tests require these environment variables in your test's README:
 - `SUPABASE_URL`: Your Supabase project URL
 - `SUPABASE_SERVICE_ROLE_KEY`: Supabase service role key (for user management)
 - `SUPABASE_JWT_SECRET`: JWT secret for token generation
-- `ARDENT_BASE_URL`: Your Ardent backend base URL
+- `ARDENT_BASE_URL`: Your Ardent backend base URL (Ardent mode only)
+
+### Execution Mode Variables
+
+#### Claude_Code Mode (Kubernetes + AWS)
+- `AWS_ACCESS_KEY_ID_CLAUDE`: AWS access key for Claude Code
+- `AWS_SECRET_ACCESS_KEY_CLAUDE`: AWS secret key for Claude Code
+- `AWS_REGION_CLAUDE`: AWS region for Claude Code
+- `CLAUDE_CODE_USE_BEDROCK`: Set to "true" to use AWS Bedrock
+- `IS_SANDBOX`: Set to "1" for non-interactive execution
+- `AZURE_CLIENT_ID`: Azure service principal client ID
+- `AZURE_CLIENT_SECRET`: Azure service principal client secret
+- `AZURE_TENANT_ID`: Azure tenant ID
+- `AZURE_SUBSCRIPTION_ID`: Azure subscription ID
+- `ACI_RESOURCE_GROUP`: Azure resource group name
+- `AKS_CLUSTER_NAME`: Azure Kubernetes Service cluster name
+
+#### OpenAI_Codex Mode (Kubernetes + Azure OpenAI)
+- `OPENAI_API_KEY`: OpenAI API key (if using OpenAI directly)
+- `AZURE_OPENAI_ENDPOINT`: Azure OpenAI endpoint URL
+- `AZURE_OPENAI_API_VERSION`: Azure OpenAI API version
+- `AZURE_OPENAI_CHAT_DEPLOYMENT_NAME`: Azure OpenAI deployment name
+- `AZURE_CLIENT_ID`: Azure service principal client ID (same as Claude_Code)
+- `AZURE_CLIENT_SECRET`: Azure service principal client secret (same as Claude_Code)
+- `AZURE_TENANT_ID`: Azure tenant ID (same as Claude_Code)
+- `AZURE_SUBSCRIPTION_ID`: Azure subscription ID (same as Claude_Code)
+- `ACI_RESOURCE_GROUP`: Azure resource group name (same as Claude_Code)
+- `AKS_CLUSTER_NAME`: Azure Kubernetes Service cluster name (same as Claude_Code)
 
 ### Service-Specific Variables
 
@@ -933,21 +1001,46 @@ pytest Tests/Your_Test_Name/test_your_test_name.py -v
 
 ## 🚀 Running Tests
 
+### Basic Test Execution
+
 ```bash
-# Run specific test
+# Run specific test with default mode (Ardent)
 pytest Tests/Your_Test_Name/test_your_test_name.py -v
 
-# Run by markers
-pytest -m "mongodb and database" -v
+# Run specific test with Claude Code
+pytest Tests/Your_Test_Name/test_your_test_name.py -v --mode=Claude_Code
 
-# Run by difficulty
-pytest -m "three" -v
+# Run specific test with OpenAI Codex
+pytest Tests/Your_Test_Name/test_your_test_name.py -v --mode=OpenAI_Codex
+```
 
-# Run with keywords
-pytest -k "your_keyword" -v
+### Parallel Execution with Modes
 
-# Run all tests
-pytest -n auto -sv
+```bash
+# Run all tests in parallel with Ardent mode
+pytest -n auto -sv --mode=Ardent
+
+# Run all tests in parallel with Claude Code
+pytest -n auto -sv --mode=Claude_Code
+
+# Run all tests in parallel with OpenAI Codex
+pytest -n auto -sv --mode=OpenAI_Codex
+```
+
+### Filtering Tests
+
+```bash
+# Run by markers with specific mode
+pytest -m "mongodb and database" -v --mode=Claude_Code
+
+# Run by difficulty with specific mode
+pytest -m "three" -v --mode=Ardent
+
+# Run with keywords and mode
+pytest -k "your_keyword" -v --mode=OpenAI_Codex
+
+# Run multiple specific tests with mode
+pytest Tests/MongoDB_Agent_Add_Record/ Tests/PostgreSQL_Agent_Add_Record/ -v --mode=Claude_Code
 ```
 
 ## ✨ Best Practices
