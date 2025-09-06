@@ -237,10 +237,10 @@ def test_databricks_hello_world(request, databricks_resource, supabase_account_r
         model_end_time = time.time()
         request.node.user_properties.append(("model_runtime", model_end_time - model_start_time))
         
-        # Register the Braintrust root span ID for tracking
-        if model_result:
-            request.node.user_properties.append(("run_trace_id", model_result["bt_root_span_id"]))
-            print(f"Registered Braintrust root span ID: {model_result['bt_root_span_id']}")
+        # Register the Braintrust root span ID for tracking (Ardent mode only)
+        if model_result and "bt_root_span_id" in model_result:
+            request.node.user_properties.append(("run_trace_id", model_result.get("bt_root_span_id")))
+            print(f"Registered Braintrust root span ID: {model_result.get('bt_root_span_id')}")
         
         update_test_step(test_steps, "Model Execution", "passed", "Model execution completed successfully")
         

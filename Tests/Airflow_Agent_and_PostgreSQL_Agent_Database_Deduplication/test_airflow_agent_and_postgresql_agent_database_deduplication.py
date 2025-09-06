@@ -6,7 +6,7 @@ import time
 import uuid
 import psycopg2
 
-from model.Configure_Model import remove_model_configs
+from model.Configure_Model import cleanup_model_artifacts
 from model.Configure_Model import set_up_model_configs
 from model.Run_Model import run_model
 
@@ -25,7 +25,6 @@ test_uuid = uuid.uuid4().hex[:8]
 @pytest.mark.postgresql
 @pytest.mark.three  # Difficulty 3 - involves database stored procedures, SQL window functions, and data deduplication
 @pytest.mark.database_computation  # New marker for tests that push computation to database
-@pytest.mark.parametrize("supabase_account_resource", [{"useArdent": True}], indirect=True)
 @pytest.mark.parametrize("postgres_resource", [{
     "resource_id": f"db_dedup_test_{test_timestamp}_{test_uuid}",
     "databases": [
@@ -44,6 +43,7 @@ test_uuid = uuid.uuid4().hex[:8]
 def test_airflow_agent_and_postgresql_agent_database_deduplication(request, airflow_resource, github_resource, supabase_account_resource, postgres_resource):
     input_dir = os.path.dirname(os.path.abspath(__file__))
     github_manager = github_resource["github_manager"]
+    model_result = None  # Initialize before try block
     Test_Configs.User_Input = github_manager.add_merge_step_to_user_input(Test_Configs.User_Input)
     request.node.user_properties.append(("user_query", Test_Configs.User_Input))
     dag_name = "user_deduplication_dag"
@@ -113,26 +113,26 @@ def test_airflow_agent_and_postgresql_agent_database_deduplication(request, airf
         test_configs["services"]["airflow"]["username"] = airflow_resource["username"]
         test_configs["services"]["airflow"]["password"] = airflow_resource["password"]
         test_configs["services"]["airflow"]["api_token"] = airflow_resource["api_token"]
-        config_results = set_up_model_configs(
-            Configs=test_configs,
-            custom_info={
-                "publicKey": supabase_account_resource["publicKey"],
-                "secretKey": supabase_account_resource["secretKey"],
-            }
-        )
+        custom_info = {"mode": request.config.getoption("--mode")}
+        if request.config.getoption("--mode") == "Ardent":
+            custom_info["publicKey"] = supabase_account_resource["publicKey"]
+            custom_info["secretKey"] = supabase_account_resource["secretKey"]
+
+        config_results = set_up_model_configs(Configs=test_configs, custom_info=custom_info)
+
+        custom_info = {
+            **custom_info,
+            **config_results,
+        }
 
         # SECTION 2: RUN THE MODEL
         start_time = time.time()
         print("Running model to create database-centric DAG...")
         model_result = run_model(
-            container=None, 
-            task=Test_Configs.User_Input, 
+            container=None,
+            task=Test_Configs.User_Input,
             configs=test_configs,
-            extra_information={
-                "useArdent": True,
-                "publicKey": supabase_account_resource["publicKey"],
-                "secretKey": supabase_account_resource["secretKey"],
-            }
+            extra_information=custom_info
         )
         end_time = time.time()
         print(f"Model execution completed. Result: {model_result}")
@@ -314,14 +314,9 @@ def test_airflow_agent_and_postgresql_agent_database_deduplication(request, airf
     finally:
         try:
             # Clean up configurations
-            remove_model_configs(
-                Configs=test_configs, 
-                custom_info={
-                    **config_results,  # Spread all config results
-                    "publicKey": supabase_account_resource["publicKey"],
-                    "secretKey": supabase_account_resource["secretKey"],
-                }
-            )
+            if request.config.getoption("--mode") == "Ardent":
+                custom_info['job_id'] = model_result.get("id") if model_result else None
+            cleanup_model_artifacts(Configs=test_configs, custom_info=custom_info)
             # Delete the branch from github using the github manager
             github_manager.delete_branch("feature/database-deduplication")
 
