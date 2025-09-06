@@ -1,19 +1,22 @@
 # Airflow Resource Fixture
 
-The `airflow_resource` fixture provides isolated Airflow instances for each test using Astronomer Cloud, ensuring complete isolation between tests.
+The `airflow_resource` fixture provides isolated Airflow instances for each test using Astronomer Cloud with intelligent deployment caching and hibernation management.
 
 ## Overview
 
-The fixture creates unique Airflow deployments in Astronomer Cloud for each test function, providing a fully managed Airflow environment with automatic cleanup.
+The fixture creates and manages Airflow deployments in Astronomer Cloud for each test function, with sophisticated caching to reuse hibernating deployments across tests. It provides a fully managed Airflow environment with automatic cleanup and GitHub integration.
 
 ## Features
 
-- **Function-scoped**: Each test gets its own Airflow deployment
+- **Function-scoped**: Each test reuses a hibernating deployment or will create a new one if all deployments aren't hibernating
 - **Cloud-based**: Uses Astronomer Cloud for managed Airflow instances
-- **Unique deployments**: Each test runs in its own isolated environment
-- **Automatic cleanup**: Resources are automatically cleaned up after each test
+- **Intelligent Caching**: Reuses hibernating deployments to reduce setup time and costs
+- **Deployment Hibernation**: Automatically hibernates deployments after tests for cost optimization
+- **Automatic cleanup**: Resources are automatically cleaned up and returned to cache after each test
 - **GitHub integration**: Automatically syncs with GitHub repositories for DAG deployment
-- **Airflow API token authentication**: Uses Bearer token authentication for API access instead of Basic Authentication
+- **API token authentication**: Uses Bearer token authentication for API access
+- **Parallel execution support**: File-based coordination prevents conflicts in parallel test execution
+- **Session-scoped login**: Astro CLI login is managed once per test session
 
 ## Prerequisites
 
@@ -22,19 +25,23 @@ The fixture creates unique Airflow deployments in Astronomer Cloud for each test
 The fixture requires the following environment variables to be set:
 
 ```bash
-# Astronomer Cloud credentials
+# Astronomer Cloud credentials (REQUIRED)
 ASTRO_WORKSPACE_ID=your_workspace_id
-ASTRO_ACCESS_TOKEN=your_astro_access_token
+ASTRO_ACCESS_TOKEN=your_astro_access_token  # visit https://cloud.astronomer.io/token for a token
 ASTRO_CLOUD_PROVIDER=aws  # or gcp, azure
 ASTRO_REGION=us-east-1
+ASTRO_RUNTIME_VERSION=13.1.0  # Optional, defaults to 13.1.0
 
-# GitHub integration
+# GitHub integration (REQUIRED)
 AIRFLOW_GITHUB_TOKEN=your_github_token
 AIRFLOW_REPO=https://github.com/your-org/your-repo
 
-# Airflow user credentials if (optional, defaults to "airflow")
+# Airflow user credentials (OPTIONAL, defaults to "airflow")
 AIRFLOW_USERNAME=airflow
 AIRFLOW_PASSWORD=airflow
+
+# Optional: Pre-existing API token
+ASTRO_API_TOKEN=your_existing_api_token
 ```
 
 ### Required Tools
@@ -70,16 +77,18 @@ The `airflow_resource` fixture returns a dictionary with the following structure
 
 ```python
 {
-    "resource_id": "airflow_resource",
+    "resource_id": "unique_test_resource_id",
     "type": "airflow_resource",
     "test_name": "test_function_name",
     "creation_time": timestamp,
     "worker_pid": process_id,
     "creation_duration": setup_time_in_seconds,
-    "description": "An Airflow resource for test_name",
+    "description": "An Airflow resource for unique_test_resource_id",
     "status": "active",
-    "project_name": "test_name_timestamp",
+    "project_name": "airflow_test_unique_id_timestamp",
     "base_url": "https://deployment-name.region.astro.io",
+    "deployment_id": "astro_deployment_id",
+    "deployment_name": "deployment_name",
     "api_url": "https://deployment-name.region.astro.io/api/v1",
     "api_token": "astro_deployment_token",
     "api_headers": {
@@ -89,7 +98,8 @@ The `airflow_resource` fixture returns a dictionary with the following structure
     "username": "airflow",
     "password": "airflow",
     "airflow_instance": Airflow_Local_instance,
-    "created_resources": ["deployment_id"]
+    "created_resources": [("deployment_name", cache_manager)],
+    "cache_manager": shared_cache_manager_instance
 }
 ```
 
@@ -163,23 +173,62 @@ def test_simple_airflow_pipeline(request, airflow_resource):
 
 ## How It Works
 
-1. **Setup Phase**:
-   - Logs into Astronomer Cloud using access token
-   - Creates a unique temporary directory locally for the test
-   - Initializes an Astro project in the local temp directory
-   - Creates a new Airflow deployment in Astronomer Cloud
-   - Updates GitHub secrets with deployment information
-   - Creates an API token for the deployment
-   - Creates a user in the Airflow deployment
+### Session-Level Setup
+1. **Astro Login**: Session-scoped fixture ensures Astro CLI is logged in once per test session
+2. **Cache Manager Initialization**: Shared cache manager is initialized to track hibernating deployments
+3. **Deployment Discovery**: Existing hibernating deployments are discovered and cached
 
-2. **Test Execution**:
-   - Provides the Airflow deployment details to the test
-   - Each test gets its own isolated deployment
-   - GitHub integration automatically syncs DAGs from the repository via GitHub action
+### Per-Test Setup
+1. **Deployment Allocation**: 
+   - First tries to allocate an existing hibernating deployment from cache
+   - If none available, creates a new deployment in Astronomer Cloud
+   - Wakes up hibernating deployments as needed
+2. **Local Project Setup**: Creates a unique temporary directory and initializes Astro project
+3. **GitHub Integration**: Updates GitHub secrets with deployment information
+4. **API Token Creation**: Creates or retrieves API token for the deployment
+5. **User Creation**: Creates Airflow user with configured credentials
+6. **Deployment Validation**: Waits for Airflow to be ready and validates deployment
 
-3. **Cleanup Phase**:
-   - Deletes the Astronomer deployment
-   - Removes temporary directories
+### Test Execution
+- Provides the Airflow deployment details to the test
+- Each test gets its own isolated deployment or reuses a hibernating one
+- GitHub integration automatically syncs DAGs from the repository via GitHub Actions
+
+### Per-Test Cleanup
+1. **Deployment Hibernation**: Hibernates the deployment to reduce costs
+2. **Cache Management**: Returns deployment to cache for reuse by other tests
+3. **Local Cleanup**: Removes temporary directories and files
+4. **Resource Tracking**: Updates cache with deployment status and metadata
+
+### Session-Level Cleanup
+- Cache manager persists deployment information for future test sessions
+- No session-level cleanup needed as deployments remain hibernated for reuse
+
+## Cache Manager and Deployment Lifecycle
+
+### SQLite-Based Cache Management
+
+The fixture uses a sophisticated SQLite-based cache manager to optimize deployment usage:
+
+- **Persistent Storage**: Deployment information is stored in `Environment/CacheManager/cluster_cache.db`
+- **Hibernation Tracking**: Tracks which deployments are hibernating and available for reuse
+- **Cross-Session Persistence**: Cache persists across test sessions for maximum efficiency
+- **Atomic Operations**: SQLite transactions ensure data consistency in parallel execution
+
+### Deployment States
+
+Deployments can be in the following states:
+
+- **HIBERNATING**: Deployment is hibernated and available for reuse
+- **HEALTHY**: Deployment is active and running
+- **UNKNOWN**: Deployment status could not be determined
+
+### Cache Benefits
+
+- **Cost Optimization**: Reuses hibernating deployments instead of creating new ones
+- **Faster Setup**: Waking up a hibernating deployment is faster than creating a new one
+- **Resource Efficiency**: Reduces Astronomer Cloud resource consumption
+- **Parallel Safety**: File-based coordination prevents conflicts in parallel execution
 
 ## GitHub Integration
 
@@ -201,10 +250,13 @@ The fixture automatically creates/updates these secrets in your GitHub repositor
 
 - **Cloud-based**: No local Docker setup required
 - **Managed**: Astronomer handles infrastructure management
-- **Scalable**: Can run multiple tests concurrently
-- **Isolated**: Each test gets its own deployment
+- **Cost-optimized**: Intelligent caching and hibernation reduce costs
+- **Scalable**: Can run multiple tests concurrently with file-based coordination
+- **Isolated**: Each test gets its own deployment or reuses a hibernating one
+- **Fast setup**: Reuses hibernating deployments for faster test execution
 - **GitHub integration**: Automatic DAG synchronization
-- **Automatic cleanup**: Resources are cleaned up after tests
+- **Automatic cleanup**: Resources are cleaned up and returned to cache after tests
+- **Parallel-safe**: File-based locking prevents conflicts in parallel execution
 
 ## Integration with Existing Tests
 
@@ -243,22 +295,37 @@ def test_airflow_fixture(airflow_resource):
 - **Astro CLI not installed**: Install Astro CLI and ensure it's in PATH
 - **GitHub access issues**: Verify GitHub token has repository access
 - **Deployment creation failures**: Check Astronomer Cloud quotas and permissions
-- **Unauthorized Tokens**: When using personal tokens, they expire typically with 1-2 hours
+- **API token creation failures**: Check for rate limits and deployment ID mismatches
+- **Cache database issues**: Ensure `Environment/CacheManager/` directory is writable
+- **File lock conflicts**: File-based coordination may cause delays in parallel execution
+- **Deployment hibernation failures**: Check Astronomer Cloud permissions for hibernation
 
 ### Debug Information
 
 The fixture provides detailed logging including:
-- Worker process ID
-- Creation timestamps
-- Deployment IDs
+- Worker process ID for parallel execution tracking
+- Creation timestamps and durations
+- Deployment IDs and names
+- Cache allocation and release information
 - API URLs and tokens
-- Error messages with context
+- Hibernation and wake-up status
+- Error messages with context and retry attempts
 
-### Timeouts
+### Timeouts and Performance
 
-- **Deployment creation**: ~2-3 minutes
-- **Airflow readiness**: ~3 minutes after deployment
+- **Deployment creation**: ~3-5 minutes for new deployments
+- **Deployment wake-up**: ~1-2 minutes for hibernating deployments
+- **Airflow readiness**: ~1-2 minutes after deployment/wake-up
+- **API token creation**: Up to 5 retries with progressive backoff
+- **Cache operations**: Typically <1 second with SQLite
 - **DAG execution**: Varies by DAG complexity
+
+### Cache Management
+
+- **Cache location**: `Environment/CacheManager/cluster_cache.db`
+- **Cache persistence**: Survives across test sessions
+- **Manual cache reset**: Delete the cache database file to start fresh
+- **Cache monitoring**: Check cache database for deployment status and usage
 
 ## Dependencies
 
@@ -267,10 +334,51 @@ The fixture provides detailed logging including:
 - **pytest**: For fixture functionality
 - **requests**: For HTTP communication with Airflow API
 - **GitPython**: For repository operations
+- **SQLite3**: For cache management (built into Python)
+- **fcntl**: For file-based coordination (Unix/Linux)
+
+## Airflow_Local Class Integration
+
+The fixture provides an `Airflow_Local` instance that offers additional functionality:
+
+### Key Methods
+
+- `wait_for_airflow_to_be_ready()`: Waits for Airflow webserver to be ready
+- `verify_airflow_dag_exists(dag_id)`: Verifies if a DAG exists in Airflow
+- `unpause_and_trigger_airflow_dag(dag_id)`: Unpauses and triggers a DAG
+- `verify_dag_id_ran(dag_id, dag_run_id)`: Verifies DAG execution completion
+- `get_task_instance_logs(dag_id, dag_run_id, task_id)`: Retrieves task logs
+- `check_dag_task_instances(dag_id, dag_run_id)`: Checks task instance status
+
+### Usage in Tests
+
+```python
+@pytest.mark.airflow
+def test_airflow_with_helper_methods(airflow_resource):
+    airflow_instance = airflow_resource["airflow_instance"]
+    
+    # Wait for Airflow to be ready
+    if not airflow_instance.wait_for_airflow_to_be_ready():
+        raise Exception("Airflow not ready")
+    
+    # Verify DAG exists
+    if not airflow_instance.verify_airflow_dag_exists("my_dag"):
+        raise Exception("DAG not found")
+    
+    # Trigger and monitor DAG
+    dag_run_id = airflow_instance.unpause_and_trigger_airflow_dag("my_dag")
+    airflow_instance.verify_dag_id_ran("my_dag", dag_run_id)
+    
+    # Get task logs
+    logs = airflow_instance.get_task_instance_logs("my_dag", dag_run_id, "my_task")
+    assert "expected_output" in logs
+```
 
 ## Security Notes
 
 - API tokens are automatically generated and cleaned up
 - GitHub secrets are managed securely through the GitHub API
 - All sensitive information is handled through environment variables
-- Temporary files are cleaned up after tests complete 
+- Temporary files are cleaned up after tests complete
+- File-based coordination uses secure locking mechanisms
+- Cache database is stored locally and not transmitted 
