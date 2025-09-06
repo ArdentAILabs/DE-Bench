@@ -88,9 +88,9 @@ def test_todo_s3_agent_upload_pdf(request):
     end_time = time.time()
     request.node.user_properties.append(("model_runtime", end_time - start_time))
     
-    # Register the Braintrust root span ID for tracking
-    if model_result:
-        request.node.user_properties.append(("run_trace_id", model_result["bt_root_span_id"]))
-        print(f"Registered Braintrust root span ID: {model_result['bt_root_span_id']}")
+    # Register the Braintrust root span ID for tracking (Ardent mode only)
+    if model_result and "bt_root_span_id" in model_result:
+        request.node.user_properties.append(("run_trace_id", model_result.get("bt_root_span_id")))
+        print(f"Registered Braintrust root span ID: {model_result.get('bt_root_span_id')}")
 
     assert True
