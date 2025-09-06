@@ -45,7 +45,10 @@ def test_airflow_agent_yfinance_to_postgresql(request, airflow_resource, github_
     Test_Configs.User_Input = github_manager.add_merge_step_to_user_input(Test_Configs.User_Input)
     request.node.user_properties.append(("user_query", Test_Configs.User_Input))
     dag_name = "tesla_stock_dag"
-    pr_title = "Add Tesla Stock Data Pipeline"
+    pr_title = f"Add Tesla Stock Data Pipeline {test_timestamp}_{test_uuid}"
+    branch_name = f"feature/tesla_stock-{test_timestamp}_{test_uuid}"
+    Test_Configs.User_Input.replace("BRANCH_NAME", branch_name)
+    Test_Configs.User_Input.replace("PR_NAME", pr_title)
     github_manager.check_and_update_gh_secrets(
         secrets={
             "ASTRO_ACCESS_TOKEN": os.environ["ASTRO_ACCESS_TOKEN"],

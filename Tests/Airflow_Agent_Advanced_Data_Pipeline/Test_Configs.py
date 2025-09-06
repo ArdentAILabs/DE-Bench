@@ -11,8 +11,8 @@ Create an Airflow DAG that:
 4. Defines multiple tasks for each table creation
 5. Runs daily at midnight
 6. Names the DAG 'advanced_data_pipeline_dag'
-7. Creates it in branch 'feature/advanced-data-pipeline'
-8. Names the PR 'Add Advanced Data Engineering Pipeline'
+7. Creates it in branch 'BRANCH_NAME'
+8. Names the PR 'PR_NAME'
 """
 
 Configs = {

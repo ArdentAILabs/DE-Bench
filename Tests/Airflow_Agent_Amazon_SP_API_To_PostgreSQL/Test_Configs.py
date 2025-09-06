@@ -12,8 +12,8 @@ Create an Airflow DAG that:
 4. Ensures proper indexing and foreign key relationships
 5. Runs daily to keep data synchronized
 6. Name the DAG 'amazon_sp_api_to_postgres'
-7. Create it in a branch called 'feature/amazon_sp_api_pipeline'
-8. Name the PR 'Add Amazon SP-API to Postgres Pipeline'
+7. Create it in a branch called 'BRANCH_NAME'
+8. Name the PR 'PR_NAME'
 
 The DAG should handle incremental updates and maintain data consistency.
 """

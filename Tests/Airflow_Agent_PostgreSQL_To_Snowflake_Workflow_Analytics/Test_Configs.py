@@ -7,8 +7,8 @@ Create an Airflow DAG that:
 3. Loads the results into Snowflake database 'analytics_db', table 'workflow_analytics'
 4. Runs daily at 3:00 AM UTC
 5. Name it workflow_analytics_etl
-6. Name the branch feature/workflow_analytics_etl
-7. Call the PR Add_Workflow_Analytics_ETL
+6. Name the branch BRANCH_NAME
+7. Call the PR PR_NAME
 8. Use these DAG settings:
     - retries: 2
     - retry_delay: 5 minutes
