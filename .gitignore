@@ -38,3 +38,6 @@ tmp_airflow_tests/*
 .secrets
 */**/.secrets
 .astro/*
+
+.DS_Store
+*/**/.DS_Store
