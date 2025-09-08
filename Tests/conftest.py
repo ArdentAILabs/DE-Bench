@@ -74,9 +74,10 @@ def pytest_configure(config):
     print("Configuring pytest...")
 
     # Load environment variables from the .env file
-    load_dotenv()
+    load_dotenv(override=True)
 
-    print(config.getoption("--mode"))
+    print(f"--mode: {config.getoption('--mode')}")
+
     # Set the current working directory to the root of the project
     try:
         project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
