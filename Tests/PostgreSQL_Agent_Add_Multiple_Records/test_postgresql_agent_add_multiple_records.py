@@ -23,7 +23,6 @@ test_uuid = uuid.uuid4().hex[:8]
 @pytest.mark.database
 @pytest.mark.code_writing
 @pytest.mark.two
-@pytest.mark.parametrize("supabase_account_resource", [{"useArdent": True}], indirect=True)
 @pytest.mark.parametrize("postgres_resource", [{
     "resource_id": f"add_multiple_record_postgresql_{test_timestamp}_{test_uuid}",
     "databases": [
@@ -36,6 +35,7 @@ test_uuid = uuid.uuid4().hex[:8]
 def test_postgresql_agent_add_multiple_records(request, postgres_resource, supabase_account_resource):
     """Test that validates AI agent can add a record to PostgreSQL database via fixture."""
     
+    model_result = None  # Initialize before try block
     # Set up test tracking
     request.node.user_properties.append(("user_query", Test_Configs.User_Input))
     
@@ -70,13 +70,17 @@ def test_postgresql_agent_add_multiple_records(request, postgres_resource, supab
         # Set up model configurations with actual database name and test-specific credentials
         test_configs = Test_Configs.Configs.copy()
         test_configs["services"]["postgreSQL"]["databases"] = [{"name": created_db_name}]
-        config_results = set_up_model_configs(
-            Configs=test_configs,
-            custom_info={
-                "publicKey": supabase_account_resource["publicKey"],
-                "secretKey": supabase_account_resource["secretKey"],
-            }
-        )
+        custom_info = {"mode": request.config.getoption("--mode")}
+        if request.config.getoption("--mode") == "Ardent":
+            custom_info["publicKey"] = supabase_account_resource["publicKey"]
+            custom_info["secretKey"] = supabase_account_resource["secretKey"]
+
+        config_results = set_up_model_configs(Configs=test_configs, custom_info=custom_info)
+
+        custom_info = {
+            **custom_info,
+            **config_results,
+        }
 
 
         print(test_configs)
@@ -87,11 +91,7 @@ def test_postgresql_agent_add_multiple_records(request, postgres_resource, supab
             container=None, 
             task=Test_Configs.User_Input, 
             configs=test_configs,
-            extra_information={
-                "useArdent": True,
-                "publicKey": supabase_account_resource["publicKey"],
-                "secretKey": supabase_account_resource["secretKey"],
-            }
+            extra_information=custom_info
         )
         end_time = time.time()
         request.node.user_properties.append(("model_runtime", end_time - start_time))
@@ -195,13 +195,6 @@ def test_postgresql_agent_add_multiple_records(request, postgres_resource, supab
     
     finally:
         # CLEANUP
-        if config_results:
-            cleanup_model_artifacts(
-                Configs=test_configs, 
-                custom_info={
-                    **config_results,  # Spread all config results
-                    'job_id': model_result.get("id") if model_result else None,
-                    "publicKey": supabase_account_resource["publicKey"],
-                    "secretKey": supabase_account_resource["secretKey"],
-                }
-            )
+        if request.config.getoption("--mode") == "Ardent":
+            custom_info['job_id'] = model_result.get("id") if model_result else None
+        cleanup_model_artifacts(Configs=test_configs, custom_info=custom_info)

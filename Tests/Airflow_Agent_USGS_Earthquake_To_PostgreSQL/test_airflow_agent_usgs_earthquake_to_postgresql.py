@@ -120,10 +120,10 @@ def test_airflow_agent_usgs_earthquake_to_postgresql(request, airflow_resource, 
 
         request.node.user_properties.append(("model_runtime", model_runtime))
 
-        # Register the Braintrust root span ID for tracking
-        if model_result:
-            request.node.user_properties.append(("run_trace_id", model_result["bt_root_span_id"]))
-            print(f"Registered Braintrust root span ID: {model_result['bt_root_span_id']}")
+        # Register the Braintrust root span ID for tracking (Ardent mode only)
+        if model_result and "bt_root_span_id" in model_result:
+            request.node.user_properties.append(("run_trace_id", model_result.get("bt_root_span_id")))
+            print(f"Registered Braintrust root span ID: {model_result.get('bt_root_span_id')}")
 
         test_steps[0]["status"] = "completed"
         test_steps[0]["Result_Message"] = "DAG creation initiated"
