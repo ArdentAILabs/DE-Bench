@@ -9,8 +9,8 @@ Create an Airflow DAG that:
 3. Runs daily at midnight
 4. Has a single task named 'deduplicate_users'
 5. Name the DAG 'user_deduplication_dag'
-6. Create it in a branch called 'feature/user-deduplication'
-7. Name the PR 'Add User Data Deduplication Pipeline'
+6. Create it in a branch called 'BRANCH_NAME'
+7. Name the PR 'PR_NAME'
 """
 
 Configs = {

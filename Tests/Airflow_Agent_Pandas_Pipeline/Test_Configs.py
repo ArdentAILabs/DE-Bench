@@ -17,8 +17,8 @@ Create an Airflow DAG that:
 5. Runs daily at midnight
 6. Has a single task named 'process_dataframe'
 7. Name the DAG 'pandas_dataframe_dag'
-8. Create it in a branch called 'feature/pandas_dataframe'
-9. Name the PR 'Add Pandas DataFrame Processing DAG'
+8. Create it in a branch called 'BRANCH_NAME'
+9. Name the PR 'PR_NAME'
 """
 
 Configs = {
