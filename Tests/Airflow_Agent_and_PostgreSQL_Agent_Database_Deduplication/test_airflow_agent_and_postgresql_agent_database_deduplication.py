@@ -45,12 +45,12 @@ def test_airflow_agent_and_postgresql_agent_database_deduplication(request, airf
     github_manager = github_resource["github_manager"]
     model_result = None  # Initialize before try block
     Test_Configs.User_Input = github_manager.add_merge_step_to_user_input(Test_Configs.User_Input)
-    request.node.user_properties.append(("user_query", Test_Configs.User_Input))
     dag_name = "user_deduplication_dag"
     pr_title = f"Add Database-Side User Deduplication Pipeline {test_timestamp}_{test_uuid}"
     branch_name = f"feature/database-user-deduplication-{test_timestamp}_{test_uuid}"
-    Test_Configs.User_Input.replace("BRANCH_NAME", branch_name)
-    Test_Configs.User_Input.replace("PR_NAME", pr_title)
+    Test_Configs.User_Input = Test_Configs.User_Input.replace("BRANCH_NAME", branch_name)
+    Test_Configs.User_Input = Test_Configs.User_Input.replace("PR_NAME", pr_title)
+    request.node.user_properties.append(("user_query", Test_Configs.User_Input))
     github_manager.check_and_update_gh_secrets(
         secrets={
             "ASTRO_ACCESS_TOKEN": os.environ["ASTRO_ACCESS_TOKEN"],

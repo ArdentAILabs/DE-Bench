@@ -44,12 +44,12 @@ def test_airflow_agent_advanced_data_pipeline(request, airflow_resource, github_
     input_dir = os.path.dirname(os.path.abspath(__file__))
     github_manager = github_resource["github_manager"]
     Test_Configs.User_Input = github_manager.add_merge_step_to_user_input(Test_Configs.User_Input)
-    request.node.user_properties.append(("user_query", Test_Configs.User_Input))
     dag_name = "advanced_data_pipeline_dag"
     pr_title = f"Add Advanced Data Engineering Pipeline {test_timestamp}_{test_uuid}"
     branch_name = f"feature/advanced-data-pipeline-{test_timestamp}_{test_uuid}"
-    Test_Configs.User_Input.replace("BRANCH_NAME", branch_name)
-    Test_Configs.User_Input.replace("PR_NAME", pr_title)
+    Test_Configs.User_Input = Test_Configs.User_Input.replace("BRANCH_NAME", branch_name)
+    Test_Configs.User_Input = Test_Configs.User_Input.replace("PR_NAME", pr_title)
+    request.node.user_properties.append(("user_query", Test_Configs.User_Input))
     github_manager.check_and_update_gh_secrets(
         secrets={
             "ASTRO_ACCESS_TOKEN": os.environ["ASTRO_ACCESS_TOKEN"],
