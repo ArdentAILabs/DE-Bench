@@ -12,8 +12,8 @@ Create an Airflow DAG that:
 5. Runs daily at midnight
 6. Has a single task named 'fetch_tesla_data'
 7. Name the DAG 'tesla_stock_dag'
-8. Create it in a branch called 'feature/tesla_stock'
-9. Name the PR 'Add Tesla Stock Data Pipeline'
+8. Create it in a branch called 'BRANCH_NAME'
+9. Name the PR 'PR_NAME'
 """
 
 Configs = {

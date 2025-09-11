@@ -18,8 +18,8 @@ Create an Airflow DAG that:
 2. Runs the stored procedure daily at midnight
 3. Has a single task named 'deduplicate_users'
 4. Name the DAG 'user_deduplication_dag'
-5. Create it in a branch called 'feature/database-user-deduplication'
-6. Name the PR 'Add Database-Side User Deduplication Pipeline'
+5. Create it in a branch called 'BRANCH_NAME'
+6. Name the PR 'PR_NAME'
 """
 
 # Configuration for database and services
