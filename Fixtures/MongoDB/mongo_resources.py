@@ -35,7 +35,9 @@ class MongoResourceData(TypedDict):
     created_resources: List[Dict[str, str]]
 
 
-class MongoDBFixture(DEBenchFixture[MongoResourceConfig, MongoResourceData]):
+class MongoDBFixture(
+    DEBenchFixture[MongoResourceConfig, MongoResourceData, Dict[str, Any]]
+):
     """MongoDB fixture implementation following the DEBenchFixture interface"""
 
     def get_client(self):

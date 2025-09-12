@@ -44,7 +44,9 @@ class MySQLResourceData(TypedDict):
     created_resources: List[Dict[str, Any]]
 
 
-class MySQLFixture(DEBenchFixture[MySQLResourceConfig, MySQLResourceData]):
+class MySQLFixture(
+    DEBenchFixture[MySQLResourceConfig, MySQLResourceData, Dict[str, Any]]
+):
     """MySQL fixture implementation following the DEBenchFixture interface"""
 
     def get_connection(self, database: Optional[str] = None):
@@ -55,6 +57,7 @@ class MySQLFixture(DEBenchFixture[MySQLResourceConfig, MySQLResourceData]):
             "user": os.getenv("MYSQL_USERNAME"),
             "password": os.getenv("MYSQL_PASSWORD"),
             "connect_timeout": 10,
+            "autocommit": True,  # Enable autocommit for consistent behavior
         }
 
         if database:
@@ -84,6 +87,10 @@ class MySQLFixture(DEBenchFixture[MySQLResourceConfig, MySQLResourceData]):
 
         created_resources = []
 
+        print(
+            f"Connecting to MySQL\nHost: {os.getenv('MYSQL_HOST')}\nPort: {os.getenv('MYSQL_PORT')}\nUsername: {os.getenv('MYSQL_USERNAME')}\nPassword: {os.getenv('MYSQL_PASSWORD')}"
+        )
+
         # Connect to MySQL (single connection for everything)
         connection = mysql.connector.connect(
             host=os.getenv("MYSQL_HOST"),
@@ -91,8 +98,13 @@ class MySQLFixture(DEBenchFixture[MySQLResourceConfig, MySQLResourceData]):
             user=os.getenv("MYSQL_USERNAME"),
             password=os.getenv("MYSQL_PASSWORD"),
             connect_timeout=10,
+            autocommit=True,  # Enable autocommit for DDL operations
+            sql_mode="",  # Disable strict mode to avoid issues
+            use_unicode=True,
         )
         cursor = connection.cursor()
+
+        print(f"MySQL connection established")
 
         try:
             # Process databases from template
@@ -100,8 +112,39 @@ class MySQLFixture(DEBenchFixture[MySQLResourceConfig, MySQLResourceData]):
                 for db_config in config["databases"]:
                     db_name = db_config["name"]
 
-                    # Drop and create database
+                    # Drop and create database with connection cleanup
+                    print(f"Dropping database {db_name} if exists...")
+
+                    # First, kill any active connections to the database
+                    try:
+                        print(f"   Checking for active connections to {db_name}...")
+                        cursor.execute(
+                            """
+                            SELECT id FROM information_schema.processlist 
+                            WHERE db = %s AND id != connection_id()
+                        """,
+                            (db_name,),
+                        )
+                        active_connections = cursor.fetchall()
+
+                        if active_connections:
+                            print(
+                                f"   Found {len(active_connections)} active connections, terminating..."
+                            )
+                            for (conn_id,) in active_connections:
+                                try:
+                                    cursor.execute(f"KILL {conn_id}")
+                                    print(f"   Killed connection {conn_id}")
+                                except:
+                                    pass  # Connection might already be gone
+                        else:
+                            print(f"   No active connections found")
+                    except Exception as e:
+                        print(f"   Warning: Could not check/kill connections: {e}")
+
+                    # Now drop the database
                     cursor.execute(f"DROP DATABASE IF EXISTS {db_name}")
+                    print(f"Creating database {db_name}...")
                     cursor.execute(f"CREATE DATABASE {db_name}")
                     print(f"Created MySQL database {db_name}")
 
@@ -111,12 +154,15 @@ class MySQLFixture(DEBenchFixture[MySQLResourceConfig, MySQLResourceData]):
                     db_resource = created_resources[-1]
 
                     # Switch to the new database
+                    print(f"Switching to database {db_name}...")
                     cursor.execute(f"USE {db_name}")
+                    print(f"Switched to database {db_name}")
 
                     # Process tables in this database
                     if "tables" in db_config:
                         for table_config in db_config["tables"]:
                             table_name = table_config["name"]
+                            print(f"Processing table {table_name}...")
 
                             # Generate and execute CREATE TABLE from JSON columns
                             if "columns" in table_config:
@@ -136,27 +182,40 @@ class MySQLFixture(DEBenchFixture[MySQLResourceConfig, MySQLResourceData]):
                                     column_definitions.append(col_def)
 
                                 create_table_sql = f"CREATE TABLE {table_name} ({', '.join(column_definitions)})"
+                                print(
+                                    f"Creating table {table_name} with SQL: {create_table_sql}"
+                                )
                                 cursor.execute(create_table_sql)
                                 print(f"Created MySQL table {table_name} in {db_name}")
                                 db_resource["tables"].append(table_name)
 
                                 # Insert data if provided
                                 if "data" in table_config and table_config["data"]:
-                                    for record in table_config["data"]:
+                                    print(
+                                        f"Inserting {len(table_config['data'])} records into {table_name}..."
+                                    )
+                                    for i, record in enumerate(table_config["data"]):
                                         columns = list(record.keys())
                                         values = list(record.values())
                                         placeholders = ", ".join(["%s"] * len(values))
                                         insert_sql = f"INSERT INTO {table_name} ({', '.join(columns)}) VALUES ({placeholders})"
+                                        print(f"Inserting record {i+1}: {record}")
                                         cursor.execute(insert_sql, values)
 
-                                    connection.commit()
+                                    # Note: autocommit=True means we don't need this, but keeping for safety
+                                    print(
+                                        f"Committing {len(table_config['data'])} records..."
+                                    )
+                                    # connection.commit()  # Skip explicit commit with autocommit=True
                                     print(
                                         f"Inserted {len(table_config['data'])} records into {table_name}"
                                     )
 
         finally:
+            print(f"Closing MySQL connection")
             cursor.close()
             connection.close()
+            print(f"MySQL connection closed")
 
         creation_end = time.time()
         print(f"MySQL resource creation took {creation_end - creation_start:.2f}s")
@@ -173,6 +232,9 @@ class MySQLFixture(DEBenchFixture[MySQLResourceConfig, MySQLResourceData]):
             "status": "active",
             "created_resources": created_resources,
         }
+
+        # Store resource data on the fixture instance for easy access during validation
+        self._resource_data = resource_data
 
         print(f"MySQL resource {resource_id} created successfully")
         return resource_data

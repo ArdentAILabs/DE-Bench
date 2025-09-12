@@ -172,8 +172,95 @@ def get_resource_fixture(resource_type: str) -> Any:
     return fixture_class()
 
 
+# ========== Session-Level Fixture Management ==========
+
+
+def discover_session_fixtures(all_fixtures: List[Any]) -> List[Any]:
+    """
+    Discover which fixtures require session-level setup across all tests.
+
+    Args:
+        all_fixtures: List of all DEBenchFixture instances from all tests
+
+    Returns:
+        List of unique fixture classes that require session setup
+    """
+    from Fixtures.base_fixture import DEBenchFixture
+
+    session_fixture_classes = set()
+
+    for fixture in all_fixtures:
+        if (
+            isinstance(fixture, DEBenchFixture)
+            and fixture.__class__.requires_session_setup()
+        ):
+            session_fixture_classes.add(fixture.__class__)
+
+    # Return one instance of each unique session fixture class
+    return [fixture_class() for fixture_class in session_fixture_classes]
+
+
+def setup_session_fixtures(session_fixtures: List[Any]) -> Dict[str, Any]:
+    """
+    Set up session-level fixtures that will be shared across all tests.
+
+    Args:
+        session_fixtures: List of unique session fixtures to set up
+
+    Returns:
+        Dictionary mapping resource_type -> session_data
+    """
+    from Fixtures.base_fixture import DEBenchFixture
+
+    session_data = {}
+
+    for fixture in session_fixtures:
+        if not isinstance(fixture, DEBenchFixture):
+            continue
+
+        resource_type = fixture.get_resource_type()
+
+        try:
+            print(f"🔧 Setting up session-level {resource_type}...")
+            fixture_session_data = fixture.session_setup()
+            session_data[resource_type] = fixture_session_data
+            print(f"✅ Session-level {resource_type} set up successfully")
+        except Exception as e:
+            print(f"❌ Failed to set up session-level {resource_type}: {e}")
+
+    return session_data
+
+
+def cleanup_session_fixtures(
+    session_fixtures: List[Any], session_data: Dict[str, Any]
+) -> None:
+    """
+    Clean up session-level fixtures after all tests complete.
+
+    Args:
+        session_fixtures: List of session fixtures to clean up
+        session_data: Session data returned from setup_session_fixtures
+    """
+    from Fixtures.base_fixture import DEBenchFixture
+
+    for fixture in session_fixtures:
+        if not isinstance(fixture, DEBenchFixture):
+            continue
+
+        resource_type = fixture.get_resource_type()
+
+        try:
+            print(f"🧹 Cleaning up session-level {resource_type}...")
+            fixture.session_teardown(session_data.get(resource_type))
+            print(f"✅ Session-level {resource_type} cleaned up successfully")
+        except Exception as e:
+            print(f"❌ Failed to clean up session-level {resource_type}: {e}")
+
+
 def setup_test_resources_from_fixtures(
-    fixtures: List[Any], fixture_configs: Dict[str, Any] = None
+    fixtures: List[Any],
+    fixture_configs: Dict[str, Any] = None,
+    session_data: Dict[str, Any] = None,
 ) -> Dict[str, Any]:
     """
     Set up test resources from a provided list of DEBenchFixture instances.
@@ -182,6 +269,7 @@ def setup_test_resources_from_fixtures(
     Args:
         fixtures: List of DEBenchFixture instances
         fixture_configs: Optional mapping of resource_type -> config for each fixture
+        session_data: Optional session data from session-level fixtures
 
     Returns:
         Dictionary mapping resource_type -> resource_data
@@ -190,12 +278,17 @@ def setup_test_resources_from_fixtures(
 
     resources = {}
     fixture_configs = fixture_configs or {}
+    session_data = session_data or {}
 
     for fixture in fixtures:
         if not isinstance(fixture, DEBenchFixture):
             raise ValueError(f"Fixture {fixture} does not implement DEBenchFixture")
 
         resource_type = fixture.get_resource_type()
+
+        # Pass session data to fixture if available
+        if resource_type in session_data:
+            fixture.session_data = session_data[resource_type]
 
         # Use provided config or default config
         config = fixture_configs.get(resource_type, fixture.get_default_config())
@@ -304,9 +397,12 @@ def setup_supabase_account_resource(mode: str = "Ardent") -> SupabaseAccountReso
     return response
 
 
-def setup_test_resources(resource_configs: Dict[str, Any]) -> Dict[str, Any]:
+def setup_test_resources(
+    resource_configs: Dict[str, Any], session_data: Dict[str, Any] = None
+) -> Dict[str, Any]:
     """Generic setup for all test resources using DEBenchFixture instances"""
     resources = {}
+    session_data = session_data or {}
 
     # Check if test provides custom fixtures
     if "custom_fixtures" in resource_configs and resource_configs["custom_fixtures"]:
@@ -315,8 +411,10 @@ def setup_test_resources(resource_configs: Dict[str, Any]) -> Dict[str, Any]:
         # Set up Supabase account if needed (always needed for Ardent mode)
         resources["supabase_account_resource"] = setup_supabase_account_resource()
 
-        # Set up custom fixtures
-        fixture_resources = setup_test_resources_from_fixtures(custom_fixtures)
+        # Set up custom fixtures with session data
+        fixture_resources = setup_test_resources_from_fixtures(
+            custom_fixtures, session_data=session_data
+        )
         resources.update(fixture_resources)
 
         return resources
@@ -329,6 +427,10 @@ def setup_test_resources(resource_configs: Dict[str, Any]) -> Dict[str, Any]:
             try:
                 # Get the fixture instance for this resource type
                 fixture = get_resource_fixture(resource_key)
+
+                # Pass session data to fixture if available
+                if resource_key in session_data:
+                    fixture.session_data = session_data[resource_key]
 
                 # Use the fixture to set up the resource
                 resource_data = fixture.setup_resource(resource_config)

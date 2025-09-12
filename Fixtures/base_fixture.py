@@ -5,9 +5,10 @@ from typing_extensions import TypedDict
 # Generic type variables for configuration and resource data
 ConfigT = TypeVar("ConfigT", bound=Dict[str, Any])
 ResourceT = TypeVar("ResourceT", bound=Dict[str, Any])
+SessionT = TypeVar("SessionT", bound=Dict[str, Any])
 
 
-class DEBenchFixture(ABC, Generic[ConfigT, ResourceT]):
+class DEBenchFixture(ABC, Generic[ConfigT, ResourceT, SessionT]):
     """
     Abstract base class for all DE-Bench fixtures.
 
@@ -17,17 +18,28 @@ class DEBenchFixture(ABC, Generic[ConfigT, ResourceT]):
     - get_resource_type: Returns a string identifier for the resource type
 
     Fixtures can optionally be initialized with custom configuration.
+
+    Session-level support:
+    - session_setup: Creates shared session resources (e.g., Airflow server)
+    - session_teardown: Cleans up shared session resources
+    - requires_session_setup: Indicates if this fixture needs session-level setup
     """
 
-    def __init__(self, custom_config: Optional[ConfigT] = None):
+    def __init__(
+        self,
+        custom_config: Optional[ConfigT] = None,
+        session_data: Optional[SessionT] = None,
+    ):
         """
-        Initialize the fixture with optional custom configuration.
+        Initialize the fixture with optional custom configuration and session data.
 
         Args:
             custom_config: Optional configuration to use instead of default config.
                           If provided, this will be used by setup_resource().
+            session_data: Optional session data from session_setup(), passed down from runner.
         """
         self.custom_config = custom_config
+        self.session_data = session_data
 
     @abstractmethod
     def setup_resource(self, resource_config: Optional[ConfigT] = None) -> ResourceT:
@@ -73,5 +85,51 @@ class DEBenchFixture(ABC, Generic[ConfigT, ResourceT]):
 
         Returns:
             Default configuration dictionary
+        """
+        pass
+
+    # ========== Session-Level Methods (Optional) ==========
+
+    @classmethod
+    def requires_session_setup(cls) -> bool:
+        """
+        Indicate whether this fixture requires session-level setup/teardown.
+
+        Session-level fixtures are set up once before all tests and torn down
+        after all tests complete. Useful for expensive resources like Airflow
+        servers that should be shared across multiple tests.
+
+        Returns:
+            True if this fixture needs session-level setup, False otherwise
+        """
+        return False
+
+    def session_setup(
+        self, session_config: Optional[ConfigT] = None
+    ) -> Optional[SessionT]:
+        """
+        Set up session-level resources that will be shared across multiple tests.
+
+        This method is called once before any tests run, for fixtures that
+        return True from requires_session_setup().
+
+        Args:
+            session_config: Configuration for session setup. If None, uses
+                          custom_config from __init__ or get_default_config().
+
+        Returns:
+            Session data dictionary that will be passed to individual fixtures
+        """
+        return None
+
+    def session_teardown(self, session_data: Optional[SessionT] = None) -> None:
+        """
+        Clean up session-level resources.
+
+        This method is called once after all tests complete, for fixtures that
+        return True from requires_session_setup().
+
+        Args:
+            session_data: Session data returned from session_setup()
         """
         pass

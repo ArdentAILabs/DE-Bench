@@ -3,6 +3,8 @@ import signal
 import sys
 import time
 import requests
+import argparse
+import re
 from typing import Dict, List, Any, Optional
 import braintrust
 from dotenv import load_dotenv
@@ -12,6 +14,9 @@ from extract_test_configs import (
     setup_test_resources,
     cleanup_test_resources,
     get_test_validator,
+    discover_session_fixtures,
+    setup_session_fixtures,
+    cleanup_session_fixtures,
 )
 from model.Configure_Model import set_up_model_configs, cleanup_model_artifacts
 
@@ -21,11 +26,13 @@ load_dotenv()
 # Global cleanup flag to prevent double cleanup
 cleanup_already_run = False
 active_resources = {}
+active_session_fixtures = []
+active_session_data = {}
 
 
 def cleanup_handler() -> None:
     """Cleanup function that runs on exit or interrupt - preserves existing logic"""
-    global cleanup_already_run, active_resources
+    global cleanup_already_run, active_resources, active_session_fixtures, active_session_data
 
     if cleanup_already_run:
         print("🔄 Cleanup already completed, skipping...")
@@ -44,6 +51,15 @@ def cleanup_handler() -> None:
                     print(f"✅ Emergency cleanup completed for {test_name}")
                 except Exception as e:
                     print(f"❌ Emergency cleanup failed for {test_name}: {e}")
+
+        # Clean up session-level fixtures
+        if active_session_fixtures:
+            try:
+                print("🧹 Cleaning up session-level fixtures...")
+                cleanup_session_fixtures(active_session_fixtures, active_session_data)
+                print("✅ Session-level fixtures cleaned up")
+            except Exception as e:
+                print(f"❌ Error cleaning up session fixtures: {e}")
 
         # Use existing session spindown logic
         from Fixtures.session_spindown import session_spindown
@@ -72,14 +88,37 @@ def signal_handler(signum: int, frame: Any) -> None:
     sys.exit(0)
 
 
-def discover_available_tests() -> List[str]:
-    """Discover available tests for Braintrust evaluation"""
+def discover_available_tests(filter_patterns: Optional[List[str]] = None) -> List[str]:
+    """
+    Discover available tests for Braintrust evaluation with optional filtering.
+
+    Args:
+        filter_patterns: List of regex patterns to filter test names
+
+    Returns:
+        List of test names that match the filter patterns (if any)
+    """
     # For now, hardcode the available tests - in the future this could scan directories
     available_tests = [
         "MongoDB_Agent_Add_Record",
         "MySQL_Agent_Update_Records",
         "Simple_Hello_World_Test",
     ]
+
+    # Apply filters if provided
+    if filter_patterns:
+        filtered_tests = []
+        for test_name in available_tests:
+            for pattern in filter_patterns:
+                try:
+                    if re.search(pattern, test_name, re.IGNORECASE):
+                        filtered_tests.append(test_name)
+                        break  # Stop checking other patterns for this test
+                except re.error as e:
+                    print(f"⚠️  Invalid regex pattern '{pattern}': {e}")
+                    continue
+        return filtered_tests
+
     return available_tests
 
 
@@ -137,11 +176,52 @@ def construct_experiment_name(mode: str, git_info: Dict[str, Any]) -> str:
     return f"{branch}__{mode.lower()}"
 
 
+def parse_arguments() -> argparse.Namespace:
+    """Parse command line arguments"""
+    parser = argparse.ArgumentParser(
+        description="Run DE-Bench Braintrust evaluation with session-level fixture support",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  python run_braintrust_eval.py Ardent                    # Run all tests in Ardent mode
+  python run_braintrust_eval.py Ardent Claude_Code        # Run all tests in both modes
+  python run_braintrust_eval.py --filter "MongoDB.*"     # Run only MongoDB tests
+  python run_braintrust_eval.py --filter ".*Hello.*"     # Run only Hello World tests
+  python run_braintrust_eval.py --filter "MongoDB.*" "MySQL.*" Ardent  # MongoDB & MySQL in Ardent mode
+        """,
+    )
+
+    parser.add_argument(
+        "modes",
+        nargs="*",
+        default=["Ardent"],
+        help="Execution modes to run (e.g., Ardent, Claude_Code). Default: ['Ardent']",
+    )
+
+    parser.add_argument(
+        "--filter",
+        action="append",
+        dest="filter_patterns",
+        help="Filter test names using regex patterns. Can be used multiple times. Case-insensitive.",
+    )
+
+    parser.add_argument(
+        "--verbose",
+        "-v",
+        action="store_true",
+        help="Enable verbose output with additional debugging information",
+    )
+
+    return parser.parse_args()
+
+
 def run_multi_test_evaluation(
-    modes: List[str] = ["Ardent"], test_names: Optional[List[str]] = None
+    modes: List[str] = ["Ardent"],
+    test_names: Optional[List[str]] = None,
+    verbose: bool = False,
 ) -> Dict[str, Any]:
     """Run multiple tests as Braintrust evaluation for specified modes"""
-    global active_resources
+    global active_resources, active_session_fixtures, active_session_data
 
     # Set up signal handler for graceful cleanup
     signal.signal(signal.SIGINT, signal_handler)
@@ -155,22 +235,54 @@ def run_multi_test_evaluation(
     if test_names is None:
         test_names = discover_available_tests()
 
+    if verbose:
+        print(f"🔍 Available tests discovered: {test_names}")
+
+    if not test_names:
+        print("❌ No tests found matching the filter criteria")
+        return {}
+
     print(f"🚀 Starting DE-Bench Braintrust evaluation for tests: {test_names}...")
 
-    # Collect all test configurations
+    # Collect all test configurations and fixtures
     all_test_configs = []
     all_resources = {}
+    all_fixtures = []
 
     try:
-        # Extract configurations from all tests
+        # First pass: Extract configurations from all tests and collect fixtures
         for test_name in test_names:
             print(f"📋 Preparing {test_name}...")
 
             # Extract test configuration
             test_data = extract_test_configuration(test_name)
 
-            # Set up resources for this test
-            test_resources = setup_test_resources(test_data["resource_configs"])
+            # Collect fixtures for session discovery (if any exist)
+            if "custom_fixtures" in test_data.get("resource_configs", {}):
+                all_fixtures.extend(test_data["resource_configs"]["custom_fixtures"])
+
+        # Discover and set up session-level fixtures
+        session_fixtures = discover_session_fixtures(all_fixtures)
+        if session_fixtures:
+            print(f"🌐 Found {len(session_fixtures)} session-level fixture types...")
+            active_session_fixtures = session_fixtures
+            active_session_data = setup_session_fixtures(session_fixtures)
+            print("✅ Session-level fixtures set up successfully")
+        else:
+            print("📝 No session-level fixtures required")
+            active_session_data = {}
+
+        # Second pass: Set up individual test resources with session data
+        for test_name in test_names:
+            print(f"📋 Setting up resources for {test_name}...")
+
+            # Extract test configuration
+            test_data = extract_test_configuration(test_name)
+
+            # Set up resources for this test with session data
+            test_resources = setup_test_resources(
+                test_data["resource_configs"], session_data=active_session_data
+            )
             all_resources[test_name] = test_resources
 
             # Store test config for reuse across modes
@@ -192,25 +304,25 @@ def run_multi_test_evaluation(
         for mode in modes:
             print(f"\n🧪 Running Braintrust experiment for {mode} mode...")
 
-        # Fetch git info for experiment naming
-        git_info = fetch_git_info()
-        experiment_name = construct_experiment_name(mode, git_info)
+            # Fetch git info for experiment naming
+            git_info = fetch_git_info()
+            experiment_name = construct_experiment_name(mode, git_info)
 
-        # Create samples for this mode from all tests
-        mode_samples = []
-        for config in all_test_configs:
-            sample = {
-                "input": {
-                    **config["case"]["input"],
-                    "mode": mode,
-                    "test_resources": config["test_resources"],
-                    "test_name": config[
-                        "test_name"
-                    ],  # Add test_name to input for easy access
-                },
-                "metadata": {**config["case"]["metadata"], "mode": mode},
-            }
-            mode_samples.append(sample)
+            # Create samples for this mode from all tests
+            mode_samples = []
+            for config in all_test_configs:
+                sample = {
+                    "input": {
+                        **config["case"]["input"],
+                        "mode": mode,
+                        "test_resources": config["test_resources"],
+                        "test_name": config[
+                            "test_name"
+                        ],  # Add test_name to input for easy access
+                    },
+                    "metadata": {**config["case"]["metadata"], "mode": mode},
+                }
+                mode_samples.append(sample)
 
             # Set up model configs for tests that need them
             for test_name in test_names:
@@ -283,6 +395,10 @@ def run_multi_test_evaluation(
                 except Exception as e:
                     print(f"❌ Validation error for {test_name}: {e}")
                     return False
+
+            print(
+                f"🔍 Running Braintrust.Eval for {mode} mode with {len(mode_samples)} samples"
+            )
 
             # Run Braintrust.Eval for this mode with all tests
             result = braintrust.Eval(
@@ -365,20 +481,51 @@ def run_multi_test_evaluation(
         active_resources = {}
         print("✅ All test resources cleaned up")
 
+        # Clean up session-level fixtures
+        if active_session_fixtures:
+            print("\n🧹 Cleaning up session-level fixtures...")
+            try:
+                cleanup_session_fixtures(active_session_fixtures, active_session_data)
+                print("✅ Session-level fixtures cleaned up")
+            except Exception as e:
+                print(f"❌ Error cleaning up session fixtures: {e}")
+            finally:
+                active_session_fixtures = []
+                active_session_data = {}
+
 
 if __name__ == "__main__":
-    # Parse command line arguments for modes
-    modes = sys.argv[1:] if len(sys.argv) > 1 else ["Ardent"]
+    # Parse command line arguments
+    args = parse_arguments()
+
+    if args.verbose:
+        print(f"🔧 Parsed arguments:")
+        print(f"   Modes: {args.modes}")
+        print(f"   Filter patterns: {args.filter_patterns}")
+        print(f"   Verbose: {args.verbose}")
 
     try:
-        # Run evaluation on all available tests
-        results = run_multi_test_evaluation(modes)
-        print(f"\n🎉 Completed {len(results)} multi-test experiments!")
+        # Discover tests with filtering
+        if args.filter_patterns:
+            print(f"🔍 Filtering tests with patterns: {args.filter_patterns}")
+            filtered_tests = discover_available_tests(args.filter_patterns)
+        else:
+            filtered_tests = None
 
-        # Print summary for each mode
-        for mode, result in results.items():
-            print(f"\n📊 {mode} Mode Results:")
-            print(f"   Summary: {result.summary}")
+        # Run evaluation on filtered tests
+        results = run_multi_test_evaluation(
+            modes=args.modes, test_names=filtered_tests, verbose=args.verbose
+        )
+
+        if results:
+            print(f"\n🎉 Completed {len(results)} multi-test experiments!")
+
+            # Print summary for each mode
+            for mode, result in results.items():
+                print(f"\n📊 {mode} Mode Results:")
+                print(f"   Summary: {result.summary}")
+        else:
+            print("📝 No experiments were run")
 
     except KeyboardInterrupt:
         print("\n🛑 Evaluation interrupted by user")
