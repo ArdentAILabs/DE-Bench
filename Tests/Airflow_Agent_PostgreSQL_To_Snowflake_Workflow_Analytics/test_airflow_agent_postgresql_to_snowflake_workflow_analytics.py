@@ -42,6 +42,12 @@ test_uuid = uuid.uuid4().hex[:8]
     "schema": f"WORKFLOW_ANALYTICS_{test_timestamp}_{test_uuid}",
     "sql_file": "snowflake_schema.sql"
 }], indirect=True)
+@pytest.mark.parametrize("github_resource", [{
+    "resource_id": f"test_airflow_analytics_test_{test_timestamp}_{test_uuid}",
+}], indirect=True)
+@pytest.mark.parametrize("airflow_resource", [{
+    "resource_id": f"workflow_analytics_test_{test_timestamp}_{test_uuid}",
+}], indirect=True)
 def test_airflow_agent_postgresql_to_snowflake_workflow_analytics(request, airflow_resource, github_resource, supabase_account_resource, postgres_resource, snowflake_resource):
     model_result = None  # Initialize before try block
     input_dir = os.path.dirname(os.path.abspath(__file__))
