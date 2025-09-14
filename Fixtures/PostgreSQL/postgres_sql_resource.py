@@ -13,6 +13,7 @@ def postgres_resource(request):
     
     Template structure: {
         "resource_id": "id",
+        "load_bulk": true/false,  # Optional: loads bulk_tables.sql before regular SQL files
         "databases": [
             {
                 "name": "db_name",
@@ -62,6 +63,35 @@ def postgres_resource(request):
                 
                 created_resources.append({"type": "database", "name": db_name, "tables": []})
                 db_resource = created_resources[-1]
+                
+                # Load bulk tables if requested
+                if build_template.get("load_bulk", False):
+                    bulk_sql_path = os.path.join(os.path.dirname(__file__), "bulk_tables.sql")
+                    if os.path.exists(bulk_sql_path):
+                        print(f"Worker {os.getpid()}: Loading bulk tables from {bulk_sql_path}")
+                        
+                        env = os.environ.copy()
+                        env['PGPASSWORD'] = os.getenv("POSTGRES_PASSWORD")
+                        
+                        cmd = [
+                            'psql',
+                            '-h', os.getenv("POSTGRES_HOSTNAME"),
+                            '-p', os.getenv("POSTGRES_PORT"),
+                            '-U', os.getenv("POSTGRES_USERNAME"),
+                            '-d', db_name,
+                            '-f', bulk_sql_path,
+                            '--quiet'
+                        ]
+                        
+                        try:
+                            subprocess.run(cmd, env=env, capture_output=True, text=True, check=True)
+                            print(f"Worker {os.getpid()}: Successfully loaded bulk tables into {db_name}")
+                        except subprocess.CalledProcessError as e:
+                            print(f"Worker {os.getpid()}: Error loading bulk tables: {e}")
+                            print(f"Worker {os.getpid()}: stderr: {e.stderr}")
+                            raise
+                    else:
+                        print(f"Worker {os.getpid()}: Warning - bulk_tables.sql not found at {bulk_sql_path}")
                 
                 if "sql_file" in db_config:
                     sql_file = db_config["sql_file"]

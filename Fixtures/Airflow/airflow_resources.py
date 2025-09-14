@@ -261,7 +261,7 @@ def airflow_resource(request, astro_login, shared_cache_manager):
             api_token = api_token[api_token.find('\n') + 1:-1].strip()
 
         # create a user in the airflow deployment (ardent needs username and password for the Airflowconfig)
-        _create_user_in_airflow_deployment(astro_deployment_name)
+        _create_variables_in_airflow_deployment(astro_deployment_name)
 
         # validate the api server is running
         airflow_instance = Airflow_Local(
@@ -646,7 +646,7 @@ def _hibernate_deployment(deployment_name: str) -> None:
         raise EnvironmentError(f"Unable to hibernate deployment {deployment_name}")
 
 
-def _create_user_in_airflow_deployment(deployment_name: str) -> None:
+def _create_variables_in_airflow_deployment(deployment_name: str) -> None:
     """
     Helper method to create a user in the Airflow deployment using Astronomer CLI and environment variables in Airflow.
 
@@ -677,6 +677,13 @@ def _create_user_in_airflow_deployment(deployment_name: str) -> None:
             "--deployment-name", deployment_name,
         ],
     ]
+    if slack_app_url := os.getenv("SLACK_APP_URL"):
+        user_creation_commands.append([
+            "astro", "deployment", "variable", "create",
+            f"SLACK_APP_URL={slack_app_url}",
+            "--deployment-name", deployment_name,
+            "-s"
+        ])
     for command in user_creation_commands:
         variable_name = command[4].split('=')[0]  # Extract variable name from command
         try:

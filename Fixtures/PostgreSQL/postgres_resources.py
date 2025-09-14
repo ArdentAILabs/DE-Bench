@@ -13,6 +13,7 @@ def legacy_postgres_resource(request):
     A function-scoped fixture that creates PostgreSQL resources based on template.
     Template structure: {
         "resource_id": "id", 
+        "load_bulk": true/false,  # Optional: loads bulk_tables.sql before regular tables
         "databases": [
             {
                 "name": "db_name", 
@@ -92,6 +93,20 @@ def legacy_postgres_resource(request):
                 db_cursor = db_connection.cursor()
                 
                 try:
+                    # Load bulk tables if requested
+                    if build_template.get("load_bulk", False):
+                        bulk_sql_path = os.path.join(os.path.dirname(__file__), "bulk_tables.sql")
+                        if os.path.exists(bulk_sql_path):
+                            print(f"Worker {os.getpid()}: Loading bulk tables from {bulk_sql_path}")
+                            with open(bulk_sql_path, 'r') as bulk_file:
+                                bulk_sql = bulk_file.read()
+                                # Execute the bulk SQL file
+                                db_cursor.execute(bulk_sql)
+                                db_connection.commit()
+                                print(f"Worker {os.getpid()}: Successfully loaded bulk tables into {db_name}")
+                        else:
+                            print(f"Worker {os.getpid()}: Warning - bulk_tables.sql not found at {bulk_sql_path}")
+                    
                     # Process tables in this database
                     if "tables" in db_config:
                         for table_config in db_config["tables"]:
