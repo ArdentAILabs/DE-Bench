@@ -1,11 +1,8 @@
 import importlib
 import os
 import pytest
-import re
 import time
 import uuid
-import psycopg2
-import snowflake.connector
 
 from model.Configure_Model import cleanup_model_artifacts
 from model.Configure_Model import set_up_model_configs
@@ -29,6 +26,7 @@ test_uuid = uuid.uuid4().hex[:8]
 @pytest.mark.three  # Difficulty 3 - involves multi-database ETL, schema comparison, and alerting
 @pytest.mark.parametrize("postgres_resource", [{
     "resource_id": f"schema_drift_test_{test_timestamp}_{test_uuid}",
+    "load_bulk": True,
     "databases": [
         {
             "name": f"workflow_db_{test_timestamp}_{test_uuid}",

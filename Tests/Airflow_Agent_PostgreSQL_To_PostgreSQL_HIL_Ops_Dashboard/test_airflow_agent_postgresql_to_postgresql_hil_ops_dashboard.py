@@ -1,10 +1,8 @@
 import importlib
 import os
 import pytest
-import re
 import time
 import uuid
-import psycopg2
 
 from model.Configure_Model import cleanup_model_artifacts
 from model.Configure_Model import set_up_model_configs

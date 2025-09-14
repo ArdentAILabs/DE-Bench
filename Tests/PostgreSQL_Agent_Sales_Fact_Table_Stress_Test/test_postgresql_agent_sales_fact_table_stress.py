@@ -24,6 +24,7 @@ test_uuid = uuid.uuid4().hex[:8]
 @pytest.mark.four  # Difficulty 4 - complex schema analysis and intelligent table selection
 @pytest.mark.parametrize("postgres_resource", [{
     "resource_id": f"postgres_stress_test_{test_timestamp}_{test_uuid}",
+    "load_bulk": True,
     "databases": [
         {
             "name": f"stress_test_db_{test_timestamp}_{test_uuid}",
@@ -104,8 +105,17 @@ def test_postgresql_agent_sales_fact_table_stress(request, postgres_resource, su
 
         # SECTION 3: VERIFY THE OUTCOMES - following exact pattern from working tests
         print("Verifying sales fact table was created correctly...")
-        postgres_conn = postgres_resource["connection"]
-        cursor = postgres_conn.cursor()
+        
+        # Create database connection using environment variables (following working test pattern)
+        db_connection = psycopg2.connect(
+            host=os.getenv("POSTGRES_HOSTNAME"),
+            port=os.getenv("POSTGRES_PORT"),
+            user=os.getenv("POSTGRES_USERNAME"),
+            password=os.getenv("POSTGRES_PASSWORD"),
+            database=postgres_db_name,
+            sslmode="require",
+        )
+        cursor = db_connection.cursor()
         
         try:
             # Check if sales_fact table exists
@@ -218,6 +228,7 @@ def test_postgresql_agent_sales_fact_table_stress(request, postgres_resource, su
             
         finally:
             cursor.close()
+            db_connection.close()
 
     finally:
         try:
