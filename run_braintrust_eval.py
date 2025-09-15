@@ -103,6 +103,8 @@ def discover_available_tests(filter_patterns: Optional[List[str]] = None) -> Lis
         "MongoDB_Agent_Add_Record",
         "MySQL_Agent_Update_Records",
         "Simple_Hello_World_Test",
+        "Airflow_Agent_Hello_Universe_Pipeline",
+        "Airflow_Agent_Sales_Fact_Table",
     ]
 
     # Apply filters if provided

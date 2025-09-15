@@ -150,9 +150,9 @@ def get_resource_fixture(resource_type: str) -> Any:
     fixture_map = {
         "mongo_resource": "Fixtures.MongoDB.mongo_resources.MongoDBFixture",
         "mysql_resource": "Fixtures.MySQL.mysql_resources.MySQLFixture",
+        "airflow_resource": "Fixtures.Airflow.airflow_fixture.AirflowFixture",
         # Future fixture classes:
         # "postgres_resource": "Fixtures.PostgreSQL.postgres_resources.PostgreSQLFixture",
-        # "airflow_resource": "Fixtures.Airflow.airflow_resources.AirflowFixture",
     }
 
     if resource_type not in fixture_map:
