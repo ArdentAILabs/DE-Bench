@@ -26,9 +26,9 @@ test_uuid = uuid.uuid4().hex[:8]
 @pytest.mark.snowflake
 @pytest.mark.pipeline
 @pytest.mark.database
-@pytest.mark.three  # Difficulty 3 - involves multi-database ETL, JSON processing, and analytics
+@pytest.mark.three  # Difficulty 3 - involves multi-database ETL, schema comparison, and alerting
 @pytest.mark.parametrize("postgres_resource", [{
-    "resource_id": f"workflow_analytics_test_{test_timestamp}_{test_uuid}",
+    "resource_id": f"schema_drift_test_{test_timestamp}_{test_uuid}",
     "databases": [
         {
             "name": f"workflow_db_{test_timestamp}_{test_uuid}",
@@ -37,25 +37,25 @@ test_uuid = uuid.uuid4().hex[:8]
     ]
 }], indirect=True)
 @pytest.mark.parametrize("snowflake_resource", [{
-    "resource_id": f"snowflake_analytics_test_{test_timestamp}_{test_uuid}",
-    "database": f"ANALYTICS_DB_{test_timestamp}_{test_uuid}",
-    "schema": f"WORKFLOW_ANALYTICS_{test_timestamp}_{test_uuid}",
+    "resource_id": f"snowflake_drift_test_{test_timestamp}_{test_uuid}",
+    "database": f"DRIFT_DB_{test_timestamp}_{test_uuid}",
+    "schema": f"SCHEMA_DRIFT_{test_timestamp}_{test_uuid}",
     "sql_file": "snowflake_schema.sql"
 }], indirect=True)
 @pytest.mark.parametrize("github_resource", [{
-    "resource_id": f"test_airflow_analytics_test_{test_timestamp}_{test_uuid}",
+    "resource_id": f"test_airflow_drift_test_{test_timestamp}_{test_uuid}",
 }], indirect=True)
 @pytest.mark.parametrize("airflow_resource", [{
-    "resource_id": f"workflow_analytics_test_{test_timestamp}_{test_uuid}",
+    "resource_id": f"schema_drift_test_{test_timestamp}_{test_uuid}",
 }], indirect=True)
-def test_airflow_agent_postgresql_to_snowflake_workflow_analytics(request, airflow_resource, github_resource, supabase_account_resource, postgres_resource, snowflake_resource):
+def test_airflow_agent_postgresql_to_snowflake_schema_drift_alerting(request, airflow_resource, github_resource, supabase_account_resource, postgres_resource, snowflake_resource):
     model_result = None  # Initialize before try block
     input_dir = os.path.dirname(os.path.abspath(__file__))
     github_manager = github_resource["github_manager"]
     Test_Configs.User_Input = github_manager.add_merge_step_to_user_input(Test_Configs.User_Input)
-    dag_name = "workflow_analytics_etl"
-    pr_title = f"Add_Workflow_Analytics_ETL {test_timestamp}_{test_uuid}"
-    branch_name = f"feature/workflow_analytics_etl-{test_timestamp}_{test_uuid}"
+    dag_name = "schema_drift_alerting_etl"
+    pr_title = f"Add_Schema_Drift_Alerting_ETL {test_timestamp}_{test_uuid}"
+    branch_name = f"feature/schema_drift_alerting_etl-{test_timestamp}_{test_uuid}"
     Test_Configs.User_Input = Test_Configs.User_Input.replace("BRANCH_NAME", branch_name)
     Test_Configs.User_Input = Test_Configs.User_Input.replace("PR_NAME", pr_title)
     request.node.user_properties.append(("user_query", Test_Configs.User_Input))
@@ -66,7 +66,7 @@ def test_airflow_agent_postgresql_to_snowflake_workflow_analytics(request, airfl
     )
     
     # Use the fixtures - following the exact pattern from working tests
-    print("=== Starting PostgreSQL to Snowflake Workflow Analytics Pipeline Test ===")
+    print("=== Starting PostgreSQL to Snowflake Schema Drift Alerting Pipeline Test ===")
     print(f"Using Airflow instance from fixture: {airflow_resource['resource_id']}")
     print(f"Using GitHub instance from fixture: {github_resource['resource_id']}")
     print(f"Using PostgreSQL instance from fixture: {postgres_resource['resource_id']}")
@@ -189,7 +189,7 @@ def test_airflow_agent_postgresql_to_snowflake_workflow_analytics(request, airfl
         print(f"Using API Token: {airflow_api_token}")
 
         # Wait for DAG to appear and trigger it
-        dag_name = "workflow_analytics_etl"
+        dag_name = "schema_drift_alerting_etl"
         if not airflow_instance.verify_airflow_dag_exists(dag_name):
             raise Exception(f"DAG '{dag_name}' did not appear in Airflow")
 
@@ -207,29 +207,31 @@ def test_airflow_agent_postgresql_to_snowflake_workflow_analytics(request, airfl
         cursor = snowflake_conn.cursor()
         
         try:
-            # Check workflow_definitions table
-            cursor.execute(f"SELECT COUNT(*) FROM {snowflake_db_name}.{snowflake_schema_name}.workflow_definitions")
-            workflow_count = cursor.fetchone()[0]
-            print(f"Found {workflow_count} workflows in Snowflake")
+            # Check schema_drift_events table
+            cursor.execute(f"SELECT COUNT(*) FROM {snowflake_db_name}.{snowflake_schema_name}.schema_drift_events")
+            drift_count = cursor.fetchone()[0]
+            print(f"Found {drift_count} schema drift events in Snowflake")
             
-            # Check workflow_edges table
-            cursor.execute(f"SELECT COUNT(*) FROM {snowflake_db_name}.{snowflake_schema_name}.workflow_edges")
-            edge_count = cursor.fetchone()[0]
-            print(f"Found {edge_count} edges in Snowflake")
+            # Check for specific drift detection metrics
+            cursor.execute(f"""
+                SELECT 
+                    COUNT(*) as total_events,
+                    COUNT(DISTINCT step_id) as unique_steps_checked,
+                    COUNT(CASE WHEN drift_detected = true THEN 1 END) as drift_events,
+                    COUNT(CASE WHEN drift_detected = false THEN 1 END) as no_drift_events
+                FROM {snowflake_db_name}.{snowflake_schema_name}.schema_drift_events
+            """)
+            metrics = cursor.fetchone()
+            print(f"Schema drift metrics: {metrics[0]} total events, {metrics[1]} unique steps, {metrics[2]} drift events, {metrics[3]} no drift events")
             
-            # Check workflow_node_details table
-            cursor.execute(f"SELECT COUNT(*) FROM {snowflake_db_name}.{snowflake_schema_name}.workflow_node_details")
-            node_count = cursor.fetchone()[0]
-            print(f"Found {node_count} nodes in Snowflake")
-            
-            if workflow_count > 0 and edge_count > 0 and node_count > 0:
+            if drift_count > 0 and metrics[1] > 0:
                 test_steps[2]["status"] = "passed"
-                test_steps[2]["Result_Message"] = f"Data successfully loaded: {workflow_count} workflows, {edge_count} edges, {node_count} nodes"
-                print("✅ All validations passed! Workflow analytics ETL pipeline created and executed successfully.")
+                test_steps[2]["Result_Message"] = f"Schema drift detection data successfully loaded: {drift_count} events with {metrics[2]} drift detections across {metrics[1]} unique steps"
+                print("✅ All validations passed! Schema drift alerting ETL pipeline created and executed successfully.")
             else:
                 test_steps[2]["status"] = "failed"
-                test_steps[2]["Result_Message"] = "No data found in Snowflake tables"
-                raise Exception("ETL pipeline did not load data correctly")
+                test_steps[2]["Result_Message"] = "No schema drift detection data found in Snowflake tables"
+                raise Exception("ETL pipeline did not load schema drift data correctly")
                 
         finally:
             cursor.close()

@@ -1,0 +1,65 @@
+import os
+
+User_Input = """
+Create an Airflow DAG that:
+1. Extracts schema data from PostgreSQL database 'workflow_db', tables 'step_definitions' and 'workflow_step_runs'
+2. Transforms the data to detect schema drift by comparing actual runtime I/O schemas vs expected registry schemas:
+   - Compare actual runtime input/output schemas from workflow_step_runs
+   - Compare against expected schemas from step_definitions registry
+   - If schemas match → no action needed
+   - If drift detected → flag the drift and generate schema diff
+3. Loads the results into Snowflake database 'drift_db', table 'schema_drift_events'
+4. Runs every 30 minutes
+5. Name it schema_drift_alerting_etl
+6. Name the branch BRANCH_NAME
+7. Call the PR PR_NAME
+8. Use these DAG settings:
+    - retries: 2
+    - retry_delay: 5 minutes
+
+Transform the schema data to extract:
+- step_id, workflow_name, organization_id, customer_id
+- expected_input_schema, expected_output_schema (from step_definitions)
+- actual_input_schema, actual_output_schema (from workflow_step_runs)
+- drift_detected (boolean flag)
+- schema_diff (JSON containing differences)
+- drift_type (input_drift, output_drift, or both)
+- severity_level (low, medium, high)
+- detection_timestamp
+
+The goal is to enable:
+- LLM-powered debugging that can auto-patch or alert operations
+- Proactive detection of schema changes that could break workflows
+- Automated alerting for schema drift events
+"""
+
+Configs = {
+    "services": {
+        "airflow": {
+            "github_token": os.getenv("AIRFLOW_GITHUB_TOKEN"),
+            "repo": os.getenv("AIRFLOW_REPO"),
+            "dag_path": os.getenv("AIRFLOW_DAG_PATH"),
+            "host": os.getenv("AIRFLOW_HOST"),
+            "username": os.getenv("AIRFLOW_USERNAME"),
+            "password": os.getenv("AIRFLOW_PASSWORD"),
+            "api_token": os.getenv("AIRFLOW_API_TOKEN"),
+            "requirements_path": os.getenv("AIRFLOW_REQUIREMENTS_PATH"),
+        },
+        "postgreSQL": {
+            "hostname": os.getenv("POSTGRES_HOSTNAME"),
+            "port": os.getenv("POSTGRES_PORT"),
+            "username": os.getenv("POSTGRES_USERNAME"),
+            "password": os.getenv("POSTGRES_PASSWORD"),
+            "databases": [{"name": "workflow_db"}],  # Will be overridden by fixture
+        },
+        "snowflake": {
+            "account": os.getenv("SNOWFLAKE_ACCOUNT"),
+            "user": os.getenv("SNOWFLAKE_USER"),
+            "password": os.getenv("SNOWFLAKE_PASSWORD"),
+            "warehouse": os.getenv("SNOWFLAKE_WAREHOUSE"),
+            "role": os.getenv("SNOWFLAKE_ROLE", "SYSADMIN"),
+            "database": "DRIFT_DB",  # Will be overridden by fixture
+            "schema": "SCHEMA_DRIFT"  # Will be overridden by fixture
+        },
+    }
+}

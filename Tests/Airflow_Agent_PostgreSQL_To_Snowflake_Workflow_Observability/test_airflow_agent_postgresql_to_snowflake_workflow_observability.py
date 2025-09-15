@@ -26,9 +26,9 @@ test_uuid = uuid.uuid4().hex[:8]
 @pytest.mark.snowflake
 @pytest.mark.pipeline
 @pytest.mark.database
-@pytest.mark.three  # Difficulty 3 - involves multi-database ETL, JSON processing, and analytics
+@pytest.mark.three  # Difficulty 3 - involves multi-database ETL, execution analytics, and observability
 @pytest.mark.parametrize("postgres_resource", [{
-    "resource_id": f"workflow_analytics_test_{test_timestamp}_{test_uuid}",
+    "resource_id": f"workflow_observability_test_{test_timestamp}_{test_uuid}",
     "databases": [
         {
             "name": f"workflow_db_{test_timestamp}_{test_uuid}",
@@ -37,25 +37,25 @@ test_uuid = uuid.uuid4().hex[:8]
     ]
 }], indirect=True)
 @pytest.mark.parametrize("snowflake_resource", [{
-    "resource_id": f"snowflake_analytics_test_{test_timestamp}_{test_uuid}",
-    "database": f"ANALYTICS_DB_{test_timestamp}_{test_uuid}",
-    "schema": f"WORKFLOW_ANALYTICS_{test_timestamp}_{test_uuid}",
+    "resource_id": f"snowflake_observability_test_{test_timestamp}_{test_uuid}",
+    "database": f"OBSERVABILITY_DB_{test_timestamp}_{test_uuid}",
+    "schema": f"WORKFLOW_OBSERVABILITY_{test_timestamp}_{test_uuid}",
     "sql_file": "snowflake_schema.sql"
 }], indirect=True)
 @pytest.mark.parametrize("github_resource", [{
-    "resource_id": f"test_airflow_analytics_test_{test_timestamp}_{test_uuid}",
+    "resource_id": f"test_airflow_observability_test_{test_timestamp}_{test_uuid}",
 }], indirect=True)
 @pytest.mark.parametrize("airflow_resource", [{
-    "resource_id": f"workflow_analytics_test_{test_timestamp}_{test_uuid}",
+    "resource_id": f"workflow_observability_test_{test_timestamp}_{test_uuid}",
 }], indirect=True)
-def test_airflow_agent_postgresql_to_snowflake_workflow_analytics(request, airflow_resource, github_resource, supabase_account_resource, postgres_resource, snowflake_resource):
+def test_airflow_agent_postgresql_to_snowflake_workflow_observability(request, airflow_resource, github_resource, supabase_account_resource, postgres_resource, snowflake_resource):
     model_result = None  # Initialize before try block
     input_dir = os.path.dirname(os.path.abspath(__file__))
     github_manager = github_resource["github_manager"]
     Test_Configs.User_Input = github_manager.add_merge_step_to_user_input(Test_Configs.User_Input)
-    dag_name = "workflow_analytics_etl"
-    pr_title = f"Add_Workflow_Analytics_ETL {test_timestamp}_{test_uuid}"
-    branch_name = f"feature/workflow_analytics_etl-{test_timestamp}_{test_uuid}"
+    dag_name = "workflow_observability_etl"
+    pr_title = f"Add_Workflow_Observability_ETL {test_timestamp}_{test_uuid}"
+    branch_name = f"feature/workflow_observability_etl-{test_timestamp}_{test_uuid}"
     Test_Configs.User_Input = Test_Configs.User_Input.replace("BRANCH_NAME", branch_name)
     Test_Configs.User_Input = Test_Configs.User_Input.replace("PR_NAME", pr_title)
     request.node.user_properties.append(("user_query", Test_Configs.User_Input))
@@ -66,7 +66,7 @@ def test_airflow_agent_postgresql_to_snowflake_workflow_analytics(request, airfl
     )
     
     # Use the fixtures - following the exact pattern from working tests
-    print("=== Starting PostgreSQL to Snowflake Workflow Analytics Pipeline Test ===")
+    print("=== Starting PostgreSQL to Snowflake Workflow Observability Pipeline Test ===")
     print(f"Using Airflow instance from fixture: {airflow_resource['resource_id']}")
     print(f"Using GitHub instance from fixture: {github_resource['resource_id']}")
     print(f"Using PostgreSQL instance from fixture: {postgres_resource['resource_id']}")
@@ -189,7 +189,7 @@ def test_airflow_agent_postgresql_to_snowflake_workflow_analytics(request, airfl
         print(f"Using API Token: {airflow_api_token}")
 
         # Wait for DAG to appear and trigger it
-        dag_name = "workflow_analytics_etl"
+        dag_name = "workflow_observability_etl"
         if not airflow_instance.verify_airflow_dag_exists(dag_name):
             raise Exception(f"DAG '{dag_name}' did not appear in Airflow")
 
@@ -207,29 +207,32 @@ def test_airflow_agent_postgresql_to_snowflake_workflow_analytics(request, airfl
         cursor = snowflake_conn.cursor()
         
         try:
-            # Check workflow_definitions table
-            cursor.execute(f"SELECT COUNT(*) FROM {snowflake_db_name}.{snowflake_schema_name}.workflow_definitions")
-            workflow_count = cursor.fetchone()[0]
-            print(f"Found {workflow_count} workflows in Snowflake")
+            # Check workflow_step_events table
+            cursor.execute(f"SELECT COUNT(*) FROM {snowflake_db_name}.{snowflake_schema_name}.workflow_step_events")
+            event_count = cursor.fetchone()[0]
+            print(f"Found {event_count} workflow step events in Snowflake")
             
-            # Check workflow_edges table
-            cursor.execute(f"SELECT COUNT(*) FROM {snowflake_db_name}.{snowflake_schema_name}.workflow_edges")
-            edge_count = cursor.fetchone()[0]
-            print(f"Found {edge_count} edges in Snowflake")
+            # Check for specific observability metrics
+            cursor.execute(f"""
+                SELECT 
+                    COUNT(*) as total_events,
+                    COUNT(DISTINCT workflow_run_id) as unique_workflow_runs,
+                    COUNT(DISTINCT step_id) as unique_steps,
+                    AVG(step_duration_seconds) as avg_duration,
+                    COUNT(CASE WHEN status = 'failed' THEN 1 END) as failed_count
+                FROM {snowflake_db_name}.{snowflake_schema_name}.workflow_step_events
+            """)
+            metrics = cursor.fetchone()
+            print(f"Observability metrics: {metrics[0]} total events, {metrics[1]} workflow runs, {metrics[2]} unique steps, {metrics[3]:.2f}s avg duration, {metrics[4]} failed")
             
-            # Check workflow_node_details table
-            cursor.execute(f"SELECT COUNT(*) FROM {snowflake_db_name}.{snowflake_schema_name}.workflow_node_details")
-            node_count = cursor.fetchone()[0]
-            print(f"Found {node_count} nodes in Snowflake")
-            
-            if workflow_count > 0 and edge_count > 0 and node_count > 0:
+            if event_count > 0 and metrics[1] > 0:
                 test_steps[2]["status"] = "passed"
-                test_steps[2]["Result_Message"] = f"Data successfully loaded: {workflow_count} workflows, {edge_count} edges, {node_count} nodes"
-                print("✅ All validations passed! Workflow analytics ETL pipeline created and executed successfully.")
+                test_steps[2]["Result_Message"] = f"Observability data successfully loaded: {event_count} events from {metrics[1]} workflow runs with {metrics[4]} failures"
+                print("✅ All validations passed! Workflow observability ETL pipeline created and executed successfully.")
             else:
                 test_steps[2]["status"] = "failed"
-                test_steps[2]["Result_Message"] = "No data found in Snowflake tables"
-                raise Exception("ETL pipeline did not load data correctly")
+                test_steps[2]["Result_Message"] = "No observability data found in Snowflake tables"
+                raise Exception("ETL pipeline did not load observability data correctly")
                 
         finally:
             cursor.close()

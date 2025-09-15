@@ -5,7 +5,6 @@ import re
 import time
 import uuid
 import psycopg2
-import snowflake.connector
 
 from model.Configure_Model import cleanup_model_artifacts
 from model.Configure_Model import set_up_model_configs
@@ -23,12 +22,11 @@ test_uuid = uuid.uuid4().hex[:8]
 
 @pytest.mark.airflow
 @pytest.mark.postgres
-@pytest.mark.snowflake
 @pytest.mark.pipeline
 @pytest.mark.database
-@pytest.mark.three  # Difficulty 3 - involves multi-database ETL, JSON processing, and analytics
+@pytest.mark.three  # Difficulty 3 - involves multi-database ETL, categorization, and external API integration
 @pytest.mark.parametrize("postgres_resource", [{
-    "resource_id": f"workflow_analytics_test_{test_timestamp}_{test_uuid}",
+    "resource_id": f"hil_ops_test_{test_timestamp}_{test_uuid}",
     "databases": [
         {
             "name": f"workflow_db_{test_timestamp}_{test_uuid}",
@@ -36,28 +34,23 @@ test_uuid = uuid.uuid4().hex[:8]
         }
     ]
 }], indirect=True)
-@pytest.mark.parametrize("snowflake_resource", [{
-    "resource_id": f"snowflake_analytics_test_{test_timestamp}_{test_uuid}",
-    "database": f"ANALYTICS_DB_{test_timestamp}_{test_uuid}",
-    "schema": f"WORKFLOW_ANALYTICS_{test_timestamp}_{test_uuid}",
-    "sql_file": "snowflake_schema.sql"
-}], indirect=True)
 @pytest.mark.parametrize("github_resource", [{
-    "resource_id": f"test_airflow_analytics_test_{test_timestamp}_{test_uuid}",
+    "resource_id": f"test_airflow_hil_test_{test_timestamp}_{test_uuid}",
 }], indirect=True)
 @pytest.mark.parametrize("airflow_resource", [{
-    "resource_id": f"workflow_analytics_test_{test_timestamp}_{test_uuid}",
+    "resource_id": f"hil_ops_test_{test_timestamp}_{test_uuid}",
 }], indirect=True)
-def test_airflow_agent_postgresql_to_snowflake_workflow_analytics(request, airflow_resource, github_resource, supabase_account_resource, postgres_resource, snowflake_resource):
+def test_airflow_agent_postgresql_to_postgresql_hil_ops_dashboard(request, airflow_resource, github_resource, supabase_account_resource, postgres_resource):
     model_result = None  # Initialize before try block
     input_dir = os.path.dirname(os.path.abspath(__file__))
     github_manager = github_resource["github_manager"]
     Test_Configs.User_Input = github_manager.add_merge_step_to_user_input(Test_Configs.User_Input)
-    dag_name = "workflow_analytics_etl"
-    pr_title = f"Add_Workflow_Analytics_ETL {test_timestamp}_{test_uuid}"
-    branch_name = f"feature/workflow_analytics_etl-{test_timestamp}_{test_uuid}"
+    dag_name = "hil_ops_dashboard_etl"
+    pr_title = f"Add_HIL_Ops_Dashboard_ETL {test_timestamp}_{test_uuid}"
+    branch_name = f"feature/hil_ops_dashboard_etl-{test_timestamp}_{test_uuid}"
     Test_Configs.User_Input = Test_Configs.User_Input.replace("BRANCH_NAME", branch_name)
     Test_Configs.User_Input = Test_Configs.User_Input.replace("PR_NAME", pr_title)
+    Test_Configs.User_Input = Test_Configs.User_Input.replace("SLACK_APP_URL", os.getenv("SLACK_APP_URL"))
     request.node.user_properties.append(("user_query", Test_Configs.User_Input))
     github_manager.check_and_update_gh_secrets(
         secrets={
@@ -66,11 +59,10 @@ def test_airflow_agent_postgresql_to_snowflake_workflow_analytics(request, airfl
     )
     
     # Use the fixtures - following the exact pattern from working tests
-    print("=== Starting PostgreSQL to Snowflake Workflow Analytics Pipeline Test ===")
+    print("=== Starting PostgreSQL to PostgreSQL HIL Ops Dashboard Pipeline Test ===")
     print(f"Using Airflow instance from fixture: {airflow_resource['resource_id']}")
     print(f"Using GitHub instance from fixture: {github_resource['resource_id']}")
     print(f"Using PostgreSQL instance from fixture: {postgres_resource['resource_id']}")
-    print(f"Using Snowflake instance from fixture: {snowflake_resource['resource_id']}")
     print(f"Airflow base URL: {airflow_resource['base_url']}")
     print(f"Test directory: {input_dir}")
 
@@ -102,17 +94,11 @@ def test_airflow_agent_postgresql_to_snowflake_workflow_analytics(request, airfl
     try:
         # Get the actual database names from the fixtures
         postgres_db_name = postgres_resource["created_resources"][0]["name"]
-        snowflake_db_name = snowflake_resource["database"]
-        snowflake_schema_name = snowflake_resource["schema"]
         
         print(f"Using PostgreSQL database: {postgres_db_name}")
-        print(f"Using Snowflake database: {snowflake_db_name}")
-        print(f"Using Snowflake schema: {snowflake_schema_name}")
 
         # Update the configs to use the fixture-created databases
         Test_Configs.Configs["services"]["postgreSQL"]["databases"][0]["name"] = postgres_db_name
-        Test_Configs.Configs["services"]["snowflake"]["database"] = snowflake_db_name
-        Test_Configs.Configs["services"]["snowflake"]["schema"] = snowflake_schema_name
         
         # Update Airflow configs with values from airflow_resource fixture - following exact pattern
         Test_Configs.Configs["services"]["airflow"]["host"] = airflow_resource["base_url"]
@@ -189,7 +175,7 @@ def test_airflow_agent_postgresql_to_snowflake_workflow_analytics(request, airfl
         print(f"Using API Token: {airflow_api_token}")
 
         # Wait for DAG to appear and trigger it
-        dag_name = "workflow_analytics_etl"
+        dag_name = "hil_ops_dashboard_etl"
         if not airflow_instance.verify_airflow_dag_exists(dag_name):
             raise Exception(f"DAG '{dag_name}' did not appear in Airflow")
 
@@ -201,35 +187,40 @@ def test_airflow_agent_postgresql_to_snowflake_workflow_analytics(request, airfl
         print(f"Monitoring DAG run {dag_run_id} for completion...")
         airflow_instance.verify_dag_id_ran(dag_name, dag_run_id)
 
-        # Verify the data was loaded to Snowflake correctly
-        print("Verifying data was loaded to Snowflake...")
-        snowflake_conn = snowflake_resource["connection"]
-        cursor = snowflake_conn.cursor()
+        # Verify the data was processed correctly
+        print("Verifying data was processed in PostgreSQL...")
+        postgres_conn = postgres_resource["connection"]
+        cursor = postgres_conn.cursor()
         
         try:
-            # Check workflow_definitions table
-            cursor.execute(f"SELECT COUNT(*) FROM {snowflake_db_name}.{snowflake_schema_name}.workflow_definitions")
-            workflow_count = cursor.fetchone()[0]
-            print(f"Found {workflow_count} workflows in Snowflake")
+            # Check ops_queue table
+            cursor.execute("SELECT COUNT(*) FROM ops_queue")
+            queue_count = cursor.fetchone()[0]
+            print(f"Found {queue_count} items in ops_queue")
             
-            # Check workflow_edges table
-            cursor.execute(f"SELECT COUNT(*) FROM {snowflake_db_name}.{snowflake_schema_name}.workflow_edges")
-            edge_count = cursor.fetchone()[0]
-            print(f"Found {edge_count} edges in Snowflake")
+            # Check for specific categorization metrics
+            cursor.execute("""
+                SELECT 
+                    COUNT(*) as total_items,
+                    COUNT(DISTINCT intervention_id) as unique_interventions,
+                    COUNT(CASE WHEN category = 'validation_error' THEN 1 END) as validation_errors,
+                    COUNT(CASE WHEN category = 'step_error' THEN 1 END) as step_errors,
+                    COUNT(CASE WHEN category = 'external_api_fail' THEN 1 END) as api_failures,
+                    COUNT(CASE WHEN status = 'pending' THEN 1 END) as pending_items,
+                    COUNT(CASE WHEN status = 'resolved' THEN 1 END) as resolved_items
+                FROM ops_queue
+            """)
+            metrics = cursor.fetchone()
+            print(f"HIL Ops metrics: {metrics[0]} total items, {metrics[1]} unique interventions, {metrics[2]} validation errors, {metrics[3]} step errors, {metrics[4]} API failures, {metrics[5]} pending, {metrics[6]} resolved")
             
-            # Check workflow_node_details table
-            cursor.execute(f"SELECT COUNT(*) FROM {snowflake_db_name}.{snowflake_schema_name}.workflow_node_details")
-            node_count = cursor.fetchone()[0]
-            print(f"Found {node_count} nodes in Snowflake")
-            
-            if workflow_count > 0 and edge_count > 0 and node_count > 0:
+            if queue_count > 0 and metrics[1] > 0:
                 test_steps[2]["status"] = "passed"
-                test_steps[2]["Result_Message"] = f"Data successfully loaded: {workflow_count} workflows, {edge_count} edges, {node_count} nodes"
-                print("✅ All validations passed! Workflow analytics ETL pipeline created and executed successfully.")
+                test_steps[2]["Result_Message"] = f"HIL Ops dashboard data successfully processed: {queue_count} items with {metrics[5]} pending and {metrics[6]} resolved across {metrics[1]} unique interventions"
+                print("✅ All validations passed! HIL Ops dashboard ETL pipeline created and executed successfully.")
             else:
                 test_steps[2]["status"] = "failed"
-                test_steps[2]["Result_Message"] = "No data found in Snowflake tables"
-                raise Exception("ETL pipeline did not load data correctly")
+                test_steps[2]["Result_Message"] = "No HIL Ops data found in ops_queue table"
+                raise Exception("ETL pipeline did not process HIL Ops data correctly")
                 
         finally:
             cursor.close()
