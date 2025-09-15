@@ -1,5 +1,6 @@
 import os
 import uuid
+import json
 from ardent import ArdentClient, ArdentError
 
 from dotenv import load_dotenv
@@ -15,7 +16,6 @@ def set_up_model_configs(Configs, custom_info=None):
 
     results = {}
 
-
     # For non-Ardent modes, no remote config setup is required
     if mode == "Ardent":
 
@@ -24,10 +24,6 @@ def set_up_model_configs(Configs, custom_info=None):
             secret_key=custom_info["secretKey"],
             base_url=os.getenv("ARDENT_BASE_URL"),
         )
-
-
-
-
 
         if "services" in Configs:
 
@@ -56,7 +52,6 @@ def set_up_model_configs(Configs, custom_info=None):
                         databases=service_config["databases"],
                     )
 
-
                 elif service == "postgreSQL":
                     service_result = Ardent_Client.set_config(
                         config_type="postgreSQL",
@@ -76,14 +71,14 @@ def set_up_model_configs(Configs, custom_info=None):
                         password=service_config["password"],
                         databases=service_config["databases"],
                     )
-                    
+
                 elif service == "tigerbeetle":
                     service_result = Ardent_Client.set_config(
                         config_type="tigerbeetle",
                         cluster_id=service_config["cluster_id"],
                         replica_addresses=service_config["replica_addresses"],
                     )
-                    
+
                 elif service == "databricks":
                     service_result = Ardent_Client.set_config(
                         config_type="databricks",
@@ -91,13 +86,14 @@ def set_up_model_configs(Configs, custom_info=None):
                         access_token=service_config["token"],
                         http_path=service_config["http_path"],
                         cluster_id=service_config.get("cluster_id"),
-                        catalogs=[{
-                            "name": service_config["catalog"],
-                            "databases": [{
-                                "name": service_config["schema"],
-                                "tables": []
-                            }]
-                        }]
+                        catalogs=[
+                            {
+                                "name": service_config["catalog"],
+                                "databases": [
+                                    {"name": service_config["schema"], "tables": []}
+                                ],
+                            }
+                        ],
                     )
 
                 elif service == "snowflake":
@@ -108,9 +104,7 @@ def set_up_model_configs(Configs, custom_info=None):
                         password=service_config["password"],
                         warehouse=service_config["warehouse"],
                         role=service_config.get("role", "SYSADMIN"),
-                        databases=[{
-                            "name": service_config["database"]
-                        }]
+                        databases=[{"name": service_config["database"]}],
                     )
 
                 # Add the result to our results dictionary
@@ -119,7 +113,7 @@ def set_up_model_configs(Configs, custom_info=None):
                 else:
                     results[service] = service_result
     elif mode == "Claude_Code":
-        #set up the kubernetes job
+        # set up the kubernetes job
 
         print("Setting up Kubernetes job for Claude Code")
         test_id = str(uuid.uuid4())
@@ -143,11 +137,11 @@ def set_up_model_configs(Configs, custom_info=None):
         pod_name = job_k8s.wait_for_pod_to_be_avialable_and_get_name(
             api_instance, job_name
         )
-        
+
         # First command: Install Node.js and Claude Code
-        install_command = 'curl -fsSL https://deb.nodesource.com/setup_18.x | bash - && apt-get install -y nodejs && npm install -g @anthropic-ai/claude-code && claude --version'
+        install_command = "curl -fsSL https://deb.nodesource.com/setup_18.x | bash - && apt-get install -y nodejs && npm install -g @anthropic-ai/claude-code && claude --version"
         install_output = job_k8s.run_terminal_command_in_pod(pod_name, install_command)
-        
+
         # Second command: Check environment variables
         env_command = 'env | grep -E "(AWS_|CLAUDE_)" | sort'
         env_output = job_k8s.run_terminal_command_in_pod(pod_name, env_command)
@@ -166,13 +160,9 @@ def cleanup_model_artifacts(Configs, custom_info=None):
 
     mode = custom_info.get("mode", "Ardent")
 
-
     print("Cleaning up model artifacts")
-    print(custom_info)
-    print(mode)
-        
-
-
+    print(f"--custom_info: {json.dumps(custom_info, indent=4)}")
+    print(f"--mode: {mode}")
 
     if mode == "Ardent":
         Ardent_Client = ArdentClient(
@@ -189,7 +179,7 @@ def cleanup_model_artifacts(Configs, custom_info=None):
 
         if "job_id" in custom_info:
             Ardent_Client.delete_job(job_id=custom_info["job_id"])
-    
+
     elif mode == "Claude_Code":
 
         print("Cleaning up Kubernetes job for Claude Code")
@@ -200,11 +190,13 @@ def cleanup_model_artifacts(Configs, custom_info=None):
                 job_k8s = Kubernetes(test_id=custom_info["test_id"])
                 azure_client = job_k8s.cloud_provider_client
                 api_instance = job_k8s.get_k8s_client(azure_client)
-                
+
                 api_instance.delete_namespaced_job(
                     name=custom_info["k8s_job_name"],
                     namespace="default",
-                    body=k8s_client_sdk.V1DeleteOptions(propagation_policy="Foreground"),
+                    body=k8s_client_sdk.V1DeleteOptions(
+                        propagation_policy="Foreground"
+                    ),
                 )
                 print(f"Deleted Kubernetes job: {custom_info['k8s_job_name']}")
             except k8s_client_sdk.ApiException as e:
