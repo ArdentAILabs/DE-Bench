@@ -5,7 +5,6 @@ import re
 import time
 import uuid
 import psycopg2
-import snowflake.connector
 
 from model.Configure_Model import cleanup_model_artifacts
 from model.Configure_Model import set_up_model_configs
@@ -23,54 +22,84 @@ test_uuid = uuid.uuid4().hex[:8]
 
 @pytest.mark.airflow
 @pytest.mark.postgres
-@pytest.mark.snowflake
 @pytest.mark.pipeline
 @pytest.mark.database
-@pytest.mark.three  # Difficulty 3 - involves multi-database ETL, JSON processing, and analytics
-@pytest.mark.parametrize("postgres_resource", [{
-    "resource_id": f"workflow_analytics_test_{test_timestamp}_{test_uuid}",
-    "databases": [
+@pytest.mark.three  # Difficulty 3 - involves multi-database ETL, categorization, and external API integration
+@pytest.mark.parametrize(
+    "postgres_resource",
+    [
         {
-            "name": f"workflow_db_{test_timestamp}_{test_uuid}",
-            "sql_file": "postgres_schema.sql"
+            "resource_id": f"hil_ops_test_{test_timestamp}_{test_uuid}",
+            "databases": [
+                {
+                    "name": f"workflow_db_{test_timestamp}_{test_uuid}",
+                    "sql_file": "postgres_schema.sql",
+                }
+            ],
         }
-    ]
-}], indirect=True)
-@pytest.mark.parametrize("snowflake_resource", [{
-    "resource_id": f"snowflake_analytics_test_{test_timestamp}_{test_uuid}",
-    "database": f"ANALYTICS_DB_{test_timestamp}_{test_uuid}",
-    "schema": f"WORKFLOW_ANALYTICS_{test_timestamp}_{test_uuid}",
-    "sql_file": "snowflake_schema.sql"
-}], indirect=True)
-@pytest.mark.parametrize("github_resource", [{
-    "resource_id": f"test_airflow_analytics_test_{test_timestamp}_{test_uuid}",
-}], indirect=True)
-@pytest.mark.parametrize("airflow_resource", [{
-    "resource_id": f"workflow_analytics_test_{test_timestamp}_{test_uuid}",
-}], indirect=True)
-def test_airflow_agent_postgresql_to_snowflake_workflow_analytics(request, airflow_resource, github_resource, supabase_account_resource, postgres_resource, snowflake_resource):
+    ],
+    indirect=True,
+)
+@pytest.mark.parametrize(
+    "github_resource",
+    [
+        {
+            "resource_id": f"test_airflow_hil_test_{test_timestamp}_{test_uuid}",
+        }
+    ],
+    indirect=True,
+)
+@pytest.mark.parametrize(
+    "airflow_resource",
+    [
+        {
+            "resource_id": f"hil_ops_test_{test_timestamp}_{test_uuid}",
+        }
+    ],
+    indirect=True,
+)
+def test_airflow_agent_postgresql_to_postgresql_hil_ops_dashboard(
+    request,
+    airflow_resource,
+    github_resource,
+    supabase_account_resource,
+    postgres_resource,
+):
     model_result = None  # Initialize before try block
     input_dir = os.path.dirname(os.path.abspath(__file__))
     github_manager = github_resource["github_manager"]
-    Test_Configs.User_Input = github_manager.add_merge_step_to_user_input(Test_Configs.User_Input)
-    dag_name = "workflow_analytics_etl"
-    pr_title = f"Add_Workflow_Analytics_ETL {test_timestamp}_{test_uuid}"
-    branch_name = f"feature/workflow_analytics_etl-{test_timestamp}_{test_uuid}"
-    Test_Configs.User_Input = Test_Configs.User_Input.replace("BRANCH_NAME", branch_name)
+    Test_Configs.User_Input = github_manager.add_merge_step_to_user_input(
+        Test_Configs.User_Input
+    )
+    dag_name = "hil_ops_dashboard_etl"
+    pr_title = f"Add_HIL_Ops_Dashboard_ETL {test_timestamp}_{test_uuid}"
+    branch_name = f"feature/hil_ops_dashboard_etl-{test_timestamp}_{test_uuid}"
+    Test_Configs.User_Input = Test_Configs.User_Input.replace(
+        "BRANCH_NAME", branch_name
+    )
     Test_Configs.User_Input = Test_Configs.User_Input.replace("PR_NAME", pr_title)
+
+    slack_app_url = os.getenv("SLACK_APP_URL")
+    if not slack_app_url:
+        raise Exception(
+            "SLACK_APP_URL environment variable is required for this test. Please set it in the .env file."
+        )
+
+    Test_Configs.User_Input = Test_Configs.User_Input.replace(
+        "SLACK_APP_URL", slack_app_url
+    )
     request.node.user_properties.append(("user_query", Test_Configs.User_Input))
     github_manager.check_and_update_gh_secrets(
         secrets={
             "ASTRO_ACCESS_TOKEN": os.environ["ASTRO_ACCESS_TOKEN"],
         }
     )
-    
+
     # Use the fixtures - following the exact pattern from working tests
-    print("=== Starting PostgreSQL to Snowflake Workflow Analytics Pipeline Test ===")
+    print("=== Starting PostgreSQL to PostgreSQL HIL Ops Dashboard Pipeline Test ===")
     print(f"Using Airflow instance from fixture: {airflow_resource['resource_id']}")
     print(f"Using GitHub instance from fixture: {github_resource['resource_id']}")
     print(f"Using PostgreSQL instance from fixture: {postgres_resource['resource_id']}")
-    print(f"Using Snowflake instance from fixture: {snowflake_resource['resource_id']}")
     print(f"Airflow base URL: {airflow_resource['base_url']}")
     print(f"Test directory: {input_dir}")
 
@@ -102,30 +131,36 @@ def test_airflow_agent_postgresql_to_snowflake_workflow_analytics(request, airfl
     try:
         # Get the actual database names from the fixtures
         postgres_db_name = postgres_resource["created_resources"][0]["name"]
-        snowflake_db_name = snowflake_resource["database"]
-        snowflake_schema_name = snowflake_resource["schema"]
-        
+
         print(f"Using PostgreSQL database: {postgres_db_name}")
-        print(f"Using Snowflake database: {snowflake_db_name}")
-        print(f"Using Snowflake schema: {snowflake_schema_name}")
 
         # Update the configs to use the fixture-created databases
-        Test_Configs.Configs["services"]["postgreSQL"]["databases"][0]["name"] = postgres_db_name
-        Test_Configs.Configs["services"]["snowflake"]["database"] = snowflake_db_name
-        Test_Configs.Configs["services"]["snowflake"]["schema"] = snowflake_schema_name
-        
+        Test_Configs.Configs["services"]["postgreSQL"]["databases"][0][
+            "name"
+        ] = postgres_db_name
+
         # Update Airflow configs with values from airflow_resource fixture - following exact pattern
-        Test_Configs.Configs["services"]["airflow"]["host"] = airflow_resource["base_url"]
-        Test_Configs.Configs["services"]["airflow"]["username"] = airflow_resource["username"]
-        Test_Configs.Configs["services"]["airflow"]["password"] = airflow_resource["password"]
-        Test_Configs.Configs["services"]["airflow"]["api_token"] = airflow_resource["api_token"]
+        Test_Configs.Configs["services"]["airflow"]["host"] = airflow_resource[
+            "base_url"
+        ]
+        Test_Configs.Configs["services"]["airflow"]["username"] = airflow_resource[
+            "username"
+        ]
+        Test_Configs.Configs["services"]["airflow"]["password"] = airflow_resource[
+            "password"
+        ]
+        Test_Configs.Configs["services"]["airflow"]["api_token"] = airflow_resource[
+            "api_token"
+        ]
 
         custom_info = {"mode": request.config.getoption("--mode")}
         if request.config.getoption("--mode") == "Ardent":
             custom_info["publicKey"] = supabase_account_resource["publicKey"]
             custom_info["secretKey"] = supabase_account_resource["secretKey"]
 
-        config_results = set_up_model_configs(Configs=Test_Configs.Configs, custom_info=custom_info)
+        config_results = set_up_model_configs(
+            Configs=Test_Configs.Configs, custom_info=custom_info
+        )
 
         custom_info = {
             **custom_info,
@@ -135,48 +170,56 @@ def test_airflow_agent_postgresql_to_snowflake_workflow_analytics(request, airfl
         # SECTION 2: RUN THE MODEL - following exact pattern
         start_time = time.time()
         model_result = run_model(
-            container=None, 
-            task=Test_Configs.User_Input, 
+            container=None,
+            task=Test_Configs.User_Input,
             configs=Test_Configs.Configs,
-            extra_information=custom_info
+            extra_information=custom_info,
         )
         end_time = time.time()
         request.node.user_properties.append(("model_runtime", end_time - start_time))
-        
+
         # Register the Braintrust root span ID for tracking (Ardent mode only)
         if model_result and "bt_root_span_id" in model_result:
-            request.node.user_properties.append(("run_trace_id", model_result.get("bt_root_span_id")))
-            print(f"Registered Braintrust root span ID: {model_result.get('bt_root_span_id')}")
+            request.node.user_properties.append(
+                ("run_trace_id", model_result.get("bt_root_span_id"))
+            )
+            print(
+                f"Registered Braintrust root span ID: {model_result.get('bt_root_span_id')}"
+            )
 
         # SECTION 3: VERIFY THE OUTCOMES - following exact pattern from working tests
         # Check if the branch exists and verify PR creation/merge
         print("Waiting 10 seconds for model to create branch and PR...")
         time.sleep(10)  # Give the model time to create the branch and PR
-        
-        branch_exists, test_steps[0] = github_manager.verify_branch_exists(branch_name, test_steps[0])
+
+        branch_exists, test_steps[0] = github_manager.verify_branch_exists(
+            branch_name, test_steps[0]
+        )
         if not branch_exists:
             raise Exception(test_steps[0]["Result_Message"])
 
         pr_exists, test_steps[1] = github_manager.find_and_merge_pr(
-            pr_title=pr_title, 
-            test_step=test_steps[1], 
-            commit_title=pr_title, 
+            pr_title=pr_title,
+            test_step=test_steps[1],
+            commit_title=pr_title,
             merge_method="squash",
             build_info={
                 "deploymentId": airflow_resource["deployment_id"],
                 "deploymentName": airflow_resource["deployment_name"],
-            }
+            },
         )
         if not pr_exists:
-            raise Exception("Unable to find and merge PR. Please check the PR title and commit title.")
+            raise Exception(
+                "Unable to find and merge PR. Please check the PR title and commit title."
+            )
 
         # Use the airflow instance from the fixture to pull DAGs from GitHub
         # The fixture already has the Docker instance running
         airflow_instance = airflow_resource["airflow_instance"]
-        
+
         if not github_manager.check_if_action_is_complete(pr_title=pr_title):
             raise Exception("Action is not complete")
-        
+
         # verify the airflow instance is ready after the github action redeployed
         if not airflow_instance.wait_for_airflow_to_be_ready():
             raise Exception("Airflow instance did not redeploy successfully.")
@@ -184,12 +227,12 @@ def test_airflow_agent_postgresql_to_snowflake_workflow_analytics(request, airfl
         # Use the connection details from the fixture
         airflow_base_url = airflow_resource["base_url"]
         airflow_api_token = airflow_resource["api_token"]
-        
+
         print(f"Connecting to Airflow at: {airflow_base_url}")
         print(f"Using API Token: {airflow_api_token}")
 
         # Wait for DAG to appear and trigger it
-        dag_name = "workflow_analytics_etl"
+        dag_name = "hil_ops_dashboard_etl"
         if not airflow_instance.verify_airflow_dag_exists(dag_name):
             raise Exception(f"DAG '{dag_name}' did not appear in Airflow")
 
@@ -201,36 +244,59 @@ def test_airflow_agent_postgresql_to_snowflake_workflow_analytics(request, airfl
         print(f"Monitoring DAG run {dag_run_id} for completion...")
         airflow_instance.verify_dag_id_ran(dag_name, dag_run_id)
 
-        # Verify the data was loaded to Snowflake correctly
-        print("Verifying data was loaded to Snowflake...")
-        snowflake_conn = snowflake_resource["connection"]
-        cursor = snowflake_conn.cursor()
-        
+        # Verify the data was processed correctly
+        print("Verifying data was processed in PostgreSQL...")
+        # Connect to database to verify results
+        db_connection = psycopg2.connect(
+            host=os.getenv("POSTGRES_HOSTNAME"),
+            port=os.getenv("POSTGRES_PORT"),
+            user=os.getenv("POSTGRES_USERNAME"),
+            password=os.getenv("POSTGRES_PASSWORD"),
+            database=postgres_db_name,
+            sslmode="require",
+        )
+        cursor = db_connection.cursor()
+
         try:
-            # Check workflow_definitions table
-            cursor.execute(f"SELECT COUNT(*) FROM {snowflake_db_name}.{snowflake_schema_name}.workflow_definitions")
-            workflow_count = cursor.fetchone()[0]
-            print(f"Found {workflow_count} workflows in Snowflake")
-            
-            # Check workflow_edges table
-            cursor.execute(f"SELECT COUNT(*) FROM {snowflake_db_name}.{snowflake_schema_name}.workflow_edges")
-            edge_count = cursor.fetchone()[0]
-            print(f"Found {edge_count} edges in Snowflake")
-            
-            # Check workflow_node_details table
-            cursor.execute(f"SELECT COUNT(*) FROM {snowflake_db_name}.{snowflake_schema_name}.workflow_node_details")
-            node_count = cursor.fetchone()[0]
-            print(f"Found {node_count} nodes in Snowflake")
-            
-            if workflow_count > 0 and edge_count > 0 and node_count > 0:
+            # Check ops_queue table
+            cursor.execute("SELECT COUNT(*) FROM ops_queue")
+            queue_count = cursor.fetchone()[0]
+            print(f"Found {queue_count} items in ops_queue")
+
+            # Check for specific categorization metrics
+            cursor.execute(
+                """
+                SELECT 
+                    COUNT(*) as total_items,
+                    COUNT(DISTINCT intervention_id) as unique_interventions,
+                    COUNT(CASE WHEN category = 'validation_error' THEN 1 END) as validation_errors,
+                    COUNT(CASE WHEN category = 'step_error' THEN 1 END) as step_errors,
+                    COUNT(CASE WHEN category = 'external_api_fail' THEN 1 END) as api_failures,
+                    COUNT(CASE WHEN status = 'pending' THEN 1 END) as pending_items,
+                    COUNT(CASE WHEN status = 'resolved' THEN 1 END) as resolved_items
+                FROM ops_queue
+            """
+            )
+            metrics = cursor.fetchone()
+            print(
+                f"HIL Ops metrics: {metrics[0]} total items, {metrics[1]} unique interventions, {metrics[2]} validation errors, {metrics[3]} step errors, {metrics[4]} API failures, {metrics[5]} pending, {metrics[6]} resolved"
+            )
+
+            if queue_count > 0 and metrics[1] > 0:
                 test_steps[2]["status"] = "passed"
-                test_steps[2]["Result_Message"] = f"Data successfully loaded: {workflow_count} workflows, {edge_count} edges, {node_count} nodes"
-                print("✅ All validations passed! Workflow analytics ETL pipeline created and executed successfully.")
+                test_steps[2][
+                    "Result_Message"
+                ] = f"HIL Ops dashboard data successfully processed: {queue_count} items with {metrics[5]} pending and {metrics[6]} resolved across {metrics[1]} unique interventions"
+                print(
+                    "✅ All validations passed! HIL Ops dashboard ETL pipeline created and executed successfully."
+                )
             else:
                 test_steps[2]["status"] = "failed"
-                test_steps[2]["Result_Message"] = "No data found in Snowflake tables"
-                raise Exception("ETL pipeline did not load data correctly")
-                
+                test_steps[2][
+                    "Result_Message"
+                ] = "No HIL Ops data found in ops_queue table"
+                raise Exception("ETL pipeline did not process HIL Ops data correctly")
+
         finally:
             cursor.close()
 
@@ -238,8 +304,10 @@ def test_airflow_agent_postgresql_to_snowflake_workflow_analytics(request, airfl
         try:
             # CLEANUP - following exact pattern from working tests
             if request.config.getoption("--mode") == "Ardent":
-                custom_info['job_id'] = model_result.get("id") if model_result else None
-            cleanup_model_artifacts(Configs=Test_Configs.Configs, custom_info=custom_info)
+                custom_info["job_id"] = model_result.get("id") if model_result else None
+            cleanup_model_artifacts(
+                Configs=Test_Configs.Configs, custom_info=custom_info
+            )
             # Delete the branch from github using the github manager
             github_manager.delete_branch(branch_name)
 

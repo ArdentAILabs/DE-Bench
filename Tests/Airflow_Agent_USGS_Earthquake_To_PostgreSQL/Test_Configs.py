@@ -13,8 +13,8 @@ Requirements:
 2. The DAG should run daily at 6 AM UTC
 3. Include proper error handling and retries for API failures
 5. Name the DAG 'usgs_earthquake_dag'
-6. Create it in a branch called 'feature/earthquake_pipeline'
-7. Name the PR 'Add USGS Earthquake Data Pipeline'
+6. Create it in a branch called 'BRANCH_NAME'
+7. Name the PR 'PR_NAME'
 
 You need to:
 - Properly evaluate what is required to perform this task, perform any operations to satisfy the requirements

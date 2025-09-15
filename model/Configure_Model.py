@@ -1,5 +1,6 @@
 import os
 import uuid
+import json
 from ardent import ArdentClient, ArdentError
 
 from dotenv import load_dotenv
@@ -182,8 +183,8 @@ def cleanup_model_artifacts(Configs, custom_info=None):
     mode = custom_info.get("mode", "Ardent")
 
     print("Cleaning up model artifacts")
-    print(custom_info)
-    print(mode)
+    print(f"--custom_info: {json.dumps(custom_info, indent=4)}")
+    print(f"--mode: {mode}")
 
     if mode == "Ardent":
         Ardent_Client = ArdentClient(

@@ -44,9 +44,12 @@ def test_airflow_agent_advanced_data_pipeline(request, airflow_resource, github_
     input_dir = os.path.dirname(os.path.abspath(__file__))
     github_manager = github_resource["github_manager"]
     Test_Configs.User_Input = github_manager.add_merge_step_to_user_input(Test_Configs.User_Input)
-    request.node.user_properties.append(("user_query", Test_Configs.User_Input))
     dag_name = "advanced_data_pipeline_dag"
-    pr_title = "Add Advanced Data Engineering Pipeline"
+    pr_title = f"Add Advanced Data Engineering Pipeline {test_timestamp}_{test_uuid}"
+    branch_name = f"feature/advanced-data-pipeline-{test_timestamp}_{test_uuid}"
+    Test_Configs.User_Input = Test_Configs.User_Input.replace("BRANCH_NAME", branch_name)
+    Test_Configs.User_Input = Test_Configs.User_Input.replace("PR_NAME", pr_title)
+    request.node.user_properties.append(("user_query", Test_Configs.User_Input))
     github_manager.check_and_update_gh_secrets(
         secrets={
             "ASTRO_ACCESS_TOKEN": os.environ["ASTRO_ACCESS_TOKEN"],
@@ -162,7 +165,7 @@ def test_airflow_agent_advanced_data_pipeline(request, airflow_resource, github_
         print("Waiting 10 seconds for model to create branch and PR...")
         time.sleep(10)  # Give the model time to create the branch and PR
         
-        branch_exists, test_steps[0] = github_manager.verify_branch_exists("feature/advanced-data-pipeline", test_steps[0])
+        branch_exists, test_steps[0] = github_manager.verify_branch_exists(branch_name, test_steps[0])
         if not branch_exists:
             raise Exception(test_steps[0]["Result_Message"])
 
@@ -430,7 +433,7 @@ def test_airflow_agent_advanced_data_pipeline(request, airflow_resource, github_
                 custom_info['job_id'] = model_result.get("id") if model_result else None
             cleanup_model_artifacts(Configs=test_configs, custom_info=custom_info)
             # Delete the branch from github using the github manager
-            github_manager.delete_branch("feature/advanced-data-pipeline")
+            github_manager.delete_branch(branch_name)
 
         except Exception as e:
             print(f"Error during cleanup: {e}")

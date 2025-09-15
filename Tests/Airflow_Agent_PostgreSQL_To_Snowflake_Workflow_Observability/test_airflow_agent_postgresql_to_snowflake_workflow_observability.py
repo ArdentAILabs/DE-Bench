@@ -4,14 +4,9 @@ import pytest
 import re
 import time
 import uuid
-from datetime import datetime
-
 import psycopg2
-import requests
-from github import Github
-from requests.auth import HTTPBasicAuth
+import snowflake.connector
 
-from Configs.MySQLConfig import connection as mysql_connection
 from model.Configure_Model import cleanup_model_artifacts
 from model.Configure_Model import set_up_model_configs
 from model.Run_Model import run_model
@@ -28,32 +23,39 @@ test_uuid = uuid.uuid4().hex[:8]
 
 @pytest.mark.airflow
 @pytest.mark.postgres
-@pytest.mark.mysql
+@pytest.mark.snowflake
 @pytest.mark.pipeline
 @pytest.mark.database
-@pytest.mark.three  # Difficulty 3 - involves database operations, DAG creation, and data validation
+@pytest.mark.three  # Difficulty 3 - involves multi-database ETL, execution analytics, and observability
 @pytest.mark.parametrize("postgres_resource", [{
-    "resource_id": f"postgresql_to_mysql_test_{test_timestamp}_{test_uuid}",
+    "resource_id": f"workflow_observability_test_{test_timestamp}_{test_uuid}",
     "databases": [
         {
-            "name": f"sales_db_{test_timestamp}_{test_uuid}",
-            "sql_file": "schema.sql"
+            "name": f"workflow_db_{test_timestamp}_{test_uuid}",
+            "sql_file": "postgres_schema.sql"
         }
     ]
 }], indirect=True)
+@pytest.mark.parametrize("snowflake_resource", [{
+    "resource_id": f"snowflake_observability_test_{test_timestamp}_{test_uuid}",
+    "database": f"OBSERVABILITY_DB_{test_timestamp}_{test_uuid}",
+    "schema": f"WORKFLOW_OBSERVABILITY_{test_timestamp}_{test_uuid}",
+    "sql_file": "snowflake_schema.sql"
+}], indirect=True)
 @pytest.mark.parametrize("github_resource", [{
-    "resource_id": f"test_airflow_postgresql_to_mysql_test_{test_timestamp}_{test_uuid}",
+    "resource_id": f"test_airflow_observability_test_{test_timestamp}_{test_uuid}",
 }], indirect=True)
 @pytest.mark.parametrize("airflow_resource", [{
-    "resource_id": f"airflow_postgresql_to_mysql_test_{test_timestamp}_{test_uuid}",
+    "resource_id": f"workflow_observability_test_{test_timestamp}_{test_uuid}",
 }], indirect=True)
-def test_airflow_agent_postgresql_to_mysql(request, airflow_resource, github_resource, supabase_account_resource, postgres_resource):
+def test_airflow_agent_postgresql_to_snowflake_workflow_observability(request, airflow_resource, github_resource, supabase_account_resource, postgres_resource, snowflake_resource):
+    model_result = None  # Initialize before try block
     input_dir = os.path.dirname(os.path.abspath(__file__))
     github_manager = github_resource["github_manager"]
     Test_Configs.User_Input = github_manager.add_merge_step_to_user_input(Test_Configs.User_Input)
-    dag_name = "sales_profit_pipeline"
-    pr_title = f"Merge_Sales_Profit_Pipeline {test_timestamp}_{test_uuid}"
-    branch_name = f"feature/sales_profit_pipeline-{test_timestamp}_{test_uuid}"
+    dag_name = "workflow_observability_etl"
+    pr_title = f"Add_Workflow_Observability_ETL {test_timestamp}_{test_uuid}"
+    branch_name = f"feature/workflow_observability_etl-{test_timestamp}_{test_uuid}"
     Test_Configs.User_Input = Test_Configs.User_Input.replace("BRANCH_NAME", branch_name)
     Test_Configs.User_Input = Test_Configs.User_Input.replace("PR_NAME", pr_title)
     request.node.user_properties.append(("user_query", Test_Configs.User_Input))
@@ -63,11 +65,12 @@ def test_airflow_agent_postgresql_to_mysql(request, airflow_resource, github_res
         }
     )
     
-    # Use the airflow_resource fixture - the Docker instance is already running
-    print("=== Starting PostgreSQL to MySQL Airflow Pipeline Test ===")
+    # Use the fixtures - following the exact pattern from working tests
+    print("=== Starting PostgreSQL to Snowflake Workflow Observability Pipeline Test ===")
     print(f"Using Airflow instance from fixture: {airflow_resource['resource_id']}")
     print(f"Using GitHub instance from fixture: {github_resource['resource_id']}")
     print(f"Using PostgreSQL instance from fixture: {postgres_resource['resource_id']}")
+    print(f"Using Snowflake instance from fixture: {snowflake_resource['resource_id']}")
     print(f"Airflow base URL: {airflow_resource['base_url']}")
     print(f"Test directory: {input_dir}")
 
@@ -94,76 +97,58 @@ def test_airflow_agent_postgresql_to_mysql(request, airflow_resource, github_res
 
     request.node.user_properties.append(("test_steps", test_steps))
 
-    # SECTION 1: SETUP THE TEST
+    # SECTION 1: SETUP THE TEST - following exact pattern from working tests
     config_results = None  # Initialize before try block
-    custom_info = {"mode": request.config.getoption("--mode")}
     try:
-        # The dags folder is already set up by the fixture
-        # The PostgreSQL database is already set up by the postgres_resource fixture
+        # Get the actual database names from the fixtures
+        postgres_db_name = postgres_resource["created_resources"][0]["name"]
+        snowflake_db_name = snowflake_resource["database"]
+        snowflake_schema_name = snowflake_resource["schema"]
+        
+        print(f"Using PostgreSQL database: {postgres_db_name}")
+        print(f"Using Snowflake database: {snowflake_db_name}")
+        print(f"Using Snowflake schema: {snowflake_schema_name}")
 
-        # Get the actual database name from the fixture
-        db_name = postgres_resource["created_resources"][0]["name"]
-        print(f"Using PostgreSQL database: {db_name}")
-
-        # Update the configs to use the fixture-created database
-        Test_Configs.Configs["services"]["postgreSQL"]["databases"][0]["name"] = db_name
-
-        # Setup MySQL database
-        print("Setting up MySQL database...")
-        mysql_cursor = mysql_connection.cursor()
-        mysql_cursor.execute("CREATE DATABASE IF NOT EXISTS analytics_db")
-        mysql_cursor.execute("USE analytics_db")
-
-        # Create result table
-        mysql_cursor.execute(
-            """
-            CREATE TABLE IF NOT EXISTS daily_profits (
-                date DATE,
-                user_id INTEGER,
-                total_sales DECIMAL(10,2),
-                total_costs DECIMAL(10,2),
-                total_profit DECIMAL(10,2),
-                PRIMARY KEY (date, user_id)
-            )
-        """
-        )
-
-        mysql_connection.commit()
-
-        # Verify table creation
-        mysql_cursor.execute("SHOW TABLES")
-        tables = mysql_cursor.fetchall()
-        print(f"MySQL tables created: {tables}")
-
-        # set the airflow folder with the correct configs
-        # this function is for you to take the configs for the test and set them up however you want. They follow a set structure
+        # Update the configs to use the fixture-created databases
+        Test_Configs.Configs["services"]["postgreSQL"]["databases"][0]["name"] = postgres_db_name
+        Test_Configs.Configs["services"]["snowflake"]["database"] = snowflake_db_name
+        Test_Configs.Configs["services"]["snowflake"]["schema"] = snowflake_schema_name
+        
+        # Update Airflow configs with values from airflow_resource fixture - following exact pattern
         Test_Configs.Configs["services"]["airflow"]["host"] = airflow_resource["base_url"]
         Test_Configs.Configs["services"]["airflow"]["username"] = airflow_resource["username"]
         Test_Configs.Configs["services"]["airflow"]["password"] = airflow_resource["password"]
         Test_Configs.Configs["services"]["airflow"]["api_token"] = airflow_resource["api_token"]
+
+        custom_info = {"mode": request.config.getoption("--mode")}
         if request.config.getoption("--mode") == "Ardent":
             custom_info["publicKey"] = supabase_account_resource["publicKey"]
             custom_info["secretKey"] = supabase_account_resource["secretKey"]
-        config_results = set_up_model_configs(Configs=Test_Configs.Configs,custom_info=custom_info)
+
+        config_results = set_up_model_configs(Configs=Test_Configs.Configs, custom_info=custom_info)
 
         custom_info = {
             **custom_info,
             **config_results,
         }
 
-        # SECTION 2: RUN THE MODEL
+        # SECTION 2: RUN THE MODEL - following exact pattern
         start_time = time.time()
-        print("Running model to create DAG and PR...")
-        model_result = run_model(container=None, task=Test_Configs.User_Input, configs=Test_Configs.Configs,extra_information = custom_info)
+        model_result = run_model(
+            container=None, 
+            task=Test_Configs.User_Input, 
+            configs=Test_Configs.Configs,
+            extra_information=custom_info
+        )
         end_time = time.time()
-        print(f"Model execution completed. Result: {model_result}")
         request.node.user_properties.append(("model_runtime", end_time - start_time))
-
+        
         # Register the Braintrust root span ID for tracking (Ardent mode only)
         if model_result and "bt_root_span_id" in model_result:
             request.node.user_properties.append(("run_trace_id", model_result.get("bt_root_span_id")))
             print(f"Registered Braintrust root span ID: {model_result.get('bt_root_span_id')}")
 
+        # SECTION 3: VERIFY THE OUTCOMES - following exact pattern from working tests
         # Check if the branch exists and verify PR creation/merge
         print("Waiting 10 seconds for model to create branch and PR...")
         time.sleep(10)  # Give the model time to create the branch and PR
@@ -204,6 +189,7 @@ def test_airflow_agent_postgresql_to_mysql(request, airflow_resource, github_res
         print(f"Using API Token: {airflow_api_token}")
 
         # Wait for DAG to appear and trigger it
+        dag_name = "workflow_observability_etl"
         if not airflow_instance.verify_airflow_dag_exists(dag_name):
             raise Exception(f"DAG '{dag_name}' did not appear in Airflow")
 
@@ -215,57 +201,48 @@ def test_airflow_agent_postgresql_to_mysql(request, airflow_resource, github_res
         print(f"Monitoring DAG run {dag_run_id} for completion...")
         airflow_instance.verify_dag_id_ran(dag_name, dag_run_id)
 
-        # SECTION 3: VERIFY THE OUTCOMES
-        print("Verifying the outcomes...")
-        # Verify data in MySQL
-        mysql_cursor.execute(
-            """
-            SELECT * FROM daily_profits 
-            WHERE date = '2024-01-01'
-            ORDER BY user_id
-        """
-        )
-
-        results = mysql_cursor.fetchall()
-        assert len(results) == 2, "Expected 2 records in daily_profits"
-
-        # Check user 1's profits
-        # They had two transactions: $100 sale ($60 cost) and $150 sale ($90 cost)
-        assert results[0][0] == datetime(2024, 1, 1).date(), "Incorrect date"
-        assert results[0][1] == 1, "Incorrect user_id"
-        assert float(results[0][2]) == 250.00, "Incorrect total sales"  # 100 + 150
-        assert float(results[0][3]) == 150.00, "Incorrect total costs"  # 60 + 90
-        assert float(results[0][4]) == 100.00, "Incorrect total profit"  # 250 - 150
-
-        # Check user 2's profits
-        # They had one transaction: $200 sale ($120 cost)
-        assert results[1][0] == datetime(2024, 1, 1).date(), "Incorrect date"
-        assert results[1][1] == 2, "Incorrect user_id"
-        assert float(results[1][2]) == 200.00, "Incorrect total sales"
-        assert results[1][3] == 120.00, "Incorrect total costs"
-        assert float(results[1][4]) == 80.00, "Incorrect total profit"  # 200 - 120
-
-        test_steps[2]["status"] = "passed"
-        test_steps[2]["Result_Message"] = "DAG successfully transferred and transformed data from Postgres to MySQL"
+        # Verify the data was loaded to Snowflake correctly
+        print("Verifying data was loaded to Snowflake...")
+        snowflake_conn = snowflake_resource["connection"]
+        cursor = snowflake_conn.cursor()
+        
+        try:
+            # Check workflow_step_events table
+            cursor.execute(f"SELECT COUNT(*) FROM {snowflake_db_name}.{snowflake_schema_name}.workflow_step_events")
+            event_count = cursor.fetchone()[0]
+            print(f"Found {event_count} workflow step events in Snowflake")
+            
+            # Check for specific observability metrics
+            cursor.execute(f"""
+                SELECT 
+                    COUNT(*) as total_events,
+                    COUNT(DISTINCT workflow_run_id) as unique_workflow_runs,
+                    COUNT(DISTINCT step_id) as unique_steps,
+                    AVG(step_duration_seconds) as avg_duration,
+                    COUNT(CASE WHEN status = 'failed' THEN 1 END) as failed_count
+                FROM {snowflake_db_name}.{snowflake_schema_name}.workflow_step_events
+            """)
+            metrics = cursor.fetchone()
+            print(f"Observability metrics: {metrics[0]} total events, {metrics[1]} workflow runs, {metrics[2]} unique steps, {metrics[3]:.2f}s avg duration, {metrics[4]} failed")
+            
+            if event_count > 0 and metrics[1] > 0:
+                test_steps[2]["status"] = "passed"
+                test_steps[2]["Result_Message"] = f"Observability data successfully loaded: {event_count} events from {metrics[1]} workflow runs with {metrics[4]} failures"
+                print("✅ All validations passed! Workflow observability ETL pipeline created and executed successfully.")
+            else:
+                test_steps[2]["status"] = "failed"
+                test_steps[2]["Result_Message"] = "No observability data found in Snowflake tables"
+                raise Exception("ETL pipeline did not load observability data correctly")
+                
+        finally:
+            cursor.close()
 
     finally:
         try:
-            # this function is for you to remove the configs for the test. They follow a set structure.
+            # CLEANUP - following exact pattern from working tests
             if request.config.getoption("--mode") == "Ardent":
                 custom_info['job_id'] = model_result.get("id") if model_result else None
             cleanup_model_artifacts(Configs=Test_Configs.Configs, custom_info=custom_info)
-            
-            # Clean up MySQL database
-            print("Starting MySQL cleanup...")
-            try:
-                mysql_cursor.execute("DROP DATABASE IF EXISTS analytics_db")
-                mysql_connection.commit()
-                mysql_cursor.close()
-                mysql_connection.close()
-                print("MySQL cleanup completed")
-            except Exception as e:
-                print(f"Error during MySQL cleanup: {e}")
-
             # Delete the branch from github using the github manager
             github_manager.delete_branch(branch_name)
 
