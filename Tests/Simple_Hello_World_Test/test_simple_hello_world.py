@@ -4,7 +4,7 @@ from model.Configure_Model import set_up_model_configs, cleanup_model_artifacts
 import os
 import importlib
 import time
-from typing import List
+from typing import List, Dict, Any
 from Fixtures.base_fixture import DEBenchFixture
 
 # Dynamic config loading
@@ -26,6 +26,18 @@ def get_fixtures() -> List[DEBenchFixture]:
     # This just ensures we have a consistent fixture interface
     mongo_fixture = MongoDBFixture()  # Uses default config
     return [mongo_fixture]
+
+
+def create_config(fixtures: List[DEBenchFixture]) -> Dict[str, Any]:
+    """
+    Create test-specific config using the set-up fixtures.
+    For this simple test, we don't need any real config since it's just a hello world test.
+    """
+    from extract_test_configs import create_config_from_fixtures
+
+    # Use the helper to automatically create config from all fixtures
+    # MongoDB fixture will provide minimal config even though we don't use it
+    return create_config_from_fixtures(fixtures)
 
 
 def validate_test(model_result, fixtures=None):

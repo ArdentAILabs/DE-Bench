@@ -200,3 +200,27 @@ class GitHubFixture(
             create_branch=True,
             build_info=None,
         )
+
+    def create_config_section(self) -> Dict[str, Any]:
+        """
+        Create GitHub config section using the fixture's resource data.
+
+        Returns:
+            Dictionary containing the github service configuration
+        """
+        # Get the actual resource data from the fixture
+        resource_data = getattr(self, "_resource_data", None)
+        if not resource_data:
+            raise Exception(
+                "GitHub resource data not available - ensure setup_resource was called"
+            )
+
+        # Extract connection details from resource data
+        return {
+            "github": {
+                "token": resource_data.get("github_token", os.getenv("GITHUB_TOKEN")),
+                "repo": resource_data.get("repo_full_name"),
+                "branch": resource_data.get("branch_name"),
+                "default_branch": resource_data.get("default_branch", "main"),
+            }
+        }

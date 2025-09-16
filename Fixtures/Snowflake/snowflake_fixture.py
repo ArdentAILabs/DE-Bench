@@ -353,3 +353,40 @@ class SnowflakeFixture(
             sql_file=None,
             s3_config=None,
         )
+
+    def create_config_section(self) -> Dict[str, Any]:
+        """
+        Create Snowflake config section using the fixture's resource data.
+
+        Returns:
+            Dictionary containing the snowflake service configuration
+        """
+        # Get the actual resource data from the fixture
+        resource_data = getattr(self, "_resource_data", None)
+        if not resource_data:
+            raise Exception(
+                "Snowflake resource data not available - ensure setup_resource was called"
+            )
+
+        # Extract connection details from resource data
+        connection_params = resource_data.get("connection_params", {})
+
+        return {
+            "snowflake": {
+                "account": connection_params.get(
+                    "account", os.getenv("SNOWFLAKE_ACCOUNT")
+                ),
+                "username": connection_params.get(
+                    "user", os.getenv("SNOWFLAKE_USERNAME")
+                ),
+                "password": connection_params.get(
+                    "password", os.getenv("SNOWFLAKE_PASSWORD")
+                ),
+                "database": resource_data.get("database_name"),
+                "schema": resource_data.get("schema_name"),
+                "warehouse": connection_params.get(
+                    "warehouse", os.getenv("SNOWFLAKE_WAREHOUSE")
+                ),
+                "role": connection_params.get("role", os.getenv("SNOWFLAKE_ROLE")),
+            }
+        }

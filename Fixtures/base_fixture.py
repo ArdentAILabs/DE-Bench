@@ -88,6 +88,18 @@ class DEBenchFixture(ABC, Generic[ConfigT, ResourceT, SessionT]):
         """
         pass
 
+    def create_config_section(self) -> Dict[str, Any]:
+        """
+        Create a config section for this fixture using its resource data.
+        This method should return the config section that would be used by the AI agent.
+
+        Returns:
+            Dictionary containing the config section for this resource type
+        """
+        # Default implementation returns empty config
+        # Subclasses should override this to provide actual config creation
+        return {}
+
     # ========== Session-Level Methods (Optional) ==========
 
     @classmethod

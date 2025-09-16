@@ -5,7 +5,7 @@ import os
 import importlib
 import time
 import mysql.connector
-from typing import List
+from typing import List, Dict, Any
 from Fixtures.base_fixture import DEBenchFixture
 
 # Dynamic config loading
@@ -81,6 +81,17 @@ def get_fixtures() -> List[DEBenchFixture]:
 
     mysql_fixture = MySQLFixture(custom_config=custom_mysql_config)
     return [mysql_fixture]
+
+
+def create_config(fixtures: List[DEBenchFixture]) -> Dict[str, Any]:
+    """
+    Create test-specific config using the set-up fixtures.
+    This function has access to all fixture data after setup.
+    """
+    from extract_test_configs import create_config_from_fixtures
+
+    # Use the helper to automatically create config from all fixtures
+    return create_config_from_fixtures(fixtures)
 
 
 def validate_test(model_result, fixtures=None):

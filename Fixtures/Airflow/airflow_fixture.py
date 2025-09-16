@@ -325,6 +325,45 @@ class AirflowFixture(
             scheduler_size="small",
         )
 
+    def create_config_section(self) -> Dict[str, Any]:
+        """
+        Create Airflow config section using the fixture's resource data.
+
+        Returns:
+            Dictionary containing the airflow service configuration
+        """
+        # Get the actual resource data from the fixture
+        resource_data = getattr(self, "_resource_data", None)
+        if not resource_data:
+            raise Exception(
+                "Airflow resource data not available - ensure setup_resource was called"
+            )
+
+        # Extract connection details from resource data
+        github_token = resource_data.get(
+            "github_token", os.getenv("AIRFLOW_GITHUB_TOKEN")
+        )
+        repo = resource_data.get("repo", os.getenv("AIRFLOW_REPO"))
+        dag_path = resource_data.get("dag_path", os.getenv("AIRFLOW_DAG_PATH"))
+        requirements_path = resource_data.get(
+            "requirements_path", os.getenv("AIRFLOW_REQUIREMENTS_PATH")
+        )
+
+        # Use the base URL from resource data if available
+        base_url = resource_data.get("base_url", "http://localhost:8080")
+
+        return {
+            "airflow": {
+                "github_token": github_token,
+                "repo": repo,
+                "dag_path": dag_path,
+                "requirements_path": requirements_path,
+                "host": base_url,
+                "username": "airflow",  # Standard Airflow username
+                "password": "airflow",  # Standard Airflow password
+            }
+        }
+
 
 # Note: No global instance - each test creates its own AirflowFixture
 # with custom resource_id in get_fixtures()

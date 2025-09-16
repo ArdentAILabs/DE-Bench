@@ -48,36 +48,10 @@ def create_config(fixtures: List[DEBenchFixture]) -> Dict[str, Any]:
     Create test-specific config using the set-up fixtures.
     This function has access to all fixture data after setup.
     """
-    import os
+    from extract_test_configs import create_config_from_fixtures
 
-    # Find the PostgreSQL fixture
-    postgres_fixture = next(
-        (f for f in fixtures if f.get_resource_type() == "postgresql_resource"), None
-    )
-
-    if not postgres_fixture:
-        raise Exception("PostgreSQL fixture not found")
-
-    # Get the actual resource data from the fixture
-    resource_data = getattr(postgres_fixture, "_resource_data", None)
-    if not resource_data:
-        raise Exception("PostgreSQL resource data not available")
-
-    # Build config using actual connection details and database names
-    connection_params = resource_data["connection_params"]
-    created_resources = resource_data["created_resources"]
-
-    return {
-        "services": {
-            "postgreSQL": {
-                "hostname": connection_params["host"],
-                "port": connection_params["port"],
-                "username": connection_params["user"],
-                "password": connection_params["password"],
-                "databases": [{"name": db["name"]} for db in created_resources],
-            }
-        }
-    }
+    # Use the helper to automatically create config from all fixtures
+    return create_config_from_fixtures(fixtures)
 
 
 def validate_test(model_result, fixtures=None):

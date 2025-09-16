@@ -339,3 +339,31 @@ class PostgreSQLFixture(
                 )
             ],
         )
+
+    def create_config_section(self) -> Dict[str, Any]:
+        """
+        Create PostgreSQL config section using the fixture's resource data.
+
+        Returns:
+            Dictionary containing the postgreSQL service configuration
+        """
+        # Get the actual resource data from the fixture
+        resource_data = getattr(self, "_resource_data", None)
+        if not resource_data:
+            raise Exception(
+                "PostgreSQL resource data not available - ensure setup_resource was called"
+            )
+
+        # Extract connection details and created databases
+        connection_params = resource_data["connection_params"]
+        created_resources = resource_data["created_resources"]
+
+        return {
+            "postgreSQL": {
+                "hostname": connection_params["host"],
+                "port": connection_params["port"],
+                "username": connection_params["user"],
+                "password": connection_params["password"],
+                "databases": [{"name": db["name"]} for db in created_resources],
+            }
+        }

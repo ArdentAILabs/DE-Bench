@@ -150,6 +150,30 @@ class MongoDBFixture(
             ],
         }
 
+    def create_config_section(self) -> Dict[str, Any]:
+        """
+        Create MongoDB config section using the fixture's resource data.
+
+        Returns:
+            Dictionary containing the mongoDB service configuration
+        """
+        # Get the actual resource data from the fixture
+        resource_data = getattr(self, "_resource_data", None)
+        if not resource_data:
+            raise Exception(
+                "MongoDB resource data not available - ensure setup_resource was called"
+            )
+
+        # Extract database names from created resources
+        database_names = [db["name"] for db in resource_data["created_resources"]]
+
+        return {
+            "mongoDB": {
+                "connectionString": self._connection_string,
+                "databases": [{"name": db_name} for db_name in database_names],
+            }
+        }
+
 
 # Global fixture instance - this is the only way to access MongoDB resources now
 mongo_fixture = MongoDBFixture()

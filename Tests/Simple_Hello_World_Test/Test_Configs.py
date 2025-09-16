@@ -4,5 +4,4 @@ User_Input = """Please do two things:
 
 Both the text response and the Python script should contain 'hello world'."""
 
-# No services or external configs needed for this simple test
-Configs = {} 
+# Configuration will be generated dynamically by create_config function

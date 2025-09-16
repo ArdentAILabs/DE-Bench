@@ -5,7 +5,6 @@ from extract_test_configs import (
     extract_test_configuration,
     setup_test_resources,
     cleanup_test_resources,
-    update_configs_with_fixture_data,
 )
 from model.Configure_Model import set_up_model_configs, cleanup_model_artifacts
 
@@ -44,7 +43,6 @@ def run_de_bench_task(test_input):
     """
     # Extract test configuration from input
     task_description = test_input["task"]
-    base_configs = test_input["configs"]
     mode = test_input.get("mode", "Ardent")
     test_name = test_input.get("test_name", "Unknown")
     session_data = test_input.get("session_data", {})
@@ -66,18 +64,16 @@ def run_de_bench_task(test_input):
         )
         print(f"✅ Resources set up for {test_name}")
 
-        # 2. Create/update configs using fixtures
+        # 2. Create configs using fixtures (all tests must have create_config now)
         create_config_func = test_data["resource_configs"].get("create_config_func")
-        if create_config_func:
-            # Use test-specific config creation function
-            print(f"⚙️  Using custom config creation for {test_name}")
-            updated_configs = create_config_func(fixture_instances)
-        else:
-            # Fall back to generic config update
-            print(f"⚙️  Using generic config update for {test_name}")
-            updated_configs = update_configs_with_fixture_data(
-                base_configs, test_resources
+        if not create_config_func:
+            raise ValueError(
+                f"❌ Test {test_name} is missing create_config function - all tests must use the new pattern"
             )
+
+        # Use test-specific config creation function
+        print(f"⚙️  Using custom config creation for {test_name}")
+        updated_configs = create_config_func(fixture_instances)
 
         # 3. Set up model configurations if needed
         custom_info = {"mode": mode}
@@ -130,9 +126,7 @@ def run_de_bench_task(test_input):
         ):
             print(f"🧹 Cleaning up model artifacts for {test_name}...")
             cleanup_model_artifacts(
-                Configs=(
-                    updated_configs if "updated_configs" in locals() else base_configs
-                ),
+                Configs=updated_configs,
                 custom_info=custom_info,
             )
             print(f"✅ Model artifacts cleaned up for {test_name}")
@@ -144,9 +138,7 @@ def run_de_bench_task(test_input):
             "fixtures": fixture_instances,  # Pass actual fixture instances with _resource_data
             "test_name": test_name,
             "test_resources": test_resources,  # Keep resource data for cleanup
-            "updated_configs": (
-                updated_configs if "updated_configs" in locals() else base_configs
-            ),
+            "updated_configs": updated_configs,
             "custom_info": custom_info,
         }
 

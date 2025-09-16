@@ -86,51 +86,49 @@ def extract_test_configuration(test_name: str) -> TestConfiguration:
                 test_module_path = f"Tests.{test_name}.{test_files[0]}"
                 test_module = importlib.import_module(test_module_path)
 
-                # Check if test defines its own fixtures and config creation
+                # Check if test defines its own fixtures and config creation (REQUIRED)
                 if hasattr(test_module, "get_fixtures"):
                     custom_fixtures = test_module.get_fixtures()
                     print(
                         f"📦 {test_name} provides custom fixtures: {[f.get_resource_type() for f in custom_fixtures]}"
                     )
 
-                    # Check if test also provides its own config creation function
+                    # Require create_config function for all new tests
                     create_config_func = None
                     if hasattr(test_module, "create_config"):
                         create_config_func = test_module.create_config
                         print(
                             f"⚙️  {test_name} provides custom config creation function"
                         )
+                    else:
+                        print(
+                            f"⚠️  {test_name} missing create_config function - will use base configs"
+                        )
 
-                    # If custom fixtures are provided, we don't need to auto-detect resources
                     resource_configs = {
                         "custom_fixtures": custom_fixtures,
                         "create_config_func": create_config_func,
                     }
                 else:
-                    # This test hasn't been converted to the new pattern yet
-                    print(
-                        f"⚠️  {test_name} uses legacy fixture pattern - consider converting to get_fixtures()"
+                    # Legacy test - not supported anymore
+                    raise ValueError(
+                        f"❌ {test_name} uses legacy pattern. All tests must provide get_fixtures() and create_config() functions."
                     )
-                    resource_configs = {"needs_supabase_account": True}
             else:
-                # No test files found, use basic requirements
-                print(f"⚠️  No test files found for {test_name}")
-                resource_configs = {"needs_supabase_account": True}
+                # No test files found
+                raise ValueError(f"❌ No test files found for {test_name}")
 
         except Exception as e:
-            print(f"Warning: Could not check for custom fixtures in {test_name}: {e}")
-            # Fallback to basic requirements
-            resource_configs = {"needs_supabase_account": True}
+            print(f"Error: Could not check for custom fixtures in {test_name}: {e}")
+            raise ValueError(f"❌ Failed to load test {test_name}: {e}")
 
         # Find the test function name by convention
         test_function_name = get_test_function_name(test_name)
 
         # Create the test case data
-        # For tests with create_config function, use empty configs (will be created dynamically)
-        base_configs = getattr(Test_Configs, "Configs", {})
-
+        # All tests now use create_config function - no more base configs needed
         test_case = {
-            "input": {"task": Test_Configs.User_Input, "configs": base_configs},
+            "input": {"task": Test_Configs.User_Input, "configs": {}},
             "metadata": {
                 "test_name": test_name,
                 "test_function": test_function_name,
@@ -153,40 +151,6 @@ def get_test_function_name(test_name: str) -> str:
     snake_case = re.sub("(.)([A-Z][a-z]+)", r"\1_\2", test_name)
     snake_case = re.sub("([a-z0-9])([A-Z])", r"\1_\2", snake_case).lower()
     return f"test_{snake_case}"
-
-
-def get_resource_fixture(resource_type: str) -> Any:
-    """
-    Get the fixture class instance for a resource type.
-    This is the new preferred way to access fixtures that implement DEBenchFixture.
-    """
-    from Fixtures.base_fixture import DEBenchFixture
-
-    # Map resource types to their fixture class instances
-    fixture_map = {
-        "mongo_resource": "Fixtures.MongoDB.mongo_resources.MongoDBFixture",
-        "mysql_resource": "Fixtures.MySQL.mysql_resources.MySQLFixture",
-        "airflow_resource": "Fixtures.Airflow.airflow_fixture.AirflowFixture",
-        "postgresql_resource": "Fixtures.PostgreSQL.postgres_resources.PostgreSQLFixture",
-        "snowflake_resource": "Fixtures.Snowflake.snowflake_fixture.SnowflakeFixture",
-        "github_resource": "Fixtures.GitHub.github_fixture.GitHubFixture",
-    }
-
-    if resource_type not in fixture_map:
-        raise ValueError(f"Unknown fixture type: {resource_type}")
-
-    # Import and instantiate the fixture class
-    module_path, class_name = fixture_map[resource_type].rsplit(".", 1)
-    module = importlib.import_module(module_path)
-    fixture_class = getattr(module, class_name)
-
-    # Verify it implements DEBenchFixture
-    if not issubclass(fixture_class, DEBenchFixture):
-        raise ValueError(
-            f"Fixture class {fixture_class} does not implement DEBenchFixture"
-        )
-
-    return fixture_class()
 
 
 # ========== Session-Level Fixture Management ==========
@@ -443,28 +407,11 @@ def setup_test_resources(
 
         return resources, fixtures
 
-    # Fall back to auto-detected resource setup
-    for resource_key, resource_config in resource_configs.items():
-        if resource_key == "needs_supabase_account" and resource_config:
-            resources["supabase_account_resource"] = setup_supabase_account_resource()
-        elif resource_key.endswith("_resource"):
-            try:
-                # Get the fixture instance for this resource type
-                fixture = get_resource_fixture(resource_key)
-
-                # Pass session data to fixture if available
-                if resource_key in session_data:
-                    fixture.session_data = session_data[resource_key]
-
-                # Use the fixture to set up the resource
-                resource_data = fixture.setup_resource(resource_config)
-                resources[resource_key] = resource_data
-                fixtures.append(fixture)
-
-            except Exception as e:
-                print(f"Warning: Could not set up {resource_key}: {e}")
-
-    return resources, fixtures
+    # All tests must now use the new pattern with get_fixtures() and create_config()
+    # This fallback should never be reached since we enforce the new pattern above
+    raise ValueError(
+        f"❌ Invalid test configuration for {resource_configs}"
+    )  # This shouldn't happen
 
 
 @traced(name="cleanup_supabase_account_resource")
@@ -504,157 +451,15 @@ def cleanup_supabase_account_resource(
 def cleanup_test_resources(
     resources: Dict[str, Any], custom_fixtures: List[Any] = None
 ) -> None:
-    """Generic cleanup for all test resources using DEBenchFixture instances"""
+    """Cleanup for test resources using DEBenchFixture instances and Supabase account"""
 
-    # If custom fixtures were provided, use them for cleanup
+    # Clean up fixtures if provided
     if custom_fixtures:
         cleanup_test_resources_from_fixtures(custom_fixtures, resources)
 
-        # Still need to clean up Supabase account separately
-        if "supabase_account_resource" in resources:
-            cleanup_supabase_account_resource(resources["supabase_account_resource"])
-
-        return
-
-    # Fall back to auto-detected resource cleanup
-    for resource_key, resource_data in resources.items():
-        if resource_key == "supabase_account_resource":
-            cleanup_supabase_account_resource(resource_data)
-        elif resource_key.endswith("_resource"):
-            try:
-                # Get the fixture instance for this resource type
-                fixture = get_resource_fixture(resource_key)
-
-                # Use the fixture to tear down the resource
-                fixture.teardown_resource(resource_data)
-
-            except Exception as e:
-                print(f"Warning: Could not clean up {resource_key}: {e}")
-
-
-def update_configs_with_fixture_data(original_configs, test_resources):
-    """
-    Update test configs with data from fixture resources.
-
-    Args:
-        original_configs: The original test configs from Test_Configs.py
-        test_resources: The test resources containing fixture data
-
-    Returns:
-        Updated configs with fixture resource data merged in
-    """
-    updated_configs = original_configs.copy()
-
-    # Handle Airflow fixture updates
-    if "airflow_resource" in test_resources:
-        airflow_resource = test_resources["airflow_resource"]
-
-        # Update the airflow service config with fixture data
-        if "services" not in updated_configs:
-            updated_configs["services"] = {}
-        if "airflow" not in updated_configs["services"]:
-            updated_configs["services"]["airflow"] = {}
-
-        # Merge fixture data into airflow config
-        airflow_config = updated_configs["services"]["airflow"]
-        airflow_config.update(
-            {
-                "host": airflow_resource.get("base_url", airflow_config.get("host")),
-                "api_token": airflow_resource.get("api_token"),
-                "username": airflow_resource.get(
-                    "username", airflow_config.get("username")
-                ),
-                "password": airflow_resource.get(
-                    "password", airflow_config.get("password")
-                ),
-            }
-        )
-
-    # Handle PostgreSQL fixture updates
-    if "postgresql_resource" in test_resources:
-        postgresql_resource = test_resources["postgresql_resource"]
-        connection_params = postgresql_resource.get("connection_params", {})
-        created_resources = postgresql_resource.get("created_resources", [])
-
-        # Update the postgreSQL service config with fixture data
-        if "services" not in updated_configs:
-            updated_configs["services"] = {}
-        if "postgreSQL" not in updated_configs["services"]:
-            updated_configs["services"]["postgreSQL"] = {}
-
-        # Merge fixture data into postgresql config
-        postgres_config = updated_configs["services"]["postgreSQL"]
-        postgres_config.update(
-            {
-                "hostname": connection_params.get(
-                    "host", postgres_config.get("hostname")
-                ),
-                "port": connection_params.get("port", postgres_config.get("port")),
-                "username": connection_params.get(
-                    "user", postgres_config.get("username")
-                ),
-                "password": connection_params.get(
-                    "password", postgres_config.get("password")
-                ),
-                "databases": [
-                    {"name": db["name"]}
-                    for db in created_resources
-                    if db["type"] == "database"
-                ],
-            }
-        )
-
-    # Handle Snowflake fixture updates
-    if "snowflake_resource" in test_resources:
-        snowflake_resource = test_resources["snowflake_resource"]
-
-        # Update the snowflake service config with fixture data
-        if "services" not in updated_configs:
-            updated_configs["services"] = {}
-        if "snowflake" not in updated_configs["services"]:
-            updated_configs["services"]["snowflake"] = {}
-
-        # Merge fixture data into snowflake config
-        snowflake_config = updated_configs["services"]["snowflake"]
-        snowflake_config.update(
-            {
-                "database": snowflake_resource.get("database"),
-                "schema": snowflake_resource.get("schema"),
-                "account": snowflake_resource.get("connection", {}).get("account"),
-                "warehouse": snowflake_resource.get("connection", {}).get("warehouse"),
-                "role": snowflake_resource.get("connection", {}).get("role"),
-                "tables": [
-                    table
-                    for resource in snowflake_resource.get("created_resources", [])
-                    for table in resource.get("tables", [])
-                ],
-            }
-        )
-
-    # Handle GitHub fixture updates
-    if "github_resource" in test_resources:
-        github_resource = test_resources["github_resource"]
-
-        # Update the github service config with fixture data
-        if "services" not in updated_configs:
-            updated_configs["services"] = {}
-        if "github" not in updated_configs["services"]:
-            updated_configs["services"]["github"] = {}
-
-        # Merge fixture data into github config
-        github_config = updated_configs["services"]["github"]
-        github_config.update(
-            {
-                "access_token": github_resource.get("access_token"),
-                "repo_url": github_resource.get("repo_url"),
-                "branch_name": github_resource.get("branch_name"),
-                "repo_info": github_resource.get("repo_info", {}),
-            }
-        )
-
-    # Add more fixture types here as needed (MongoDB, MySQL, etc.)
-
-    return updated_configs
+    # Always clean up Supabase account separately (legacy resource)
+    if "supabase_account_resource" in resources:
+        cleanup_supabase_account_resource(resources["supabase_account_resource"])
 
 
 def get_test_validator(test_name: str) -> callable:
@@ -724,3 +529,31 @@ def get_test_validator(test_name: str) -> callable:
             return False
 
     return generic_validator
+
+
+def create_config_from_fixtures(fixtures: List) -> Dict[str, Any]:
+    """
+    Helper function to create a complete config from multiple fixtures.
+
+    Args:
+        fixtures: List of DEBenchFixture instances with resource data populated
+
+    Returns:
+        Complete configuration dictionary with all fixture config sections
+    """
+    from Fixtures.base_fixture import DEBenchFixture
+
+    config = {"services": {}}
+
+    for fixture in fixtures:
+        if isinstance(fixture, DEBenchFixture):
+            try:
+                fixture_config = fixture.create_config_section()
+                # Merge the fixture's config section into the main config
+                config["services"].update(fixture_config)
+            except Exception as e:
+                print(
+                    f"⚠️  Warning: Could not create config for {fixture.get_resource_type()}: {e}"
+                )
+
+    return config
