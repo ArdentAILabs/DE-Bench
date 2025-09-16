@@ -7,10 +7,13 @@ from dotenv import load_dotenv
 from Environment.Kubernetes.Kubernetes import Kubernetes
 from kubernetes import client as k8s_client_sdk
 from Environment.File_Share.File_Share import create_file_share
+from braintrust import current_span
+from braintrust import traced
 
 load_dotenv()
 
 
+@traced(name="set_up_model_configs")
 def set_up_model_configs(Configs, custom_info=None):
     mode = (custom_info or {}).get("mode", "Ardent")
 
@@ -43,6 +46,9 @@ def set_up_model_configs(Configs, custom_info=None):
                         password=service_config["password"],
                         api_token=service_config["api_token"],
                         requirements_path=service_config["requirements_path"],
+                        header_overrides={
+                            "X-Braintrust-Exported-Parent-Span": current_span().export(),
+                        },
                     )
 
                 elif service == "mongodb":
@@ -57,6 +63,9 @@ def set_up_model_configs(Configs, custom_info=None):
                             config_type="mongodb",
                             connection_string=service_config["connection_string"],
                             databases=service_config["databases"],
+                            header_overrides={
+                                "X-Braintrust-Exported-Parent-Span": current_span().export(),
+                            },
                         )
                         print(f"✅ MongoDB config set successfully")
                     except Exception as e:
@@ -71,14 +80,29 @@ def set_up_model_configs(Configs, custom_info=None):
                         raise
 
                 elif service == "postgreSQL":
-                    service_result = Ardent_Client.set_config(
-                        config_type="postgreSQL",
-                        Hostname=service_config["hostname"],
-                        Port=service_config["port"],
-                        username=service_config["username"],
-                        password=service_config["password"],
-                        databases=service_config["databases"],
-                    )
+
+                    print(f"🔧 Setting up PostgreSQL config:")
+                    print(f"   Hostname: {service_config['hostname']}")
+                    print(f"   Port: {service_config['port']}")
+                    print(f"   Username: {service_config['username']}")
+                    print(f"   Password: {service_config['password']}")
+                    print(f"   Databases: {service_config['databases']}")
+
+                    try:
+                        service_result = Ardent_Client.set_config(
+                            config_type="postgreSQL",
+                            Hostname=service_config["hostname"],
+                            Port=service_config["port"],
+                            username=service_config["username"],
+                            password=service_config["password"],
+                            databases=service_config["databases"],
+                            header_overrides={
+                                "X-Braintrust-Exported-Parent-Span": current_span().export(),
+                            },
+                        )
+                    except Exception as e:
+                        print("EXCEPTION", e.response.text, e.response.__dict__)
+                        raise
 
                 elif service == "mysql":
                     service_result = Ardent_Client.set_config(
@@ -88,6 +112,9 @@ def set_up_model_configs(Configs, custom_info=None):
                         username=service_config["username"],
                         password=service_config["password"],
                         databases=service_config["databases"],
+                        header_overrides={
+                            "X-Braintrust-Exported-Parent-Span": current_span().export(),
+                        },
                     )
 
                 elif service == "tigerbeetle":
@@ -95,6 +122,9 @@ def set_up_model_configs(Configs, custom_info=None):
                         config_type="tigerbeetle",
                         cluster_id=service_config["cluster_id"],
                         replica_addresses=service_config["replica_addresses"],
+                        header_overrides={
+                            "X-Braintrust-Exported-Parent-Span": current_span().export(),
+                        },
                     )
 
                 elif service == "databricks":
@@ -112,6 +142,9 @@ def set_up_model_configs(Configs, custom_info=None):
                                 ],
                             }
                         ],
+                        header_overrides={
+                            "X-Braintrust-Exported-Parent-Span": current_span().export(),
+                        },
                     )
 
                 elif service == "snowflake":
@@ -123,6 +156,9 @@ def set_up_model_configs(Configs, custom_info=None):
                         warehouse=service_config["warehouse"],
                         role=service_config.get("role", "SYSADMIN"),
                         databases=[{"name": service_config["database"]}],
+                        header_overrides={
+                            "X-Braintrust-Exported-Parent-Span": current_span().export(),
+                        },
                     )
 
                 # Add the result to our results dictionary

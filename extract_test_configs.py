@@ -8,6 +8,7 @@ from typing_extensions import TypedDict, NotRequired
 from Fixtures.Supabase_Account.supabase_account_resource import supabase_client
 import requests
 import jwt
+from braintrust import traced
 
 # Type definitions for better code clarity and IDE support
 
@@ -60,6 +61,7 @@ class SupabaseAccountResource(TypedDict):
     jwt_token: NotRequired[str]
 
 
+@traced(name="extract_test_configuration")
 def extract_test_configuration(test_name: str) -> TestConfiguration:
     """Generic test configuration extraction for any test following the standard pattern"""
     try:
@@ -151,8 +153,7 @@ def get_resource_fixture(resource_type: str) -> Any:
         "mongo_resource": "Fixtures.MongoDB.mongo_resources.MongoDBFixture",
         "mysql_resource": "Fixtures.MySQL.mysql_resources.MySQLFixture",
         "airflow_resource": "Fixtures.Airflow.airflow_fixture.AirflowFixture",
-        # Future fixture classes:
-        # "postgres_resource": "Fixtures.PostgreSQL.postgres_resources.PostgreSQLFixture",
+        "postgresql_resource": "Fixtures.PostgreSQL.postgres_resources.PostgreSQLFixture",
     }
 
     if resource_type not in fixture_map:
@@ -337,6 +338,7 @@ def cleanup_test_resources_from_fixtures(
                 print(f"❌ Failed to clean up {resource_type}: {e}")
 
 
+@traced(name="setup_supabase_account_resource")
 def setup_supabase_account_resource(mode: str = "Ardent") -> SupabaseAccountResource:
     """Set up Supabase account resource"""
     print(f"Setting up Supabase account resource for mode: {mode}")
@@ -397,6 +399,7 @@ def setup_supabase_account_resource(mode: str = "Ardent") -> SupabaseAccountReso
     return response
 
 
+@traced(name="setup_test_resources")
 def setup_test_resources(
     resource_configs: Dict[str, Any], session_data: Dict[str, Any] = None
 ) -> Dict[str, Any]:
@@ -442,6 +445,7 @@ def setup_test_resources(
     return resources
 
 
+@traced(name="cleanup_supabase_account_resource")
 def cleanup_supabase_account_resource(
     supabase_resource_data: SupabaseAccountResource,
 ) -> None:
@@ -504,6 +508,83 @@ def cleanup_test_resources(
 
             except Exception as e:
                 print(f"Warning: Could not clean up {resource_key}: {e}")
+
+
+def update_configs_with_fixture_data(original_configs, test_resources):
+    """
+    Update test configs with data from fixture resources.
+
+    Args:
+        original_configs: The original test configs from Test_Configs.py
+        test_resources: The test resources containing fixture data
+
+    Returns:
+        Updated configs with fixture resource data merged in
+    """
+    updated_configs = original_configs.copy()
+
+    # Handle Airflow fixture updates
+    if "airflow_resource" in test_resources:
+        airflow_resource = test_resources["airflow_resource"]
+
+        # Update the airflow service config with fixture data
+        if "services" not in updated_configs:
+            updated_configs["services"] = {}
+        if "airflow" not in updated_configs["services"]:
+            updated_configs["services"]["airflow"] = {}
+
+        # Merge fixture data into airflow config
+        airflow_config = updated_configs["services"]["airflow"]
+        airflow_config.update(
+            {
+                "host": airflow_resource.get("base_url", airflow_config.get("host")),
+                "api_token": airflow_resource.get("api_token"),
+                "username": airflow_resource.get(
+                    "username", airflow_config.get("username")
+                ),
+                "password": airflow_resource.get(
+                    "password", airflow_config.get("password")
+                ),
+            }
+        )
+
+    # Handle PostgreSQL fixture updates
+    if "postgresql_resource" in test_resources:
+        postgresql_resource = test_resources["postgresql_resource"]
+        connection_params = postgresql_resource.get("connection_params", {})
+        created_resources = postgresql_resource.get("created_resources", [])
+
+        # Update the postgreSQL service config with fixture data
+        if "services" not in updated_configs:
+            updated_configs["services"] = {}
+        if "postgreSQL" not in updated_configs["services"]:
+            updated_configs["services"]["postgreSQL"] = {}
+
+        # Merge fixture data into postgresql config
+        postgres_config = updated_configs["services"]["postgreSQL"]
+        postgres_config.update(
+            {
+                "hostname": connection_params.get(
+                    "host", postgres_config.get("hostname")
+                ),
+                "port": connection_params.get("port", postgres_config.get("port")),
+                "username": connection_params.get(
+                    "user", postgres_config.get("username")
+                ),
+                "password": connection_params.get(
+                    "password", postgres_config.get("password")
+                ),
+                "databases": [
+                    {"name": db["name"]}
+                    for db in created_resources
+                    if db["type"] == "database"
+                ],
+            }
+        )
+
+    # Add more fixture types here as needed (MongoDB, MySQL, etc.)
+
+    return updated_configs
 
 
 def get_test_validator(test_name: str) -> callable:

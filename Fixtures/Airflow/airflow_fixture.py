@@ -23,11 +23,13 @@ from Fixtures.Airflow.airflow_resources import (
     _hibernate_deployment,
     _get_deployment_id_by_name,
     _create_astro_deployment_api_token,
-    _create_user_in_airflow_deployment,
+    _create_variables_in_airflow_deployment,
     _check_and_update_gh_secrets,
     _run_and_validate_subprocess,
     cleanup_airflow_resource,
 )
+
+from braintrust import traced
 
 
 class AirflowResourceConfig(TypedDict):
@@ -138,6 +140,7 @@ class AirflowFixture(
         # since they're managed by the Astronomer platform
         print("✅ Airflow session cleanup complete")
 
+    @traced(name="AirflowFixture.setup_resource")
     def setup_resource(
         self, resource_config: Optional[AirflowResourceConfig] = None
     ) -> AirflowResourceData:
@@ -230,7 +233,7 @@ class AirflowFixture(
                 api_token = api_token[api_token.find("\n") + 1 : -1].strip()
 
             # Create user in Airflow deployment
-            _create_user_in_airflow_deployment(astro_deployment_name)
+            _create_variables_in_airflow_deployment(astro_deployment_name)
 
             # Create and validate Airflow instance
             airflow_instance = Airflow_Local(
@@ -281,6 +284,7 @@ class AirflowFixture(
                 shutil.rmtree(test_dir)
             raise
 
+    @traced(name="AirflowFixture.teardown_resource")
     def teardown_resource(self, resource_data: AirflowResourceData) -> None:
         """Clean up individual Airflow resource"""
         resource_id = resource_data["resource_id"]
