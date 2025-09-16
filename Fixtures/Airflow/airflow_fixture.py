@@ -348,7 +348,7 @@ class AirflowFixture(
         requirements_path = resource_data.get(
             "requirements_path", os.getenv("AIRFLOW_REQUIREMENTS_PATH")
         )
-
+        api_token = resource_data.get("api_token", os.getenv("AIRFLOW_API_TOKEN"))
         # Use the base URL from resource data if available
         base_url = resource_data.get("base_url", "http://localhost:8080")
 
@@ -357,6 +357,7 @@ class AirflowFixture(
                 "github_token": github_token,
                 "repo": repo,
                 "dag_path": dag_path,
+                "api_token": api_token,
                 "requirements_path": requirements_path,
                 "host": base_url,
                 "username": "airflow",  # Standard Airflow username

@@ -111,7 +111,10 @@ def validate_test(model_result, fixtures=None):
             test_steps[0][
                 "Result_Message"
             ] = "❌ AI Agent task execution failed or returned no result"
-            return {"success": False, "test_steps": test_steps}
+            return {
+                "score": 0.0,
+                "metadata": {"test_steps": test_steps},
+            }
 
         test_steps[0]["status"] = "passed"
         test_steps[0][
@@ -147,6 +150,8 @@ def validate_test(model_result, fixtures=None):
             dag_url = f"{base_url}/api/v1/dags/{dag_name}"
             response = requests.get(dag_url, headers=api_headers, timeout=30)
 
+            print(f"Response: {response.json()}")
+
             if response.status_code == 200:
                 dag_info = response.json()
                 test_steps[1]["status"] = "passed"
@@ -158,14 +163,20 @@ def validate_test(model_result, fixtures=None):
                 test_steps[1][
                     "Result_Message"
                 ] = f"❌ DAG '{dag_name}' not found in Airflow (HTTP {response.status_code})"
-                return {"success": False, "test_steps": test_steps}
+                return {
+                    "score": 0.0,
+                    "metadata": {"test_steps": test_steps},
+                }
 
         except Exception as e:
             test_steps[1]["status"] = "failed"
             test_steps[1][
                 "Result_Message"
             ] = f"❌ Error checking DAG existence: {str(e)}"
-            return {"success": False, "test_steps": test_steps}
+            return {
+                "score": 0.0,
+                "metadata": {"test_steps": test_steps},
+            }
 
         # Step 3: Verify DAG structure for fact table tasks
         try:
