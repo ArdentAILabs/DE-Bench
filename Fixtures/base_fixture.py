@@ -55,6 +55,14 @@ class DEBenchFixture(ABC, Generic[ConfigT, ResourceT, SessionT]):
         """
         pass
 
+    def _setup_resource(self, resource_config: Optional[ConfigT] = None) -> ResourceT:
+        """
+        Set up and initialize the resource based on configuration.
+        """
+        resource_data = self.setup_resource(resource_config)
+        self._resource_data = resource_data
+        return resource_data
+
     @abstractmethod
     def teardown_resource(self, resource_data: ResourceT) -> None:
         """
