@@ -96,7 +96,7 @@ def validate_test(model_result, fixtures=None):
             test_steps[0][
                 "Result_Message"
             ] = "❌ AI Agent task execution failed or returned no result"
-            return {"success": False, "test_steps": test_steps}
+            return {"score": 0.0, "metadata": {"test_steps": test_steps}}
 
         print("🔍 Model result:")
         print(model_result)
@@ -214,4 +214,8 @@ def validate_test(model_result, fixtures=None):
                 step["status"] = "failed"
                 step["Result_Message"] = f"❌ PostgreSQL validation error: {str(e)}"
 
-    return {"success": overall_success, "test_steps": test_steps}
+    score = sum([step["status"] == "passed" for step in test_steps]) / len(test_steps)
+    return {
+        "score": score,
+        "metadata": {"test_steps": test_steps},
+    }

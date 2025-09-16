@@ -16,6 +16,7 @@ from extract_test_configs import (
     setup_session_fixtures,
     cleanup_session_fixtures,
 )
+import traceback
 
 # Note: set_up_model_configs and cleanup_model_artifacts are now used inside run_de_bench_task
 
@@ -420,24 +421,14 @@ def run_multi_test_evaluation(
                     validator = get_test_validator(test_name)
                     result = validator(model_result, expected, fixtures=fixtures)
 
-                    # Show test steps if available
-                    if isinstance(result, dict) and "test_steps" in result:
-                        print(f"📋 Test steps for {test_name}:")
-                        for step in result["test_steps"]:
-                            status_icon = (
-                                "✅"
-                                if step["status"] == "passed"
-                                else "❌" if step["status"] == "failed" else "⚠️"
-                            )
-                            print(f"   {status_icon} {step['name']}: {step['status']}")
-                        actual_result = result.get("success", False)
-                    else:
-                        actual_result = result
+                    print(f"✅ Score for {test_name}: {result['score']}")
+                    print(f"✅ Metadata for {test_name}: {result['metadata']}")
+                    return result
 
-                    print(f"✅ Validation result for {test_name}: {actual_result}")
-                    return actual_result
                 except Exception as e:
-                    print(f"❌ Validation error for {test_name}: {e}")
+                    print(
+                        f"❌ Validation error for {test_name}: {e}\n {traceback.format_exc()}"
+                    )
                     return False
                 finally:
                     # Clean up test resources after validation

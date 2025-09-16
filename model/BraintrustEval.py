@@ -152,26 +152,3 @@ def run_de_bench_task(test_input):
         else:
             _cleanup_test_resources_for_task(test_name, test_resources)
         raise
-
-
-def create_braintrust_scorer(validation_function):
-    """Convert DE-Bench validation to Braintrust scorer"""
-
-    def scorer(input, output, expected):
-        try:
-            # Run existing validation logic
-            score = validation_function(output, expected)
-
-            # If it's a bool, return 1.0 if score else 0.0
-            if isinstance(score, bool):
-                return 1.0 if score else 0.0
-            elif isinstance(score, float) or isinstance(score, int):
-                return score
-            else:
-                raise Exception(f"Invalid score type: {type(score)}")
-
-        except Exception as e:
-            print(f"Error in Braintrust scorer: {e}")
-            return None  # Failed validation
-
-    return scorer

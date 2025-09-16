@@ -376,9 +376,7 @@ class SnowflakeFixture(
                 "account": connection_params.get(
                     "account", os.getenv("SNOWFLAKE_ACCOUNT")
                 ),
-                "username": connection_params.get(
-                    "user", os.getenv("SNOWFLAKE_USERNAME")
-                ),
+                "user": connection_params.get("user", os.getenv("SNOWFLAKE_USERNAME")),
                 "password": connection_params.get(
                     "password", os.getenv("SNOWFLAKE_PASSWORD")
                 ),

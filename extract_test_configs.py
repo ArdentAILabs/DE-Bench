@@ -474,7 +474,14 @@ def get_test_validator(test_name: str) -> callable:
         try:
             # Check if the model execution was successful first
             if not output or output.get("status") == "failed":
-                return False
+                return {
+                    "name": test_name,
+                    "score": 0.0,
+                    "metadata": {
+                        "test_steps": [],
+                        "error": "Model execution failed",
+                    },
+                }
 
             # Dynamically import the validate_test function from the test file
             test_files = []
@@ -487,7 +494,14 @@ def get_test_validator(test_name: str) -> callable:
 
             if not test_files:
                 print(f"No test files found for {test_name}")
-                return False
+                return {
+                    "name": test_name,
+                    "score": 0.0,
+                    "metadata": {
+                        "test_steps": [],
+                        "error": "No test files found",
+                    },
+                }
 
             # Import the first test file found
             test_module_path = f"Tests.{test_name}.{test_files[0]}"
@@ -496,7 +510,14 @@ def get_test_validator(test_name: str) -> callable:
             # Get the validate_test function
             if not hasattr(test_module, "validate_test"):
                 print(f"No validate_test function found in {test_module_path}")
-                return False
+                return {
+                    "name": test_name,
+                    "score": 0.0,
+                    "metadata": {
+                        "test_steps": [],
+                        "error": "No validate_test function found",
+                    },
+                }
 
             validate_test = test_module.validate_test
 
@@ -505,11 +526,14 @@ def get_test_validator(test_name: str) -> callable:
 
             # validate_test should return either:
             # - A boolean (simple pass/fail)
-            # - A dict with 'success' boolean and 'test_steps' list
+            # - A dict with 'score' float and 'metadata' dict, with optional 'test_steps' list inside
             if isinstance(validation_result, bool):
-                return validation_result
+                return {
+                    "score": 1.0 if validation_result else 0.0,
+                    "metadata": {"test_steps": []},
+                }
             elif isinstance(validation_result, dict):
-                success = validation_result.get("success", False)
+                score = validation_result.get("score", 0.0)
                 test_steps = validation_result.get("test_steps", [])
 
                 # Log the test steps for debugging
@@ -519,14 +543,33 @@ def get_test_validator(test_name: str) -> callable:
                     name = step.get("name", "unnamed step")
                     print(f"   • {name}: {status}")
 
-                return success
+                return {
+                    "name": test_name,
+                    "score": score,
+                    "metadata": {"test_steps": test_steps},
+                }
             else:
                 print(f"Invalid validation result type: {type(validation_result)}")
-                return False
+                return {
+                    "name": test_name,
+                    "score": 0.0,
+                    "metadata": {
+                        "test_steps": [],
+                        "error": "Invalid validation result type: "
+                        + str(type(validation_result)),
+                    },
+                }
 
         except Exception as e:
             print(f"Validation error for {test_name}: {e}")
-            return False
+            return {
+                "name": test_name,
+                "score": 0.0,
+                "metadata": {
+                    "test_steps": [],
+                    "error": "Validation error: " + str(e),
+                },
+            }
 
     return generic_validator
 
