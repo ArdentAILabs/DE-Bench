@@ -4,6 +4,7 @@ import os
 import psycopg2
 import subprocess
 from psycopg2.extensions import ISOLATION_LEVEL_AUTOCOMMIT
+from braintrust import traced
 
 
 @pytest.fixture(scope="function")

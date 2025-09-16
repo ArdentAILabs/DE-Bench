@@ -27,9 +27,7 @@ def get_fixtures() -> List[DEBenchFixture]:
     This Airflow test validates that AI can create a sales fact table DAG pipeline.
     """
     from Fixtures.Airflow.airflow_fixture import AirflowFixture
-    from Fixtures.PostgreSQL.postgres_resources import (
-        PostgreSQLFixture,
-    )  # Assuming this exists
+    from Fixtures.PostgreSQL.postgres_resources import PostgreSQLFixture
 
     # Initialize Airflow fixture with test-specific configuration
     custom_airflow_config = {
@@ -50,12 +48,9 @@ def get_fixtures() -> List[DEBenchFixture]:
     }
 
     airflow_fixture = AirflowFixture(custom_config=custom_airflow_config)
+    postgres_fixture = PostgreSQLFixture(custom_config=custom_postgres_config)
 
-    # Note: Commenting out PostgreSQL for now since we don't have it converted yet
-    # postgres_fixture = PostgreSQLFixture(custom_config=custom_postgres_config)
-    # return [airflow_fixture, postgres_fixture]
-
-    return [airflow_fixture]
+    return [airflow_fixture, postgres_fixture]
 
 
 def validate_test(model_result, fixtures=None):
