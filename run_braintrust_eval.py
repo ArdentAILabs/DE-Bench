@@ -11,28 +11,26 @@ from dotenv import load_dotenv
 from model.BraintrustEval import run_de_bench_task
 from extract_test_configs import (
     extract_test_configuration,
-    setup_test_resources,
-    cleanup_test_resources,
     get_test_validator,
     discover_session_fixtures,
     setup_session_fixtures,
     cleanup_session_fixtures,
 )
-from model.Configure_Model import set_up_model_configs, cleanup_model_artifacts
+
+# Note: set_up_model_configs and cleanup_model_artifacts are now used inside run_de_bench_task
 
 # Load environment variables
 load_dotenv()
 
 # Global cleanup flag to prevent double cleanup
 cleanup_already_run = False
-active_resources = {}
 active_session_fixtures = []
 active_session_data = {}
 
 
 def cleanup_handler() -> None:
     """Cleanup function that runs on exit or interrupt - preserves existing logic"""
-    global cleanup_already_run, active_resources, active_session_fixtures, active_session_data
+    global cleanup_already_run, active_session_fixtures, active_session_data
 
     if cleanup_already_run:
         print("🔄 Cleanup already completed, skipping...")
@@ -41,16 +39,8 @@ def cleanup_handler() -> None:
     cleanup_already_run = True
 
     try:
-        # Clean up any active test resources
-        # Note: We don't have access to custom_fixtures in cleanup_handler,
-        # but resources should already be cleaned up in the main flow
-        if active_resources:
-            for test_name, resources in active_resources.items():
-                try:
-                    cleanup_test_resources(resources)  # Fall back to auto-detection
-                    print(f"✅ Emergency cleanup completed for {test_name}")
-                except Exception as e:
-                    print(f"❌ Emergency cleanup failed for {test_name}: {e}")
+        # Note: Per-test resources are now cleaned up inside run_de_bench_task
+        # Only session-level cleanup is needed here
 
         # Clean up session-level fixtures
         if active_session_fixtures:
@@ -122,6 +112,9 @@ def discover_available_tests(filter_patterns: Optional[List[str]] = None) -> Lis
         return filtered_tests
 
     return available_tests
+
+
+# Note: update_configs_with_fixture_data is now used inside run_de_bench_task
 
 
 def fetch_git_info() -> Dict[str, Any]:
@@ -223,7 +216,7 @@ def run_multi_test_evaluation(
     verbose: bool = False,
 ) -> Dict[str, Any]:
     """Run multiple tests as Braintrust evaluation for specified modes"""
-    global active_resources, active_session_fixtures, active_session_data
+    global active_session_fixtures, active_session_data
 
     # Set up signal handler for graceful cleanup
     signal.signal(signal.SIGINT, signal_handler)
@@ -246,13 +239,12 @@ def run_multi_test_evaluation(
 
     print(f"🚀 Starting DE-Bench Braintrust evaluation for tests: {test_names}...")
 
-    # Collect all test configurations and fixtures
+    # Collect all test configurations and discover session fixtures
     all_test_configs = []
-    all_resources = {}
     all_fixtures = []
 
     try:
-        # First pass: Extract configurations from all tests and collect fixtures
+        # First pass: Extract configurations from all tests and collect fixtures for session discovery
         for test_name in test_names:
             print(f"📋 Preparing {test_name}...")
 
@@ -263,7 +255,16 @@ def run_multi_test_evaluation(
             if "custom_fixtures" in test_data.get("resource_configs", {}):
                 all_fixtures.extend(test_data["resource_configs"]["custom_fixtures"])
 
-        # Discover and set up session-level fixtures
+            # Store base test configs (resources will be managed per-task now)
+            for case in test_data["test_cases"]:
+                all_test_configs.append(
+                    {
+                        "test_name": test_name,
+                        "case": case,
+                    }
+                )
+
+        # Discover and set up session-level fixtures only
         session_fixtures = discover_session_fixtures(all_fixtures)
         if session_fixtures:
             print(f"🌐 Found {len(session_fixtures)} session-level fixture types...")
@@ -274,32 +275,6 @@ def run_multi_test_evaluation(
             print("📝 No session-level fixtures required")
             active_session_data = {}
 
-        # Second pass: Set up individual test resources with session data
-        for test_name in test_names:
-            print(f"📋 Setting up resources for {test_name}...")
-
-            # Extract test configuration
-            test_data = extract_test_configuration(test_name)
-
-            # Set up resources for this test with session data
-            test_resources = setup_test_resources(
-                test_data["resource_configs"], session_data=active_session_data
-            )
-            all_resources[test_name] = test_resources
-
-            # Store test config for reuse across modes
-            for case in test_data["test_cases"]:
-                all_test_configs.append(
-                    {
-                        "test_name": test_name,
-                        "case": case,
-                        "test_resources": test_resources,
-                    }
-                )
-
-            print(f"✅ {test_name} resources set up successfully")
-
-        active_resources = all_resources
         results = {}
 
         # Run one experiment per mode
@@ -317,59 +292,14 @@ def run_multi_test_evaluation(
                     "input": {
                         **config["case"]["input"],
                         "mode": mode,
-                        "test_resources": config["test_resources"],
-                        "test_name": config[
-                            "test_name"
-                        ],  # Add test_name to input for easy access
+                        "test_name": config["test_name"],
+                        "session_data": active_session_data,  # Pass session data for per-task resource setup
                     },
                     "metadata": {**config["case"]["metadata"], "mode": mode},
                 }
                 mode_samples.append(sample)
 
-            # Set up model configs for tests that need them
-            for test_name in test_names:
-                if (
-                    mode == "Ardent"
-                    and "supabase_account_resource" in all_resources[test_name]
-                ):
-                    test_case = next(
-                        config["case"]
-                        for config in all_test_configs
-                        if config["test_name"] == test_name
-                    )
-
-                    print(
-                        f"🔧 Setting up model configs for {test_name} in {mode} mode..."
-                    )
-                    print(f"   Config being sent: {test_case['input']['configs']}")
-
-                    try:
-                        config_results = set_up_model_configs(
-                            Configs=test_case["input"]["configs"],
-                            custom_info={
-                                "mode": mode,
-                                "publicKey": all_resources[test_name][
-                                    "supabase_account_resource"
-                                ]["publicKey"],
-                                "secretKey": all_resources[test_name][
-                                    "supabase_account_resource"
-                                ]["secretKey"],
-                            },
-                        )
-                        print(f"✅ Model configs set up for {test_name} in {mode} mode")
-                    except Exception as e:
-                        print(f"❌ Failed to set up model configs for {test_name}:")
-                        print(f"   Error type: {type(e).__name__}")
-                        print(f"   Error message: {str(e)}")
-                        print(f"   Config data:")
-                        print(f"     - Test: {test_name}")
-                        print(f"     - Mode: {mode}")
-                        print(f"     - Configs: {test_case['input']['configs']}")
-
-                        # Don't continue - this is a critical error
-                        raise Exception(
-                            f"Model config setup failed for {test_name}: {str(e)}"
-                        )
+            # Note: Model config setup and per-test resource setup now happens inside run_de_bench_task
 
             # Create unified validator that can handle all test types
             def unified_validator(input, output, expected=None):
@@ -379,19 +309,14 @@ def run_multi_test_evaluation(
                     # Fallback: check in metadata if it exists
                     test_name = input.get("metadata", {}).get("test_name", "Unknown")
 
-                # Extract test resources/fixtures from input
-                test_resources = input.get("test_resources", {})
-
-                # Convert test_resources back to fixture instances for validation
-                fixtures = []
-                if "custom_fixtures" in test_resources:
-                    # Use the custom fixtures directly
-                    fixtures = test_resources["custom_fixtures"]
-
-                print(f"🔍 Validating test: {test_name} with {len(fixtures)} fixtures")
+                print(f"🔍 Validating test: {test_name}")
                 try:
+                    # Note: Validation with fixtures will be handled by creating a new fixture instance
+                    # inside the validator if needed, since resources are now managed per-task
                     validator = get_test_validator(test_name)
-                    result = validator(output, expected, fixtures=fixtures)
+                    result = validator(
+                        output, expected, fixtures=None
+                    )  # Fixtures will be created inside validator if needed
                     print(f"✅ Validation result for {test_name}: {result}")
                     return result
                 except Exception as e:
@@ -423,65 +348,13 @@ def run_multi_test_evaluation(
             print(f"✅ Completed {mode} experiment with {len(mode_samples)} samples")
             print(f"   Summary: {result.summary}")
 
-            # Clean up model artifacts for each test
-            for test_name in test_names:
-                if (
-                    mode == "Ardent"
-                    and "supabase_account_resource" in all_resources[test_name]
-                ):
-                    try:
-                        test_case = next(
-                            config["case"]
-                            for config in all_test_configs
-                            if config["test_name"] == test_name
-                        )
-                        cleanup_model_artifacts(
-                            Configs=test_case["input"]["configs"],
-                            custom_info={
-                                "mode": mode,
-                                "publicKey": all_resources[test_name][
-                                    "supabase_account_resource"
-                                ]["publicKey"],
-                                "secretKey": all_resources[test_name][
-                                    "supabase_account_resource"
-                                ]["secretKey"],
-                            },
-                        )
-                        print(f"✅ Model artifacts cleaned up for {test_name}")
-                    except Exception as e:
-                        print(
-                            f"⚠️ Error cleaning up model artifacts for {test_name}: {e}"
-                        )
+            # Note: Model artifacts and test resources are now cleaned up inside run_de_bench_task
 
         return results
 
     finally:
-        # Clean up all resources
-        print("\n🧹 Cleaning up all test resources...")
-        for test_name, resources in all_resources.items():
-            try:
-                # Get custom fixtures if they exist
-                test_config = next(
-                    (
-                        config
-                        for config in all_test_configs
-                        if config["test_name"] == test_name
-                    ),
-                    None,
-                )
-                custom_fixtures = (
-                    test_config["case"]["metadata"].get("custom_fixtures")
-                    if test_config
-                    else None
-                )
-
-                cleanup_test_resources(resources, custom_fixtures)
-                print(f"✅ Cleaned up {test_name}")
-            except Exception as e:
-                print(f"❌ Error cleaning up {test_name}: {e}")
-
-        active_resources = {}
-        print("✅ All test resources cleaned up")
+        # Note: Per-test resource cleanup now happens inside run_de_bench_task
+        # Only session-level cleanup is needed here
 
         # Clean up session-level fixtures
         if active_session_fixtures:

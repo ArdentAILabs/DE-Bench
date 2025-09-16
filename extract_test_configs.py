@@ -154,6 +154,8 @@ def get_resource_fixture(resource_type: str) -> Any:
         "mysql_resource": "Fixtures.MySQL.mysql_resources.MySQLFixture",
         "airflow_resource": "Fixtures.Airflow.airflow_fixture.AirflowFixture",
         "postgresql_resource": "Fixtures.PostgreSQL.postgres_resources.PostgreSQLFixture",
+        "snowflake_resource": "Fixtures.Snowflake.snowflake_fixture.SnowflakeFixture",
+        "github_resource": "Fixtures.GitHub.github_fixture.GitHubFixture",
     }
 
     if resource_type not in fixture_map:
@@ -582,6 +584,54 @@ def update_configs_with_fixture_data(original_configs, test_resources):
             }
         )
 
+    # Handle Snowflake fixture updates
+    if "snowflake_resource" in test_resources:
+        snowflake_resource = test_resources["snowflake_resource"]
+
+        # Update the snowflake service config with fixture data
+        if "services" not in updated_configs:
+            updated_configs["services"] = {}
+        if "snowflake" not in updated_configs["services"]:
+            updated_configs["services"]["snowflake"] = {}
+
+        # Merge fixture data into snowflake config
+        snowflake_config = updated_configs["services"]["snowflake"]
+        snowflake_config.update(
+            {
+                "database": snowflake_resource.get("database"),
+                "schema": snowflake_resource.get("schema"),
+                "account": snowflake_resource.get("connection", {}).get("account"),
+                "warehouse": snowflake_resource.get("connection", {}).get("warehouse"),
+                "role": snowflake_resource.get("connection", {}).get("role"),
+                "tables": [
+                    table
+                    for resource in snowflake_resource.get("created_resources", [])
+                    for table in resource.get("tables", [])
+                ],
+            }
+        )
+
+    # Handle GitHub fixture updates
+    if "github_resource" in test_resources:
+        github_resource = test_resources["github_resource"]
+
+        # Update the github service config with fixture data
+        if "services" not in updated_configs:
+            updated_configs["services"] = {}
+        if "github" not in updated_configs["services"]:
+            updated_configs["services"]["github"] = {}
+
+        # Merge fixture data into github config
+        github_config = updated_configs["services"]["github"]
+        github_config.update(
+            {
+                "access_token": github_resource.get("access_token"),
+                "repo_url": github_resource.get("repo_url"),
+                "branch_name": github_resource.get("branch_name"),
+                "repo_info": github_resource.get("repo_info", {}),
+            }
+        )
+
     # Add more fixture types here as needed (MongoDB, MySQL, etc.)
 
     return updated_configs
@@ -603,7 +653,7 @@ def get_test_validator(test_name: str) -> callable:
 
             # Dynamically import the validate_test function from the test file
             test_files = []
-            test_dir = f"Tests/{test_name}"
+            test_dir = f"{os.path.dirname(os.path.abspath(__file__))}/Tests/{test_name}"
 
             # Find test files in the directory
             for file in os.listdir(test_dir):
