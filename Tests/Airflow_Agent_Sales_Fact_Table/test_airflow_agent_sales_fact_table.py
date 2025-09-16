@@ -42,7 +42,7 @@ def get_fixtures() -> List[DEBenchFixture]:
         "databases": [
             {
                 "name": f"sales_data_{test_timestamp}_{test_uuid}",
-                "sql_file": "schema.sql",
+                "sql_file": f"{os.path.dirname(os.path.abspath(__file__))}/schema.sql",
             }
         ],
     }
