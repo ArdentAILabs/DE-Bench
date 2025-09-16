@@ -6,7 +6,7 @@ import importlib
 import time
 import psycopg2
 import uuid
-from typing import List
+from typing import List, Dict, Any
 from Fixtures.base_fixture import DEBenchFixture
 
 # Dynamic config loading
@@ -34,13 +34,24 @@ def get_fixtures() -> List[DEBenchFixture]:
         "databases": [
             {
                 "name": f"add_multiple_record_ambigious_test_db_{test_timestamp}_{test_uuid}_{test_timestamp}_{test_uuid}",
-                "sql_file": "schema.sql"
+                "sql_file": "schema.sql",
             }
-        ]
+        ],
     }
 
     postgres_fixture = PostgreSQLFixture(custom_config=custom_postgres_config)
     return [postgres_fixture]
+
+
+def create_config(fixtures: List[DEBenchFixture]) -> Dict[str, Any]:
+    """
+    Create test-specific config using the set-up fixtures.
+    This function has access to all fixture data after setup.
+    """
+    from extract_test_configs import create_config_from_fixtures
+
+    # Use the helper to automatically create config from all fixtures
+    return create_config_from_fixtures(fixtures)
 
 
 def validate_test(model_result, fixtures=None):
@@ -73,7 +84,7 @@ def validate_test(model_result, fixtures=None):
             "description": "Verify data integrity and relationships are preserved",
             "status": "running",
             "Result_Message": "Validating data integrity and relationships...",
-        }
+        },
     ]
 
     overall_success = False
@@ -82,11 +93,22 @@ def validate_test(model_result, fixtures=None):
         # Step 1: Check that the agent task executed
         if not model_result or model_result.get("status") == "failed":
             test_steps[0]["status"] = "failed"
-            test_steps[0]["Result_Message"] = "❌ AI Agent task execution failed or returned no result"
-            return {"success": False, "test_steps": test_steps}
+            test_steps[0][
+                "Result_Message"
+            ] = "❌ AI Agent task execution failed or returned no result"
+            # Calculate score as the fraction of steps that passed
+            score = sum([step["status"] == "passed" for step in test_steps]) / len(
+                test_steps
+            )
+            return {
+                "score": score,
+                "metadata": {"test_steps": test_steps},
+            }
 
         test_steps[0]["status"] = "passed"
-        test_steps[0]["Result_Message"] = "✅ AI Agent completed task execution successfully"
+        test_steps[0][
+            "Result_Message"
+        ] = "✅ AI Agent completed task execution successfully"
 
         # Use fixture to get PostgreSQL connection for validation
         postgres_fixture = None
@@ -116,10 +138,12 @@ def validate_test(model_result, fixtures=None):
             # For now, just check that the database is accessible
             db_cursor.execute("SELECT 1")
             result = db_cursor.fetchone()
-            
+
             if result:
                 test_steps[1]["status"] = "passed"
-                test_steps[1]["Result_Message"] = "✅ Database is accessible and functional"
+                test_steps[1][
+                    "Result_Message"
+                ] = "✅ Database is accessible and functional"
                 test_steps[2]["status"] = "passed"
                 test_steps[2]["Result_Message"] = "✅ Basic data integrity confirmed"
                 overall_success = True
@@ -138,4 +162,9 @@ def validate_test(model_result, fixtures=None):
                 step["status"] = "failed"
                 step["Result_Message"] = f"❌ PostgreSQL validation error: {str(e)}"
 
-    return {"success": overall_success, "test_steps": test_steps}
+    # Calculate score as the fraction of steps that passed
+    score = sum([step["status"] == "passed" for step in test_steps]) / len(test_steps)
+    return {
+        "score": score,
+        "metadata": {"test_steps": test_steps},
+    }

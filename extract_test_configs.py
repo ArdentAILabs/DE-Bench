@@ -475,7 +475,7 @@ def get_test_validator(test_name: str) -> callable:
             # Check if the model execution was successful first
             if not output or output.get("status") == "failed":
                 return {
-                    "name": test_name,
+                    "name": "validator",
                     "score": 0.0,
                     "metadata": {
                         "test_steps": [],
@@ -511,7 +511,7 @@ def get_test_validator(test_name: str) -> callable:
             if not hasattr(test_module, "validate_test"):
                 print(f"No validate_test function found in {test_module_path}")
                 return {
-                    "name": test_name,
+                    "name": "validator",
                     "score": 0.0,
                     "metadata": {
                         "test_steps": [],
@@ -534,7 +534,7 @@ def get_test_validator(test_name: str) -> callable:
                 }
             elif isinstance(validation_result, dict):
                 score = validation_result.get("score", 0.0)
-                test_steps = validation_result.get("test_steps", [])
+                test_steps = validation_result.get("metadata", {}).get("test_steps", [])
 
                 # Log the test steps for debugging
                 print(f"📋 Test steps for {test_name}:")
@@ -544,14 +544,14 @@ def get_test_validator(test_name: str) -> callable:
                     print(f"   • {name}: {status}")
 
                 return {
-                    "name": test_name,
+                    "name": "validator",
                     "score": score,
-                    "metadata": {"test_steps": test_steps},
+                    "metadata": validation_result.get("metadata", {}),
                 }
             else:
                 print(f"Invalid validation result type: {type(validation_result)}")
                 return {
-                    "name": test_name,
+                    "name": "validator",
                     "score": 0.0,
                     "metadata": {
                         "test_steps": [],
@@ -563,7 +563,7 @@ def get_test_validator(test_name: str) -> callable:
         except Exception as e:
             print(f"Validation error for {test_name}: {e}")
             return {
-                "name": test_name,
+                "name": "validator",
                 "score": 0.0,
                 "metadata": {
                     "test_steps": [],

@@ -199,4 +199,9 @@ def validate_test(model_result, fixtures=None):
                 step["status"] = "failed"
                 step["Result_Message"] = f"❌ Snowflake validation error: {str(e)}"
 
-    return {"success": overall_success, "test_steps": test_steps}
+    # Calculate score as the fraction of steps that passed
+    score = sum([step["status"] == "passed" for step in test_steps]) / len(test_steps)
+    return {
+        "score": score,
+        "metadata": {"test_steps": test_steps},
+    }

@@ -18,8 +18,8 @@ Create an Airflow DAG that:
 2. Runs the stored procedure daily at midnight
 3. Has a single task named 'deduplicate_users'
 4. Name the DAG 'user_deduplication_dag'
-5. Create it in a branch called 'BRANCH_NAME'
-6. Name the PR 'PR_NAME'
+5. Create it in a branch called 'BRANCH_NAME_AGENT_DATABASE_DEDUPLICATION'
+6. Name the PR 'PR_NAME_AGENT_DATABASE_DEDUPLICATION'
 """
 
 # Configuration for database and services
@@ -40,7 +40,9 @@ Configs = {
             "port": os.getenv("POSTGRES_PORT"),
             "username": os.getenv("POSTGRES_USERNAME"),
             "password": os.getenv("POSTGRES_PASSWORD"),
-            "databases": [{"name": "user_data"}],  # Will be updated with actual database name from fixture
-        }
+            "databases": [
+                {"name": "user_data"}
+            ],  # Will be updated with actual database name from fixture
+        },
     }
 }

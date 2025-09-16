@@ -23,6 +23,7 @@ class PostgreSQLDatabaseConfig(TypedDict):
 class PostgreSQLResourceConfig(TypedDict):
     resource_id: str
     databases: List[PostgreSQLDatabaseConfig]
+    test_module_path: Optional[str]
 
 
 class PostgreSQLDatabaseData(TypedDict):

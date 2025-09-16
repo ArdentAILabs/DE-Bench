@@ -6,7 +6,7 @@ import importlib
 import time
 import psycopg2
 import uuid
-from typing import List
+from typing import List, Dict, Any
 from Fixtures.base_fixture import DEBenchFixture
 
 # Dynamic config loading
@@ -41,6 +41,17 @@ def get_fixtures() -> List[DEBenchFixture]:
 
     postgres_fixture = PostgreSQLFixture(custom_config=custom_postgres_config)
     return [postgres_fixture]
+
+
+def create_config(fixtures: List[DEBenchFixture]) -> Dict[str, Any]:
+    """
+    Create test-specific config using the set-up fixtures.
+    This function has access to all fixture data after setup.
+    """
+    from extract_test_configs import create_config_from_fixtures
+
+    # Use the helper to automatically create config from all fixtures
+    return create_config_from_fixtures(fixtures)
 
 
 def validate_test(model_result, fixtures=None):
@@ -90,7 +101,14 @@ def validate_test(model_result, fixtures=None):
             test_steps[0][
                 "Result_Message"
             ] = "❌ AI Agent task execution failed or returned no result"
-            return {"success": False, "test_steps": test_steps}
+            # Calculate score as the fraction of steps that passed
+            score = sum([step["status"] == "passed" for step in test_steps]) / len(
+                test_steps
+            )
+            return {
+                "score": score,
+                "metadata": {"test_steps": test_steps},
+            }
 
         test_steps[0]["status"] = "passed"
         test_steps[0][
@@ -243,4 +261,9 @@ def validate_test(model_result, fixtures=None):
                 step["status"] = "failed"
                 step["Result_Message"] = f"❌ PostgreSQL validation error: {str(e)}"
 
-    return {"success": overall_success, "test_steps": test_steps}
+    # Calculate score as the fraction of steps that passed
+    score = sum([step["status"] == "passed" for step in test_steps]) / len(test_steps)
+    return {
+        "score": score,
+        "metadata": {"test_steps": test_steps},
+    }

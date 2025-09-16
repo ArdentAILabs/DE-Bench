@@ -129,4 +129,9 @@ def validate_test(model_result, fixtures=None):
         test_steps[0]["status"] = "failed"
         test_steps[0]["Result_Message"] = f"❌ Database validation error: {str(e)}"
 
-    return {"success": success, "test_steps": test_steps}
+    # Calculate score as the fraction of steps that passed
+    score = sum([step["status"] == "passed" for step in test_steps]) / len(test_steps)
+    return {
+        "score": score,
+        "metadata": {"test_steps": test_steps},
+    }
