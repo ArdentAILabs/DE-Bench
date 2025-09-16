@@ -37,8 +37,8 @@ def get_fixtures() -> List[DEBenchFixture]:
             "bucket_url": "s3://de-bench/",
             "s3_key": "v1/users_simple_20250901_233609.parquet",
             "aws_key_id": "env:AWS_ACCESS_KEY",
-            "aws_secret_key": "env:AWS_SECRET_KEY"
-        }
+            "aws_secret_key": "env:AWS_SECRET_KEY",
+        },
     }
 
     snowflake_fixture = SnowflakeFixture(custom_config=custom_snowflake_config)
@@ -51,7 +51,7 @@ def create_config(fixtures: List[DEBenchFixture]) -> Dict[str, Any]:
     This function has access to all fixture data after setup.
     """
     from extract_test_configs import create_config_from_fixtures
-    
+
     # Use the helper to automatically create config from all fixtures
     return create_config_from_fixtures(fixtures)
 
@@ -164,7 +164,7 @@ def validate_test(model_result, fixtures=None):
                 "CITY": "Austin",
                 "STATE": "TX",
                 "ACTIVE": True,
-                "PURCHASES": 0.00
+                "PURCHASES": 0.00,
             }
 
             # Check each field
@@ -172,7 +172,9 @@ def validate_test(model_result, fixtures=None):
             for i, (field, expected) in enumerate(expected_values.items()):
                 actual = record[i]
                 if actual != expected:
-                    validation_errors.append(f"{field}: expected {expected}, got {actual}")
+                    validation_errors.append(
+                        f"{field}: expected {expected}, got {actual}"
+                    )
 
             if validation_errors:
                 test_steps[2]["status"] = "failed"
