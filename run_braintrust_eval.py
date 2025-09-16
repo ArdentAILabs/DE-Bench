@@ -92,9 +92,6 @@ def discover_available_tests(filter_patterns: Optional[List[str]] = None) -> Lis
     Returns:
         List of test names that match the filter patterns (if any)
     """
-    import importlib
-    import inspect
-
     available_tests = []
     tests_dir = "Tests"
 
@@ -151,6 +148,8 @@ def _is_valid_new_pattern_test(test_name: str) -> bool:
     Returns:
         True if test follows new pattern, False otherwise
     """
+    import importlib
+
     try:
         # Check if Test_Configs.py exists and has User_Input
         config_module_path = f"Tests.{test_name}.Test_Configs"
