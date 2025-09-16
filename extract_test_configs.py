@@ -3,7 +3,7 @@ import importlib
 import importlib.util
 import time
 import uuid
-from typing import Dict, List, Any, Optional, Union
+from typing import Dict, List, Any, Optional, Union, Tuple
 from typing_extensions import TypedDict, NotRequired
 from Fixtures.Supabase_Account.supabase_account_resource import supabase_client
 import requests
@@ -86,15 +86,26 @@ def extract_test_configuration(test_name: str) -> TestConfiguration:
                 test_module_path = f"Tests.{test_name}.{test_files[0]}"
                 test_module = importlib.import_module(test_module_path)
 
-                # Check if test defines its own fixtures
+                # Check if test defines its own fixtures and config creation
                 if hasattr(test_module, "get_fixtures"):
                     custom_fixtures = test_module.get_fixtures()
                     print(
                         f"📦 {test_name} provides custom fixtures: {[f.get_resource_type() for f in custom_fixtures]}"
                     )
 
+                    # Check if test also provides its own config creation function
+                    create_config_func = None
+                    if hasattr(test_module, "create_config"):
+                        create_config_func = test_module.create_config
+                        print(
+                            f"⚙️  {test_name} provides custom config creation function"
+                        )
+
                     # If custom fixtures are provided, we don't need to auto-detect resources
-                    resource_configs = {"custom_fixtures": custom_fixtures}
+                    resource_configs = {
+                        "custom_fixtures": custom_fixtures,
+                        "create_config_func": create_config_func,
+                    }
                 else:
                     # This test hasn't been converted to the new pattern yet
                     print(
@@ -115,8 +126,11 @@ def extract_test_configuration(test_name: str) -> TestConfiguration:
         test_function_name = get_test_function_name(test_name)
 
         # Create the test case data
+        # For tests with create_config function, use empty configs (will be created dynamically)
+        base_configs = getattr(Test_Configs, "Configs", {})
+
         test_case = {
-            "input": {"task": Test_Configs.User_Input, "configs": Test_Configs.Configs},
+            "input": {"task": Test_Configs.User_Input, "configs": base_configs},
             "metadata": {
                 "test_name": test_name,
                 "test_function": test_function_name,
@@ -264,7 +278,7 @@ def setup_test_resources_from_fixtures(
     fixtures: List[Any],
     fixture_configs: Dict[str, Any] = None,
     session_data: Dict[str, Any] = None,
-) -> Dict[str, Any]:
+) -> Tuple[Dict[str, Any], List[Any]]:
     """
     Set up test resources from a provided list of DEBenchFixture instances.
     This allows tests to provide their own initialized fixture objects.
@@ -275,7 +289,9 @@ def setup_test_resources_from_fixtures(
         session_data: Optional session data from session-level fixtures
 
     Returns:
-        Dictionary mapping resource_type -> resource_data
+        Tuple of (resource_data_dict, fixture_instances_list)
+        - resource_data_dict: Dictionary mapping resource_type -> resource_data
+        - fixture_instances_list: List of fixture instances with _resource_data set
     """
     from Fixtures.base_fixture import DEBenchFixture
 
@@ -307,11 +323,12 @@ def setup_test_resources_from_fixtures(
                 resource_data = fixture.setup_resource(config)
                 print(f"✅ Set up {resource_type} using provided fixture")
 
+            # Store resource data in the fixture AND the resources dict
             resources[resource_type] = resource_data
         except Exception as e:
             print(f"❌ Failed to set up {resource_type}: {e}")
 
-    return resources
+    return resources, fixtures
 
 
 def cleanup_test_resources_from_fixtures(
@@ -404,10 +421,11 @@ def setup_supabase_account_resource(mode: str = "Ardent") -> SupabaseAccountReso
 @traced(name="setup_test_resources")
 def setup_test_resources(
     resource_configs: Dict[str, Any], session_data: Dict[str, Any] = None
-) -> Dict[str, Any]:
+) -> Tuple[Dict[str, Any], List[Any]]:
     """Generic setup for all test resources using DEBenchFixture instances"""
     resources = {}
     session_data = session_data or {}
+    fixtures = []
 
     # Check if test provides custom fixtures
     if "custom_fixtures" in resource_configs and resource_configs["custom_fixtures"]:
@@ -417,12 +435,13 @@ def setup_test_resources(
         resources["supabase_account_resource"] = setup_supabase_account_resource()
 
         # Set up custom fixtures with session data
-        fixture_resources = setup_test_resources_from_fixtures(
+        fixture_resources, fixture_instances = setup_test_resources_from_fixtures(
             custom_fixtures, session_data=session_data
         )
         resources.update(fixture_resources)
+        fixtures.extend(fixture_instances)
 
-        return resources
+        return resources, fixtures
 
     # Fall back to auto-detected resource setup
     for resource_key, resource_config in resource_configs.items():
@@ -440,11 +459,12 @@ def setup_test_resources(
                 # Use the fixture to set up the resource
                 resource_data = fixture.setup_resource(resource_config)
                 resources[resource_key] = resource_data
+                fixtures.append(fixture)
 
             except Exception as e:
                 print(f"Warning: Could not set up {resource_key}: {e}")
 
-    return resources
+    return resources, fixtures
 
 
 @traced(name="cleanup_supabase_account_resource")

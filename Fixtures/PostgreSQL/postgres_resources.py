@@ -187,18 +187,33 @@ class PostgreSQLFixture(
         """Load SQL file into the specified database"""
         # Resolve SQL file path
         if not os.path.isabs(sql_file):
-            # Look for SQL file relative to the test directory
-            # For now, use current working directory as fallback
-            sql_file_path = Path(sql_file)
-            if not sql_file_path.exists():
-                # Try to find it in test directories
-                for test_dir in Path("Tests").glob("**/"):
-                    potential_path = test_dir / sql_file
-                    if potential_path.exists():
-                        sql_file = str(potential_path)
-                        break
+            # First, try to get the test module path from custom config
+            if (
+                hasattr(self, "custom_config")
+                and self.custom_config
+                and "test_module_path" in self.custom_config
+            ):
+                test_module_path = self.custom_config["test_module_path"]
+                test_dir = os.path.dirname(test_module_path)
+                sql_file_path = os.path.join(test_dir, sql_file)
+                if os.path.exists(sql_file_path):
+                    sql_file = sql_file_path
                 else:
-                    raise FileNotFoundError(f"SQL file not found: {sql_file}")
+                    raise FileNotFoundError(
+                        f"SQL file not found in test directory: {sql_file_path}"
+                    )
+            else:
+                # Fallback: Look for SQL file relative to current working directory first
+                sql_file_path = Path(sql_file)
+                if not sql_file_path.exists():
+                    # Try to find it in test directories
+                    for test_dir in Path("Tests").glob("**/"):
+                        potential_path = test_dir / sql_file
+                        if potential_path.exists():
+                            sql_file = str(potential_path)
+                            break
+                    else:
+                        raise FileNotFoundError(f"SQL file not found: {sql_file}")
 
         if not os.path.exists(sql_file):
             raise FileNotFoundError(f"SQL file not found: {sql_file}")
@@ -223,6 +238,7 @@ class PostgreSQLFixture(
             "-f",
             sql_file,
             "--quiet",
+            "--set=sslmode=require",
         ]
 
         try:

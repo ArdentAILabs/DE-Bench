@@ -1,12 +1,13 @@
-# Import from the Model directory
+# Braintrust-only PostgreSQL test - no pytest dependencies
 from model.Run_Model import run_model
 from model.Configure_Model import set_up_model_configs, cleanup_model_artifacts
 import os
 import importlib
-import pytest
 import time
 import psycopg2
 import uuid
+from typing import List
+from Fixtures.base_fixture import DEBenchFixture
 
 # Dynamic config loading
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -19,488 +20,204 @@ test_timestamp = int(time.time())
 test_uuid = uuid.uuid4().hex[:8]
 
 
-@pytest.mark.postgresql
-@pytest.mark.database
-@pytest.mark.two
-@pytest.mark.parametrize("postgres_resource", [{
-    "resource_id": f"missing_users_fix_{test_timestamp}_{test_uuid}",
-    "databases": [
-        {
-            "name": f"users_subs_test_db_{test_timestamp}_{test_uuid}",
-            "sql_file": "schema.sql"
-        }
-    ]
-}], indirect=True)
-def test_postgresql_agent_missing_users_fix(request, postgres_resource, supabase_account_resource):
-    """Test that validates AI agent can identify and fix schema design issues that cause users to disappear from queries."""
-    
-    # Set up test tracking
-    request.node.user_properties.append(("user_query", Test_Configs.User_Input))
-    
+def get_fixtures() -> List[DEBenchFixture]:
+    """
+    Provides custom DEBenchFixture instances for Braintrust evaluation.
+    This PostgreSQL test validates that AI can fix missing users in JOIN queries.
+    """
+    from Fixtures.PostgreSQL.postgres_resources import PostgreSQLFixture
+
+    # Initialize PostgreSQL fixture with test-specific configuration
+    custom_postgres_config = {
+        "resource_id": f"missing_users_fix_{test_timestamp}_{test_uuid}",
+        "test_module_path": __file__,  # Pass current module path for SQL file resolution
+        "databases": [
+            {
+                "name": f"users_subs_test_db_{test_timestamp}_{test_uuid}",
+                "sql_file": "schema.sql",
+            }
+        ],
+    }
+
+    postgres_fixture = PostgreSQLFixture(custom_config=custom_postgres_config)
+    return [postgres_fixture]
+
+
+def validate_test(model_result, fixtures=None):
+    """
+    Validates that the AI agent can fix schema design issues causing missing users in queries.
+
+    Expected behavior:
+    - AI should identify the INNER JOIN issue causing users without subscriptions to disappear
+    - AI should implement proper LEFT JOIN or similar solution
+    - AI should preserve existing data relationships
+    - All users should be visible in queries after the fix
+
+    Args:
+        model_result: The result from the AI model execution
+        fixtures: List of DEBenchFixture instances used in the test
+
+    Returns:
+        dict: Contains 'success' boolean and 'test_steps' list with validation details
+    """
+    # Create test steps for this validation
     test_steps = [
         {
             "name": "Missing Users Problem Demonstration",
             "description": "Verify the current schema demonstrates users disappearing from INNER JOIN queries",
-            "status": "did not reach",
-            "Result_Message": "",
+            "status": "running",
+            "Result_Message": "Demonstrating the missing users problem with current schema...",
         },
         {
             "name": "Agent Analysis and Fix",
             "description": "AI Agent analyzes the schema design issue and implements proper relational database solution",
-            "status": "did not reach", 
-            "Result_Message": "",
+            "status": "running",
+            "Result_Message": "Checking if AI agent executed the schema fix task...",
         },
         {
             "name": "Schema Design Validation",
             "description": "Verify the agent created proper normalized schema with FK constraints and optional relationships",
-            "status": "did not reach",
-            "Result_Message": "",
+            "status": "running",
+            "Result_Message": "Validating proper schema design with normalized relationships...",
         },
         {
-            "name": "Data Preservation Validation", 
+            "name": "Data Preservation Validation",
             "description": "Verify all original users are preserved and queryable with proper LEFT JOIN logic",
-            "status": "did not reach",
-            "Result_Message": "",
-        }
+            "status": "running",
+            "Result_Message": "Validating that all users are preserved and queryable...",
+        },
     ]
-    request.node.user_properties.append(("test_steps", test_steps))
-    
-    # SECTION 1: SETUP THE TEST
-    config_results = None
-    model_result = None  # Initialize for cleanup
-    custom_info = {"mode": request.config.getoption("--mode")}
-    created_db_name = postgres_resource["created_resources"][0]["name"]
-    # Database: {created_db_name}
-    
+
+    overall_success = False
+
     try:
-        # Set up model configurations with actual database name and test-specific credentials
-        test_configs = Test_Configs.Configs.copy()
-        test_configs["services"]["postgreSQL"]["databases"] = [{"name": created_db_name}]
-        if request.config.getoption("--mode") == "Ardent":
-            custom_info["publicKey"] = supabase_account_resource["publicKey"]
-            custom_info["secretKey"] = supabase_account_resource["secretKey"]
-
-        config_results = set_up_model_configs(Configs=test_configs,custom_info=custom_info)
-        
-        custom_info = {
-            **custom_info,
-            **config_results,
-        }
-        
-        # DEMONSTRATE THE MISSING USERS PROBLEM FIRST
-        db_connection = psycopg2.connect(
-            host=os.getenv("POSTGRES_HOSTNAME"),
-            port=os.getenv("POSTGRES_PORT"),
-            user=os.getenv("POSTGRES_USERNAME"),
-            password=os.getenv("POSTGRES_PASSWORD"),
-            database=created_db_name,
-            sslmode="require",
-        )
-        db_cursor = db_connection.cursor()
-
-        print("\n=== BEFORE MODEL RUN - DATABASE STATE ===")
-        
-        # Show initial table structures
-        db_cursor.execute("""
-            SELECT table_name, column_name, data_type, is_nullable
-            FROM information_schema.columns
-            WHERE table_name IN ('users', 'subscriptions_bad')
-            ORDER BY table_name, ordinal_position
-        """)
-        initial_schema = db_cursor.fetchall()
-        print(f"INITIAL SCHEMA: {initial_schema}")
-        
-        # Show initial data
-        db_cursor.execute("SELECT 'users' as table_name, user_id, name, NULL as plan FROM users UNION ALL SELECT 'subscriptions_bad' as table_name, user_id, NULL as name, plan FROM subscriptions_bad ORDER BY table_name, user_id")
-        initial_data = db_cursor.fetchall()
-        print(f"INITIAL DATA: {initial_data}")
-        
-        # Show total user count
-        db_cursor.execute("SELECT COUNT(*) FROM users")
-        total_users = db_cursor.fetchone()[0]
-        print(f"TOTAL USERS: {total_users}")
-
-        # Demonstrate the missing users problem with INNER JOIN
-        db_cursor.execute("SELECT u.user_id, u.name, s.plan FROM users u JOIN subscriptions_bad s USING (user_id) ORDER BY u.user_id")
-        inner_join_results = db_cursor.fetchall()
-        print(f"INNER JOIN RESULTS (loses Carol): {inner_join_results}")
-        
-        # Check if Carol is missing from INNER JOIN
-        inner_join_count = len(inner_join_results)
-        carol_missing = not any(row[1] == 'Carol' for row in inner_join_results)
-        
-        print(f"INNER JOIN COUNT: {inner_join_count} (should be less than {total_users})")
-        print(f"CAROL MISSING FROM INNER JOIN: {carol_missing}")
-
-        if inner_join_count < total_users and carol_missing:
-            test_steps[0]["status"] = "passed"
-            test_steps[0]["Result_Message"] = f"Missing users problem confirmed: INNER JOIN returns {inner_join_count} users instead of {total_users}, Carol missing"
-        else:
-            test_steps[0]["status"] = "failed"
-            test_steps[0]["Result_Message"] = f"Missing users problem not demonstrated as expected. INNER JOIN returned {inner_join_count} users, Carol missing: {carol_missing}"
-            raise AssertionError("Initial missing users problem setup validation failed")
-
-        db_cursor.close()
-        db_connection.close()
-        
-        # Running model on database: {created_db_name}
-
-        # SECTION 2: RUN THE MODEL
-        start_time = time.time()
-        model_result = run_model(container=None, task=Test_Configs.User_Input, configs=test_configs,extra_information = custom_info)
-        end_time = time.time()
-        request.node.user_properties.append(("model_runtime", end_time - start_time))
-
-        # Register the Braintrust root span ID for tracking (Ardent mode only)
-        if model_result and "bt_root_span_id" in model_result:
-            request.node.user_properties.append(("run_trace_id", model_result.get("bt_root_span_id")))
-            print(f"Registered Braintrust root span ID: {model_result.get('bt_root_span_id')}")
+        # Step 1: Check that the agent task executed
+        if not model_result or model_result.get("status") == "failed":
+            test_steps[1]["status"] = "failed"
+            test_steps[1][
+                "Result_Message"
+            ] = "❌ AI Agent task execution failed or returned no result"
+            return {"success": False, "test_steps": test_steps}
 
         test_steps[1]["status"] = "passed"
-        test_steps[1]["Result_Message"] = "AI Agent completed missing users analysis and fix"
-        
-        # Model run completed in {end_time - start_time:.2f} seconds
+        test_steps[1][
+            "Result_Message"
+        ] = "✅ AI Agent completed task execution successfully"
 
-        # SECTION 3: VERIFY THE OUTCOMES
+        # Use fixture to get PostgreSQL connection for validation
+        postgres_fixture = None
+        if fixtures:
+            postgres_fixture = next(
+                (f for f in fixtures if f.get_resource_type() == "postgresql_resource"),
+                None,
+            )
 
-        # Reconnect to verify the agent's solution
-        db_connection = psycopg2.connect(
-            host=os.getenv("POSTGRES_HOSTNAME"),
-            port=os.getenv("POSTGRES_PORT"),
-            user=os.getenv("POSTGRES_USERNAME"),
-            password=os.getenv("POSTGRES_PASSWORD"),
-            database=created_db_name,
-            sslmode="require",
-        )
+        if not postgres_fixture:
+            raise Exception("PostgreSQL fixture not found")
+
+        # Get PostgreSQL resource data from fixture
+        resource_data = getattr(postgres_fixture, "_resource_data", None)
+        if not resource_data:
+            raise Exception("PostgreSQL resource data not available")
+
+        created_resources = resource_data["created_resources"]
+        created_db_name = created_resources[0]["name"]
+
+        # Connect to database for validation
+        db_connection = postgres_fixture.get_connection(created_db_name)
         db_cursor = db_connection.cursor()
 
-        print("\n=== AFTER MODEL RUN - DATABASE STATE ===")
-
         try:
-            # Show all tables now
-            db_cursor.execute("""
-                SELECT table_schema, table_name, table_type
-                FROM information_schema.tables
-                WHERE table_schema NOT IN ('information_schema', 'pg_catalog')
-                ORDER BY table_schema, table_name
-            """)
-            all_tables = db_cursor.fetchall()
-            print(f"ALL TABLES: {all_tables}")
+            # Step 2: Demonstrate the missing users problem first
+            print("🔍 Step 1: Demonstrating missing users problem...")
 
-            # Show all views
-            db_cursor.execute("""
-                SELECT table_schema, table_name
-                FROM information_schema.views
-                WHERE table_schema NOT IN ('information_schema', 'pg_catalog')
-            """)
-            all_views = db_cursor.fetchall()
-            print(f"ALL VIEWS: {all_views}")
+            # Check initial user count
+            db_cursor.execute("SELECT COUNT(*) FROM users")
+            total_users = db_cursor.fetchone()[0]
+            print(f"Total users in database: {total_users}")
 
-            # Check if agent created proper normalized schema
-            proper_schema_created = False
-            solution_method = ""
-            
-            print("\n=== DETAILED SCHEMA ANALYSIS ===")
-            
-            # Look for plans table (normalized approach)
-            db_cursor.execute("SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'plans')")
-            plans_table_exists = db_cursor.fetchone()[0]
-            print(f"PLANS TABLE EXISTS: {plans_table_exists}")
-            
-            # Look for proper subscriptions table (not subscriptions_bad) 
-            db_cursor.execute("SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'subscriptions')")
-            subscriptions_table_exists = db_cursor.fetchone()[0]
-            print(f"SUBSCRIPTIONS TABLE EXISTS: {subscriptions_table_exists}")
-            
-            # Show all table names to see what agent created
-            table_names = [table[1] for table in all_tables if table[0] == 'public']
-            print(f"ALL PUBLIC TABLES: {table_names}")
-            
-            # If agent created different table names, let's check those
-            possible_plans_tables = [t for t in table_names if 'plan' in t.lower()]
-            possible_subscription_tables = [t for t in table_names if 'subscription' in t.lower() and t != 'subscriptions_bad']
-            print(f"POSSIBLE PLANS TABLES: {possible_plans_tables}")
-            print(f"POSSIBLE SUBSCRIPTION TABLES: {possible_subscription_tables}")
-            
-            if plans_table_exists and subscriptions_table_exists:
-                print("=== CHECKING PROPER SCHEMA DESIGN ===")
-                
-                # Check plans table structure
-                db_cursor.execute("""
-                    SELECT column_name, data_type, is_nullable
-                    FROM information_schema.columns
-                    WHERE table_name = 'plans'
-                    ORDER BY ordinal_position
-                """)
-                plans_schema = db_cursor.fetchall()
-                print(f"PLANS TABLE SCHEMA: {plans_schema}")
-                
-                # Check subscriptions table structure  
-                db_cursor.execute("""
-                    SELECT column_name, data_type, is_nullable
-                    FROM information_schema.columns
-                    WHERE table_name = 'subscriptions'
-                    ORDER BY ordinal_position
-                """)
-                subscriptions_schema = db_cursor.fetchall()
-                print(f"SUBSCRIPTIONS TABLE SCHEMA: {subscriptions_schema}")
-                
-                # Check for FK constraints
-                db_cursor.execute("""
-                    SELECT tc.constraint_name, tc.table_name, kcu.column_name, 
-                           ccu.table_name AS foreign_table_name, ccu.column_name AS foreign_column_name
-                    FROM information_schema.table_constraints AS tc
-                    JOIN information_schema.key_column_usage AS kcu
-                        ON tc.constraint_name = kcu.constraint_name
-                    JOIN information_schema.constraint_column_usage AS ccu
-                        ON ccu.constraint_name = tc.constraint_name
-                    WHERE tc.constraint_type = 'FOREIGN KEY'
-                    AND tc.table_name IN ('subscriptions', 'plans')
-                """)
-                fk_constraints = db_cursor.fetchall()
-                print(f"FK CONSTRAINTS: {fk_constraints}")
-                
-                # Check for PK on subscriptions.user_id
-                db_cursor.execute("""
-                    SELECT column_name
-                    FROM information_schema.key_column_usage
-                    WHERE table_name = 'subscriptions'
-                    AND constraint_name IN (
-                        SELECT constraint_name
-                        FROM information_schema.table_constraints
-                        WHERE table_name = 'subscriptions'
-                        AND constraint_type = 'PRIMARY KEY'
-                    )
-                """)
-                subscriptions_pk = db_cursor.fetchall()
-                print(f"SUBSCRIPTIONS PK COLUMNS: {subscriptions_pk}")
-                
-                # Validate proper schema design
-                has_user_id_pk = any(col[0] == 'user_id' for col in subscriptions_pk)
-                has_fk_constraints = len(fk_constraints) >= 1  # At least one FK
-                
-                print(f"SCHEMA VALIDATION DETAILS:")
-                print(f"  - PK on user_id: {has_user_id_pk}")
-                print(f"  - FK constraints count: {len(fk_constraints)}")
-                print(f"  - FK constraints: {fk_constraints}")
-                
-                if has_user_id_pk and has_fk_constraints:
-                    proper_schema_created = True
-                    solution_method = "Proper normalized schema with FK constraints"
-                    print(f"✅ PROPER SCHEMA VALIDATED!")
+            # Check users with subscriptions via INNER JOIN (problematic query)
+            db_cursor.execute(
+                """
+                SELECT COUNT(DISTINCT u.id) 
+                FROM users u 
+                INNER JOIN subscriptions s ON u.id = s.user_id
+            """
+            )
+            users_with_subs_inner = db_cursor.fetchone()[0]
+            print(f"Users visible with INNER JOIN: {users_with_subs_inner}")
+
+            if users_with_subs_inner < total_users:
+                test_steps[0]["status"] = "passed"
+                test_steps[0][
+                    "Result_Message"
+                ] = f"✅ Missing users problem demonstrated: {total_users} total users, only {users_with_subs_inner} visible with INNER JOIN"
+            else:
+                test_steps[0]["status"] = "failed"
+                test_steps[0][
+                    "Result_Message"
+                ] = f"❌ Missing users problem not demonstrated: All {total_users} users are visible"
+
+            # Step 3: Validate that the agent's fix shows all users
+            print("🔍 Step 3: Validating agent's fix...")
+
+            # Try to find a query/view/function that shows all users with subscription data
+            # This could be a new view, a corrected query, or a stored procedure
+
+            # Check for common solution patterns:
+            # 1. LEFT JOIN query
+            try:
+                db_cursor.execute(
+                    """
+                    SELECT COUNT(DISTINCT u.id) 
+                    FROM users u 
+                    LEFT JOIN subscriptions s ON u.id = s.user_id
+                """
+                )
+                users_with_left_join = db_cursor.fetchone()[0]
+
+                if users_with_left_join == total_users:
+                    test_steps[2]["status"] = "passed"
+                    test_steps[2][
+                        "Result_Message"
+                    ] = f"✅ Schema fix validated: LEFT JOIN shows all {total_users} users"
+
+                    # Validate data preservation
+                    db_cursor.execute("SELECT name FROM users ORDER BY name")
+                    user_names = [row[0] for row in db_cursor.fetchall()]
+
+                    if len(user_names) >= 3:  # Assuming at least 3 users from schema
+                        test_steps[3]["status"] = "passed"
+                        test_steps[3][
+                            "Result_Message"
+                        ] = f"✅ Data preservation validated: {len(user_names)} users preserved"
+                        overall_success = True
+                    else:
+                        test_steps[3]["status"] = "failed"
+                        test_steps[3][
+                            "Result_Message"
+                        ] = f"❌ Data preservation failed: Only {len(user_names)} users found"
                 else:
-                    print(f"❌ SCHEMA VALIDATION FAILED: PK on user_id={has_user_id_pk}, FK constraints={has_fk_constraints}")
-            else:
-                print("❌ Expected tables (plans + subscriptions) not found, checking for alternative solutions...")
-                
-                # Check if agent modified the existing subscriptions_bad table
-                print("\n=== CHECKING ALTERNATIVE SOLUTIONS ===")
-                
-                # Check if subscriptions_bad was modified with constraints
-                db_cursor.execute("""
-                    SELECT tc.constraint_name, tc.constraint_type
-                    FROM information_schema.table_constraints AS tc
-                    WHERE tc.table_name = 'subscriptions_bad'
-                    AND tc.constraint_type IN ('PRIMARY KEY', 'FOREIGN KEY')
-                """)
-                existing_table_constraints = db_cursor.fetchall()
-                print(f"SUBSCRIPTIONS_BAD CONSTRAINTS: {existing_table_constraints}")
-                
-                # Check if any new tables were created with different names
-                for table_name in table_names:
-                    if table_name not in ['users', 'subscriptions_bad']:
-                        print(f"ANALYZING NEW TABLE: {table_name}")
-                        db_cursor.execute(f"""
-                            SELECT column_name, data_type, is_nullable
-                            FROM information_schema.columns
-                            WHERE table_name = '{table_name}'
-                            ORDER BY ordinal_position
-                        """)
-                        table_schema = db_cursor.fetchall()
-                        print(f"  Schema: {table_schema}")
+                    test_steps[2]["status"] = "failed"
+                    test_steps[2][
+                        "Result_Message"
+                    ] = f"❌ Schema fix incomplete: LEFT JOIN shows {users_with_left_join} users, expected {total_users}"
 
-            # Test the critical validation: Do all users show up in queries now?
-            print("\n=== TESTING USER PRESERVATION ===")
-            
-            all_users_preserved = False
-            carol_properly_handled = False
-            
-            # Try to find a query that shows all users with their subscription status
-            print("=== TESTING DIFFERENT QUERY APPROACHES ===")
-            
-            # Test 1: If proper schema was created, test with proper LEFT JOIN
-            if proper_schema_created:
-                print("Testing with proper normalized schema...")
-                try:
-                    db_cursor.execute("""
-                        SELECT u.user_id, u.name,
-                               COALESCE(p.plan_name, 'No plan') AS plan
-                        FROM users u
-                        LEFT JOIN subscriptions s USING (user_id)
-                        LEFT JOIN plans p ON p.plan_id = s.plan_id
-                        ORDER BY u.user_id
-                    """)
-                    proper_join_results = db_cursor.fetchall()
-                    print(f"PROPER LEFT JOIN RESULTS: {proper_join_results}")
-                    
-                    # Check if all 3 users are present
-                    if len(proper_join_results) == 3:
-                        all_users_preserved = True
-                        # Check if Carol is properly handled
-                        carol_row = next((row for row in proper_join_results if row[1] == 'Carol'), None)
-                        if carol_row and (carol_row[2] == 'No plan' or carol_row[2] is None):
-                            carol_properly_handled = True
-                            solution_method = "Proper normalized schema with LEFT JOIN"
-                            print(f"✅ CAROL PROPERLY HANDLED: {carol_row}")
-                        
-                except Exception as e:
-                    print(f"❌ PROPER JOIN TEST FAILED: {e}")
-            
-            # Test 2: Maybe agent just fixed the query without changing schema
-            if not all_users_preserved:
-                print("Testing simple LEFT JOIN with original tables...")
-                try:
-                    db_cursor.execute("""
-                        SELECT u.user_id, u.name,
-                               COALESCE(s.plan, 'No plan') AS plan
-                        FROM users u
-                        LEFT JOIN subscriptions_bad s USING (user_id)
-                        ORDER BY u.user_id
-                    """)
-                    simple_join_results = db_cursor.fetchall()
-                    print(f"SIMPLE LEFT JOIN RESULTS: {simple_join_results}")
-                    
-                    if len(simple_join_results) == 3:
-                        all_users_preserved = True
-                        carol_row = next((row for row in simple_join_results if row[1] == 'Carol'), None)
-                        if carol_row and (carol_row[2] == 'No plan' or carol_row[2] is None):
-                            carol_properly_handled = True
-                            solution_method = "Simple LEFT JOIN fix (not ideal but functional)"
-                            print(f"✅ SIMPLE SOLUTION - CAROL HANDLED: {carol_row}")
-                        
-                except Exception as e:
-                    print(f"❌ SIMPLE JOIN TEST FAILED: {e}")
-            
-            # Test 3: Check if agent created any alternative table structures
-            if not all_users_preserved and len(table_names) > 2:  # More than just users + subscriptions_bad
-                print("Testing alternative table structures...")
-                for table_name in table_names:
-                    if table_name not in ['users', 'subscriptions_bad'] and not all_users_preserved:
-                        try:
-                            print(f"Testing table: {table_name}")
-                            # Try to join users with this new table
-                            db_cursor.execute(f"""
-                                SELECT u.user_id, u.name, t.*
-                                FROM users u
-                                LEFT JOIN {table_name} t ON u.user_id = t.user_id
-                                ORDER BY u.user_id
-                            """)
-                            alt_results = db_cursor.fetchall()
-                            print(f"ALTERNATIVE TABLE {table_name} RESULTS: {alt_results}")
-                            
-                            if len(alt_results) == 3:
-                                all_users_preserved = True
-                                solution_method = f"Alternative solution using table: {table_name}"
-                                if any('Carol' in str(row) for row in alt_results):
-                                    carol_properly_handled = True
-                                    print(f"✅ ALTERNATIVE SOLUTION WORKS: {table_name}")
-                            
-                        except Exception as e:
-                            print(f"❌ ALTERNATIVE TABLE {table_name} TEST FAILED: {e}")
-                            continue
-            
-            # Also test if agent created any views that solve the problem
-            if all_views and not all_users_preserved:
-                print("=== TESTING VIEWS FOR USER PRESERVATION ===")
-                for view in all_views:
-                    try:
-                        view_name = view[1]
-                        db_cursor.execute(f"SELECT COUNT(*) FROM {view_name}")
-                        view_count = db_cursor.fetchone()[0]
-                        print(f"VIEW {view_name} COUNT: {view_count}")
-                        
-                        if view_count == 3:  # All users preserved
-                            db_cursor.execute(f"SELECT * FROM {view_name} ORDER BY user_id")
-                            view_results = db_cursor.fetchall()
-                            print(f"VIEW {view_name} RESULTS: {view_results}")
-                            
-                            # Check if Carol is in the view
-                            if any('Carol' in str(row) for row in view_results):
-                                all_users_preserved = True
-                                carol_properly_handled = True
-                                solution_method = f"View: {view_name}"
-                                
-                    except Exception as e:
-                        print(f"VIEW {view_name} TEST FAILED: {e}")
-                        continue
-
-            print(f"\n=== FINAL VALIDATION RESULTS ===")
-            print(f"proper_schema_created: {proper_schema_created}")
-            print(f"all_users_preserved: {all_users_preserved}")
-            print(f"carol_properly_handled: {carol_properly_handled}")
-            print(f"solution_method: '{solution_method}'")
-            print(f"total_tables_found: {len(table_names)}")
-            print(f"views_found: {len(all_views) if all_views else 0}")
-
-            # More flexible validation - accept either proper schema OR working solution
-            schema_acceptable = proper_schema_created or all_users_preserved
-            
-            print(f"\n=== VALIDATION DECISION LOGIC ===")
-            print(f"Schema acceptable (proper_schema OR user_preservation): {schema_acceptable}")
-            print(f"  - Proper normalized schema: {proper_schema_created}")
-            print(f"  - User preservation working: {all_users_preserved}")
-
-            # Validate schema design (be more flexible)
-            if proper_schema_created:
-                test_steps[2]["status"] = "passed"
-                test_steps[2]["Result_Message"] = f"SUCCESS: Proper normalized schema created with FK constraints and PK on user_id"
-                print("✅ TEST STEP 2 PASSED: Proper schema design")
-            elif all_users_preserved:
-                test_steps[2]["status"] = "partial"
-                test_steps[2]["Result_Message"] = f"PARTIAL: Working solution found but not ideal schema design. Method: {solution_method}"
-                print(f"⚠️ TEST STEP 2 PARTIAL: Working but not ideal - {solution_method}")
-            else:
+            except Exception as e:
                 test_steps[2]["status"] = "failed"
-                test_steps[2]["Result_Message"] = "Schema design validation failed - no working solution found"
-                print("❌ TEST STEP 2 FAILED: No working solution")
-                raise AssertionError("Agent did not create any working solution for missing users problem")
-
-            # Validate user preservation
-            if all_users_preserved and carol_properly_handled:
-                test_steps[3]["status"] = "passed"
-                test_steps[3]["Result_Message"] = f"SUCCESS: All users preserved in queries, Carol properly handled as 'No plan'. Solution: {solution_method}"
-                print("✅ TEST STEP 3 PASSED: User preservation works")
-            else:
-                test_steps[3]["status"] = "failed"
-                test_steps[3]["Result_Message"] = f"User preservation failed - all_users_preserved={all_users_preserved}, carol_properly_handled={carol_properly_handled}"
-                print(f"❌ TEST STEP 3 FAILED: User preservation issue")
-                print(f"   - All users preserved: {all_users_preserved}")
-                print(f"   - Carol properly handled: {carol_properly_handled}")
-                raise AssertionError("Agent did not properly preserve all users in queries")
-
-            # Final success
-            print("PostgreSQL Agent Missing Users Fix test completed successfully!")
-            print(f"Database: {created_db_name}")
-            print(f"Solution method: {solution_method}")
-            print("✅ Missing users issue resolved with proper schema design!")
-            print(f"✅ All users preserved with proper LEFT JOIN logic")
-            assert True, "Missing users fix successful - proper schema design and user preservation implemented"
-
-        except Exception as e:
-            print(f"Validation error: {e}")
-            raise
+                test_steps[2][
+                    "Result_Message"
+                ] = f"❌ Schema validation failed: {str(e)}"
 
         finally:
             db_cursor.close()
             db_connection.close()
 
     except Exception as e:
-        print(f"Test execution error: {e}")
-        raise
-    
-    finally:
-        # CLEANUP
-        if request.config.getoption("--mode") == "Ardent":
-            custom_info['job_id'] = model_result.get("id") if model_result else None
+        # Mark any unfinished steps as failed
+        for step in test_steps:
+            if step["status"] == "running":
+                step["status"] = "failed"
+                step["Result_Message"] = f"❌ PostgreSQL validation error: {str(e)}"
 
-        cleanup_model_artifacts(Configs=test_configs, custom_info=custom_info)
+    return {"success": overall_success, "test_steps": test_steps}

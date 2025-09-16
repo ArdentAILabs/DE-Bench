@@ -95,6 +95,13 @@ def discover_available_tests(filter_patterns: Optional[List[str]] = None) -> Lis
         "Simple_Hello_World_Test",
         "Airflow_Agent_Hello_Universe_Pipeline",
         "Airflow_Agent_Sales_Fact_Table",
+        "PostgreSQL_Agent_Add_Multiple_Records",
+        "PostgreSQL_Agent_Add_Multiple_Records_Ambigious",
+        "PostgreSQL_Agent_Add_Record",
+        "PostgreSQL_Agent_Integer_Division_Fix",
+        "PostgreSQL_Agent_Missing_Users_Fix",
+        "PostgreSQL_Agent_Sales_Fact_Table_Stress_Test",
+        "PostgreSQL_Agent_Unnormalized_Normalized_ManyToMany",
     ]
 
     # Apply filters if provided
@@ -310,18 +317,57 @@ def run_multi_test_evaluation(
                     test_name = input.get("metadata", {}).get("test_name", "Unknown")
 
                 print(f"🔍 Validating test: {test_name}")
+
+                # Extract model result and fixtures from the task output
+                model_result = (
+                    output.get("result") if isinstance(output, dict) else output
+                )
+                fixtures_data = (
+                    output.get("fixtures", {}) if isinstance(output, dict) else {}
+                )
+
                 try:
-                    # Note: Validation with fixtures will be handled by creating a new fixture instance
-                    # inside the validator if needed, since resources are now managed per-task
+                    # fixtures_data now contains the actual fixture instances, not data to convert
+                    fixtures = fixtures_data if isinstance(fixtures_data, list) else []
+
                     validator = get_test_validator(test_name)
-                    result = validator(
-                        output, expected, fixtures=None
-                    )  # Fixtures will be created inside validator if needed
-                    print(f"✅ Validation result for {test_name}: {result}")
-                    return result
+                    result = validator(model_result, expected, fixtures=fixtures)
+
+                    # Show test steps if available
+                    if isinstance(result, dict) and "test_steps" in result:
+                        print(f"📋 Test steps for {test_name}:")
+                        for step in result["test_steps"]:
+                            status_icon = (
+                                "✅"
+                                if step["status"] == "passed"
+                                else "❌" if step["status"] == "failed" else "⚠️"
+                            )
+                            print(f"   {status_icon} {step['name']}: {step['status']}")
+                        actual_result = result.get("success", False)
+                    else:
+                        actual_result = result
+
+                    print(f"✅ Validation result for {test_name}: {actual_result}")
+                    return actual_result
                 except Exception as e:
                     print(f"❌ Validation error for {test_name}: {e}")
                     return False
+                finally:
+                    # Clean up test resources after validation
+                    if isinstance(output, dict) and "fixtures" in output:
+                        from model.BraintrustEval import (
+                            _cleanup_test_resources_for_task,
+                        )
+
+                        # Use fixture instances for cleanup if available, otherwise fall back to test_resources
+                        if output.get("fixtures"):
+                            _cleanup_test_resources_for_task(
+                                test_name, output["fixtures"], use_fixtures=True
+                            )
+                        elif output.get("test_resources"):
+                            _cleanup_test_resources_for_task(
+                                test_name, output["test_resources"]
+                            )
 
             print(
                 f"🔍 Running Braintrust.Eval for {mode} mode with {len(mode_samples)} samples"

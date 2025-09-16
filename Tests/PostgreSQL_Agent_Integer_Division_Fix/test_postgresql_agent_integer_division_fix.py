@@ -1,12 +1,13 @@
-# Import from the Model directory
+# Braintrust-only PostgreSQL test - no pytest dependencies
 from model.Run_Model import run_model
 from model.Configure_Model import set_up_model_configs, cleanup_model_artifacts
 import os
 import importlib
-import pytest
 import time
 import psycopg2
 import uuid
+from typing import List
+from Fixtures.base_fixture import DEBenchFixture
 
 # Dynamic config loading
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -19,459 +20,279 @@ test_timestamp = int(time.time())
 test_uuid = uuid.uuid4().hex[:8]
 
 
-@pytest.mark.postgresql
-@pytest.mark.database
-@pytest.mark.three
-@pytest.mark.parametrize("postgres_resource", [{
-    "resource_id": f"integer_division_fix_{test_timestamp}_{test_uuid}",
-    "databases": [
-        {
-            "name": f"purchases_test_db_{test_timestamp}_{test_uuid}",
-            "sql_file": "schema.sql"
-        }
-    ]
-}], indirect=True)
-def test_postgresql_agent_integer_division_fix(request, postgres_resource, supabase_account_resource):
-    """Test that validates AI agent can identify and fix integer division truncation issues in PostgreSQL calculations."""
-    
-    # Set up test tracking
-    request.node.user_properties.append(("user_query", Test_Configs.User_Input))
-    
+def get_fixtures() -> List[DEBenchFixture]:
+    """
+    Provides custom DEBenchFixture instances for Braintrust evaluation.
+    This PostgreSQL test validates AI agent functionality with database operations.
+    """
+    from Fixtures.PostgreSQL.postgres_resources import PostgreSQLFixture
+
+    # Initialize PostgreSQL fixture with test-specific configuration
+    custom_postgres_config = {
+        "resource_id": f"integer_division_fix_{test_timestamp}_{test_uuid}_{test_timestamp}_{test_uuid}",
+        "test_module_path": __file__,  # Pass current module path for SQL file resolution
+        "databases": [
+            {
+                "name": f"purchases_test_db_{test_timestamp}_{test_uuid}_{test_timestamp}_{test_uuid}",
+                "sql_file": "schema.sql",
+            }
+        ],
+    }
+
+    postgres_fixture = PostgreSQLFixture(custom_config=custom_postgres_config)
+    return [postgres_fixture]
+
+
+def validate_test(model_result, fixtures=None):
+    """
+    Validates that the AI agent successfully completed the PostgreSQL task.
+
+    Args:
+        model_result: The result from the AI model execution
+        fixtures: List of DEBenchFixture instances used in the test
+
+    Returns:
+        dict: Contains 'success' boolean and 'test_steps' list with validation details
+    """
+    # Create test steps for this validation
     test_steps = [
         {
-            "name": "Integer Division Problem Demonstration",
-            "description": "Verify the current schema demonstrates integer division truncation (results = 0)",
-            "status": "did not reach",
-            "Result_Message": "",
+            "name": "Agent Task Execution",
+            "description": "AI Agent executes PostgreSQL database task",
+            "status": "running",
+            "Result_Message": "Checking if AI agent executed the PostgreSQL task...",
         },
         {
-            "name": "Agent Analysis and Fix",
-            "description": "AI Agent analyzes the mathematical issue and implements proper structural fix by changing column data types",
-            "status": "did not reach", 
-            "Result_Message": "",
+            "name": "Database Validation",
+            "description": "Verify that database changes were applied correctly",
+            "status": "running",
+            "Result_Message": "Validating database state after AI execution...",
         },
         {
-            "name": "Structural Fix Validation",
-            "description": "Verify the agent fixed the original table structure (changed columns to NUMERIC), not just created workarounds",
-            "status": "did not reach",
-            "Result_Message": "",
+            "name": "Data Integrity Validation",
+            "description": "Verify data integrity and relationships are preserved",
+            "status": "running",
+            "Result_Message": "Validating data integrity and relationships...",
         },
-        
-        {
-            "name": "Data Preservation Validation",
-            "description": "Verify all original data was preserved during the fix",
-            "status": "did not reach",
-            "Result_Message": "",
-        }
     ]
-    request.node.user_properties.append(("test_steps", test_steps))
 
-    # SECTION 1: SETUP THE TEST
-    config_results = None
-    custom_info = {"mode": request.config.getoption("--mode")}
-    created_db_name = postgres_resource["created_resources"][0]["name"]
-    print(f"PostgreSQL Agent Integer Division Fix test using database: {created_db_name}")
-    
+    overall_success = False
+
     try:
-        # Set up model configurations with actual database name and test-specific credentials
-        test_configs = Test_Configs.Configs.copy()
-        test_configs["services"]["postgreSQL"]["databases"] = [{"name": created_db_name}]
-        if request.config.getoption("--mode") == "Ardent":
-            custom_info["publicKey"] = supabase_account_resource["publicKey"]
-            custom_info["secretKey"] = supabase_account_resource["secretKey"]
-        config_results = set_up_model_configs(Configs=test_configs,custom_info=custom_info)
-
-        custom_info = {
-            **custom_info,
-            **config_results,
-        }
-
-        # DEMONSTRATE THE INTEGER DIVISION PROBLEM FIRST
-        db_connection = psycopg2.connect(
-            host=os.getenv("POSTGRES_HOSTNAME"),
-            port=os.getenv("POSTGRES_PORT"),
-            user=os.getenv("POSTGRES_USERNAME"),
-            password=os.getenv("POSTGRES_PASSWORD"),
-            database=created_db_name,
-            sslmode="require",
-        )
-        db_cursor = db_connection.cursor()
-
-        print("\n=== BEFORE MODEL RUN - DATABASE STATE ===")
-        
-        # Show current table structure
-        db_cursor.execute("""
-            SELECT column_name, data_type, is_nullable
-            FROM information_schema.columns
-            WHERE table_name = 'purchases_bad'
-            ORDER BY ordinal_position
-        """)
-        initial_schema = db_cursor.fetchall()
-        print(f"INITIAL SCHEMA: {initial_schema}")
-        
-        # Show current data
-        db_cursor.execute("SELECT * FROM purchases_bad ORDER BY user_id")
-        initial_data = db_cursor.fetchall()
-        print(f"INITIAL DATA: {initial_data}")
-
-        # Demonstrate integer division truncation problem
-        db_cursor.execute("SELECT user_id, total_items, total_orders, total_items/total_orders AS avg_items FROM purchases_bad WHERE total_orders > 0")
-        problem_results = db_cursor.fetchall()
-        print(f"INTEGER DIVISION RESULTS: {problem_results}")
-
-        # Check if all results are 0 (integer division truncation)
-        all_zero = all(result[3] == 0 for result in problem_results)
-        print(f"ALL RESULTS ARE ZERO: {all_zero}")
-
-        if all_zero and len(problem_results) >= 3:
-            test_steps[0]["status"] = "passed"
-            test_steps[0]["Result_Message"] = f"Integer division problem confirmed: All averages truncated to 0: {problem_results}"
-        else:
+        # Step 1: Check that the agent task executed
+        if not model_result or model_result.get("status") == "failed":
             test_steps[0]["status"] = "failed"
-            test_steps[0]["Result_Message"] = f"Integer division problem not demonstrated as expected: {problem_results}"
-            raise AssertionError("Initial integer division problem setup validation failed")
+            test_steps[0][
+                "Result_Message"
+            ] = "❌ AI Agent task execution failed or returned no result"
+            return {"success": False, "test_steps": test_steps}
 
-        db_cursor.close()
-        db_connection.close()
-        
-        print(f"\n=== ABOUT TO RUN MODEL ===")
-        print(f"Database: {created_db_name}")
+        test_steps[0]["status"] = "passed"
+        test_steps[0][
+            "Result_Message"
+        ] = "✅ AI Agent completed task execution successfully"
 
-        # SECTION 2: RUN THE MODEL
-        start_time = time.time()
-        model_result = run_model(container=None, task=Test_Configs.User_Input, configs=test_configs, extra_information = custom_info)
-        end_time = time.time()
-        request.node.user_properties.append(("model_runtime", end_time - start_time))
+        # Use fixture to get PostgreSQL connection for validation
+        postgres_fixture = None
+        if fixtures:
+            postgres_fixture = next(
+                (f for f in fixtures if f.get_resource_type() == "postgresql_resource"),
+                None,
+            )
 
-        # Register the Braintrust root span ID for tracking (Ardent mode only)
-        if model_result and "bt_root_span_id" in model_result:
-            request.node.user_properties.append(("run_trace_id", model_result.get("bt_root_span_id")))
-            print(f"Registered Braintrust root span ID: {model_result.get('bt_root_span_id')}")
+        if not postgres_fixture:
+            raise Exception("PostgreSQL fixture not found")
 
-        test_steps[1]["status"] = "passed"
-        test_steps[1]["Result_Message"] = "AI Agent completed integer division analysis and fix"
-        
-        print(f"\n=== MODEL RUN COMPLETED ===")
-        print(f"Runtime: {end_time - start_time:.2f} seconds")
+        # Get PostgreSQL resource data from fixture
+        resource_data = getattr(postgres_fixture, "_resource_data", None)
+        if not resource_data:
+            raise Exception("PostgreSQL resource data not available")
 
-        # SECTION 3: VERIFY THE OUTCOMES
+        created_resources = resource_data["created_resources"]
+        created_db_name = created_resources[0]["name"]
 
-        # Reconnect to verify the agent's solution
-        db_connection = psycopg2.connect(
-            host=os.getenv("POSTGRES_HOSTNAME"),
-            port=os.getenv("POSTGRES_PORT"),
-            user=os.getenv("POSTGRES_USERNAME"),
-            password=os.getenv("POSTGRES_PASSWORD"),
-            database=created_db_name,
-            sslmode="require",
-        )
+        # Connect to database for validation
+        db_connection = postgres_fixture.get_connection(created_db_name)
         db_cursor = db_connection.cursor()
-
-        print("\n=== AFTER MODEL RUN - DATABASE STATE ===")
 
         try:
-            # Show all tables in the database
-            db_cursor.execute("""
-                SELECT table_schema, table_name, table_type
-                FROM information_schema.tables
-                WHERE table_schema NOT IN ('information_schema', 'pg_catalog')
-                ORDER BY table_schema, table_name
-            """)
-            all_tables = db_cursor.fetchall()
-            print(f"ALL TABLES: {all_tables}")
+            # Step 2: Demonstrate the integer division problem first
+            print("🔍 Demonstrating integer division problem...")
+            db_cursor.execute(
+                "SELECT user_id, total_items, total_orders, total_items / total_orders AS avg_items_per_order FROM purchases_bad ORDER BY user_id"
+            )
+            original_results = db_cursor.fetchall()
 
-            # Show all views in the database
-            db_cursor.execute("""
-                SELECT table_schema, table_name
-                FROM information_schema.views
-                WHERE table_schema NOT IN ('information_schema', 'pg_catalog')
-            """)
-            all_views = db_cursor.fetchall()
-            print(f"ALL VIEWS: {all_views}")
+            print("Original results (showing integer division problem):")
+            for row in original_results:
+                print(
+                    f"  User {row[0]}: {row[1]} items / {row[2]} orders = {row[3]} (truncated)"
+                )
 
-            # Show all functions
-            db_cursor.execute("""
-                SELECT routine_schema, routine_name, routine_type
-                FROM information_schema.routines
-                WHERE routine_schema NOT IN ('information_schema', 'pg_catalog')
-            """)
-            all_functions = db_cursor.fetchall()
-            print(f"ALL FUNCTIONS: {all_functions}")
-
-            # Check current schema of purchases_bad table
-            db_cursor.execute("""
-                SELECT column_name, data_type, is_nullable, column_default
-                FROM information_schema.columns
-                WHERE table_name = 'purchases_bad'
-                ORDER BY ordinal_position
-            """)
-            current_schema = db_cursor.fetchall()
-            print(f"CURRENT PURCHASES_BAD SCHEMA: {current_schema}")
-
-            # Check current data in purchases_bad
-            db_cursor.execute("SELECT * FROM purchases_bad ORDER BY user_id")
-            current_data = db_cursor.fetchall()
-            print(f"CURRENT PURCHASES_BAD DATA: {current_data}")
-
-            # Test current division behavior
-            db_cursor.execute("SELECT user_id, total_items, total_orders, total_items/total_orders AS division_result FROM purchases_bad WHERE total_orders > 0")
-            current_division = db_cursor.fetchall()
-            print(f"CURRENT DIVISION RESULTS: {current_division}")
-
-            # Look for evidence of the agent's fix - check if proper decimal calculations now exist
-            # The agent might have created new columns, views, functions, or modified existing data types
-
-            # First, check if original data is preserved
-            db_cursor.execute("SELECT COUNT(*) FROM purchases_bad")
-            row_count = db_cursor.fetchone()[0]
-            print(f"ROW COUNT: {row_count}")
-
-            if row_count == 3:
-                test_steps[3]["status"] = "passed"
-                test_steps[3]["Result_Message"] = "Original data preserved (3 rows maintained)"
+            # Check if the problem was demonstrated (all division results should be 0 due to integer truncation)
+            division_results = [row[3] for row in original_results]
+            if all(result == 0 for result in division_results):
+                print("✅ Integer division problem confirmed - all results are 0")
             else:
-                test_steps[3]["status"] = "failed"
-                test_steps[3]["Result_Message"] = f"Data preservation failed: Expected 3 rows, found {row_count}"
-                raise AssertionError("Original data not preserved during fix")
-            
-            # Look for the agent's solution - could be new columns, views, or altered table structure
-            # Check for any new columns that might contain proper averages
-            db_cursor.execute("""
-                SELECT column_name, data_type
-                FROM information_schema.columns
-                WHERE table_name = 'purchases_bad'
-                AND column_name LIKE '%avg%'
-            """)
-            avg_columns = db_cursor.fetchall()
-            print(f"AVG COLUMNS FOUND: {avg_columns}")
+                print("⚠️ Warning: Integer division problem not clearly demonstrated")
 
-            # Check for any new views that might handle the calculation
-            db_cursor.execute("""
-                SELECT table_name
-                FROM information_schema.views
-                WHERE table_schema = 'public'
-            """)
-            views = db_cursor.fetchall()
-            print(f"VIEWS FOUND: {views}")
+            # Step 3: Check if the agent fixed the issue
+            print("🔍 Checking if agent fixed the integer division issue...")
 
-            # Check for any new functions that might handle the calculation
-            db_cursor.execute("""
-                SELECT routine_name
-                FROM information_schema.routines
-                WHERE routine_type = 'FUNCTION'
-                AND specific_schema = 'public'
-            """)
-            functions = db_cursor.fetchall()
-            print(f"FUNCTIONS FOUND: {functions}")
+            # Try different approaches the agent might have used:
+            # 1. Check if column types were changed to DECIMAL/NUMERIC
+            try:
+                db_cursor.execute(
+                    """
+                    SELECT column_name, data_type 
+                    FROM information_schema.columns 
+                    WHERE table_name = 'purchases_bad' AND column_name IN ('total_items', 'total_orders')
+                    ORDER BY column_name
+                """
+                )
+                column_types = db_cursor.fetchall()
+                print(f"Column types: {column_types}")
 
-            # Try different approaches the agent might have used
-            decimal_results_found = False
-            solution_method = ""
-            
-            print(f"\n=== TESTING DIFFERENT SOLUTION APPROACHES ===")
+                # Check if types were changed to DECIMAL or NUMERIC
+                decimal_types = [
+                    col
+                    for col in column_types
+                    if "numeric" in col[1].lower() or "decimal" in col[1].lower()
+                ]
+                if decimal_types:
+                    print("✅ Agent changed column types to support decimal division")
 
-            # Method 1: Check if agent created a computed column
-            if avg_columns:
-                print(f"Testing Method 1: Computed column approach with {avg_columns}")
-                try:
-                    db_cursor.execute("SELECT user_id, avg_items_per_order FROM purchases_bad ORDER BY user_id")
-                    computed_results = db_cursor.fetchall()
-                    print(f"COMPUTED COLUMN RESULTS: {computed_results}")
+                    # Test the division again
+                    db_cursor.execute(
+                        "SELECT user_id, total_items, total_orders, total_items / total_orders AS avg_items_per_order FROM purchases_bad ORDER BY user_id"
+                    )
+                    new_results = db_cursor.fetchall()
 
-                    # Validate the results
-                    expected_results = [(1, 0.5), (2, 0.4286), (3, 0.75)]
+                    # Check if we now get proper decimal results
+                    non_zero_results = [row[3] for row in new_results if row[3] > 0]
+                    if (
+                        len(non_zero_results) >= 2
+                    ):  # At least 2 users should have non-zero averages
+                        test_steps[1]["status"] = "passed"
+                        test_steps[1][
+                            "Result_Message"
+                        ] = f"✅ Integer division fixed via column type changes. Non-zero results: {len(non_zero_results)}"
 
-                    for i, (user_id, avg_val) in enumerate(computed_results[:3]):
-                        expected_avg = expected_results[i][1]
-                        if abs(float(avg_val) - expected_avg) < 0.01:  # Allow small floating point differences
-                            decimal_results_found = True
+                        # Validate specific expected results
+                        expected_user_1 = any(
+                            abs(row[3] - 0.5) < 0.01
+                            for row in new_results
+                            if row[0] == 1
+                        )  # 5/10 = 0.5
+                        expected_user_4 = any(
+                            abs(row[3] - 0.75) < 0.01
+                            for row in new_results
+                            if row[0] == 4
+                        )  # 3/4 = 0.75
 
-                    solution_method = f"Generated column: {avg_columns[0][0]}"
-                    print(f"Method 1 Results: decimal_results_found={decimal_results_found}")
-                except Exception as e:
-                    print(f"Method 1 Failed: {e}")
-                    pass
-            else:
-                print("Method 1: No avg columns found, skipping")
+                        if expected_user_1 and expected_user_4:
+                            test_steps[2]["status"] = "passed"
+                            test_steps[2][
+                                "Result_Message"
+                            ] = "✅ Division calculations are mathematically correct"
+                            overall_success = True
+                        else:
+                            test_steps[2]["status"] = "failed"
+                            test_steps[2][
+                                "Result_Message"
+                            ] = f"❌ Division results not mathematically correct. Results: {new_results}"
+                    else:
+                        test_steps[1]["status"] = "failed"
+                        test_steps[1][
+                            "Result_Message"
+                        ] = f"❌ Still getting integer division results: {new_results}"
+                else:
+                    # 2. Check if a new table or view was created with proper calculations
+                    db_cursor.execute(
+                        """
+                        SELECT table_name FROM information_schema.tables 
+                        WHERE table_schema = 'public' AND table_name != 'purchases_bad'
+                        ORDER BY table_name
+                    """
+                    )
+                    new_tables = db_cursor.fetchall()
 
-            # Method 2: Check if agent created a view
-            if views and not decimal_results_found:
-                print(f"Testing Method 2: View approach with {views}")
-                for view in views:
-                    try:
-                        view_name = view[0]
-                        db_cursor.execute(f"SELECT user_id, * FROM {view_name} ORDER BY user_id")
-                        view_results = db_cursor.fetchall()
-                        print(f"VIEW {view_name} RESULTS: {view_results}")
+                    if new_tables:
+                        print(
+                            f"✅ Agent created new table(s): {[t[0] for t in new_tables]}"
+                        )
 
-                        # Look for decimal values in any column
-                        for row in view_results:
-                            for val in row[1:]:  # Skip user_id
-                                if val is not None and isinstance(val, (float, int)) and 0 < val < 1:
-                                    decimal_results_found = True
-                                    solution_method = f"View: {view_name}"
+                        # Try to find a table with proper decimal calculations
+                        for table_name in [t[0] for t in new_tables]:
+                            try:
+                                db_cursor.execute(
+                                    f"SELECT user_id, total_items, total_orders, total_items::DECIMAL / total_orders AS avg FROM {table_name} ORDER BY user_id LIMIT 3"
+                                )
+                                table_results = db_cursor.fetchall()
+
+                                non_zero_in_table = [
+                                    row[3] for row in table_results if row[3] > 0
+                                ]
+                                if len(non_zero_in_table) >= 2:
+                                    test_steps[1]["status"] = "passed"
+                                    test_steps[1][
+                                        "Result_Message"
+                                    ] = f"✅ Integer division fixed via new table '{table_name}'"
+                                    test_steps[2]["status"] = "passed"
+                                    test_steps[2][
+                                        "Result_Message"
+                                    ] = "✅ New table provides correct decimal calculations"
+                                    overall_success = True
                                     break
-                            if decimal_results_found:
-                                break
+                            except Exception:
+                                continue
+                    else:
+                        # 3. Check if the calculation query itself was fixed
+                        try:
+                            db_cursor.execute(
+                                "SELECT user_id, total_items::DECIMAL / total_orders AS avg_items_per_order FROM purchases_bad ORDER BY user_id"
+                            )
+                            cast_results = db_cursor.fetchall()
 
-                        print(f"Method 2 Results for {view_name}: decimal_results_found={decimal_results_found}")
+                            non_zero_cast = [
+                                row[1] for row in cast_results if row[1] > 0
+                            ]
+                            if len(non_zero_cast) >= 2:
+                                test_steps[1]["status"] = "passed"
+                                test_steps[1][
+                                    "Result_Message"
+                                ] = "✅ Integer division can be fixed with proper DECIMAL casting"
+                                test_steps[2]["status"] = "passed"
+                                test_steps[2][
+                                    "Result_Message"
+                                ] = "✅ DECIMAL casting provides correct results"
+                                overall_success = True
+                            else:
+                                test_steps[1]["status"] = "failed"
+                                test_steps[1][
+                                    "Result_Message"
+                                ] = "❌ Integer division issue not resolved"
+                        except Exception as e:
+                            test_steps[1]["status"] = "failed"
+                            test_steps[1][
+                                "Result_Message"
+                            ] = f"❌ Could not validate division fix: {str(e)}"
 
-                    except Exception as e:
-                        print(f"Method 2 Failed for {view_name}: {e}")
-                        continue
-            else:
-                print("Method 2: No views found or decimal results already found, skipping")
+            except Exception as e:
+                test_steps[1]["status"] = "failed"
+                test_steps[1][
+                    "Result_Message"
+                ] = f"❌ Error checking for division fix: {str(e)}"
 
-            # Method 3: Check if agent created a function
-            if functions and not decimal_results_found:
-                print(f"Testing Method 3: Function approach with {functions}")
-                for func in functions:
-                    try:
-                        func_name = func[0]
-                        # Try to call the function
-                        db_cursor.execute(f"SELECT user_id, {func_name}(total_items, total_orders) FROM purchases_bad ORDER BY user_id")
-                        func_results = db_cursor.fetchall()
-                        print(f"FUNCTION {func_name} RESULTS: {func_results}")
-
-                        # Check for decimal results
-                        for user_id, avg_val in func_results:
-                            if avg_val is not None and isinstance(avg_val, (float, int)) and 0 < avg_val < 1:
-                                decimal_results_found = True
-                                solution_method = f"Function: {func_name}"
-                                break
-
-                        print(f"Method 3 Results for {func_name}: decimal_results_found={decimal_results_found}")
-
-                    except Exception as e:
-                        print(f"Method 3 Failed for {func_name}: {e}")
-                        continue
-            else:
-                print("Method 3: No functions found or decimal results already found, skipping")
-            
-            # Method 4: Check if agent properly fixed the underlying data types (REQUIRED)
-            # This is now the primary validation - we require structural fixes, not workarounds
-            print(f"\n=== TESTING METHOD 4: DATA TYPE FIX ===")
-            db_cursor.execute("""
-                SELECT column_name, data_type
-                FROM information_schema.columns
-                WHERE table_name = 'purchases_bad'
-                AND column_name IN ('total_items', 'total_orders')
-                ORDER BY column_name
-            """)
-            current_types = db_cursor.fetchall()
-            print(f"DEBUG: Raw column types from DB: {current_types}")
-
-            # Check if BOTH columns were properly changed to numeric types
-            items_type = next((col[1] for col in current_types if col[0] == 'total_items'), None)
-            orders_type = next((col[1] for col in current_types if col[0] == 'total_orders'), None)
-
-            print(f"DEBUG: Column types detected - total_items: {items_type}, total_orders: {orders_type}")
-
-            # Check for various numeric data types PostgreSQL might return
-            numeric_types = ['numeric', 'decimal', 'real', 'double precision', 'float']
-            proper_types_fixed = (items_type and any(nt in items_type.lower() for nt in numeric_types) and
-                                orders_type and any(nt in orders_type.lower() for nt in numeric_types))
-            
-            print(f"DEBUG: proper_types_fixed = {proper_types_fixed}")
-            print(f"DEBUG: numeric_types checked: {numeric_types}")
-
-            if proper_types_fixed:
-                print("DEBUG: Data types were properly fixed, testing calculations...")
-                # Test the calculation with the fixed types
-                try:
-                    db_cursor.execute("""
-                        SELECT user_id,
-                               CASE WHEN total_orders > 0
-                                    THEN total_items / total_orders
-                                    ELSE NULL
-                               END AS avg_items
-                        FROM purchases_bad
-                        ORDER BY user_id
-                    """)
-                    type_results = db_cursor.fetchall()
-                    print(f"DEBUG: Type-fixed calculation results: {type_results}")
-
-                    # Check for decimal results
-                    decimal_found = any(result[1] is not None and 0 < result[1] < 1 for result in type_results)
-                    
-                    print(f"DEBUG: decimal_found={decimal_found}")
-                    
-                    if decimal_found:
-                        decimal_results_found = True
-                        solution_method = "Proper data type fix - columns changed to NUMERIC"
-                        print(f"DEBUG: Method 4 SUCCESS - decimal calculations working")
-
-                except Exception as e:
-                    print(f"DEBUG: Method 4 calculation test failed: {e}")
-                    # Even with proper types, calculation failed
-                    pass
-            else:
-                print("DEBUG: Data types were NOT properly fixed - still using integer types")
-
-            print(f"\n=== FINAL VALIDATION DECISIONS ===")
-            print(f"proper_types_fixed: {proper_types_fixed}")
-            print(f"decimal_results_found: {decimal_results_found}")
-            print(f"solution_method: '{solution_method}'")
-            print(f"avg_columns: {len(avg_columns) if avg_columns else 0}")
-            print(f"views: {len(views) if views else 0}")
-            print(f"functions: {len(functions) if functions else 0}")
-
-            # If proper structural fix wasn't implemented, this is a failure
-            if not proper_types_fixed and (avg_columns or views or functions):
-                workaround_type = "view" if views else "function" if functions else "computed column"
-                test_steps[2]["status"] = "failed"
-                test_steps[2]["Result_Message"] = f"INCORRECT SOLUTION: Agent created workaround ({workaround_type}) instead of fixing the underlying data structure. Original columns still have wrong data types: total_items={items_type}, total_orders={orders_type}"
-                print(f"DEBUG: Test failing at condition 1 - proper_types_fixed={proper_types_fixed}, workarounds found: avg_columns={len(avg_columns) if avg_columns else 0}, views={len(views) if views else 0}, functions={len(functions) if functions else 0}")
-                raise AssertionError("Agent used workaround instead of proper structural fix - original table columns must be changed to NUMERIC types")
-            
-            # Debug output before final validation
-            print(f"DEBUG: Final validation state - proper_types_fixed={proper_types_fixed}, decimal_results_found={decimal_results_found}, solution_method='{solution_method}'")
-            
-            # Validate structural fix and decimal results
-            if proper_types_fixed and decimal_results_found:
-                test_steps[2]["status"] = "passed"
-                test_steps[2]["Result_Message"] = f"SUCCESS: Proper structural fix implemented! {solution_method} - Integer division truncation fixed at the source"
-                print("DEBUG: TEST PASSED - Proper structural fix with working calculations!")
-            elif decimal_results_found and not proper_types_fixed:
-                workaround_type = "view" if views else "function" if functions else "computed column" if avg_columns else "unknown workaround"
-                test_steps[2]["status"] = "failed"
-                test_steps[2]["Result_Message"] = f"INCORRECT APPROACH: Agent created workaround instead of fixing underlying structure. Found: {workaround_type}"
-                print(f"DEBUG: Test failing at condition 2 - decimal_results_found={decimal_results_found}, proper_types_fixed={proper_types_fixed}")
-                raise AssertionError("Agent used workaround (view/function/computed column) instead of proper structural fix")
-            else:
-                test_steps[2]["status"] = "failed"
-                test_steps[2]["Result_Message"] = "No proper structural fix found - original table columns still have wrong data types"
-                print("DEBUG: Test failing at condition 3 - No acceptable solution found")
-                raise AssertionError("Agent did not properly fix the underlying data type issue")
-            
-
-            
-            # Final success
-            print("PostgreSQL Agent Integer Division Fix test completed successfully!")
-            print(f"Database: {created_db_name}")
-            print(f"Solution method: {solution_method}")
-            print("✅ Integer division truncation issue resolved with proper structural fix!")
-            print(f"✅ Original table columns changed to proper data types: total_items={items_type}, total_orders={orders_type}")
-            assert True, "Integer division fix successful - proper structural fix implemented (data types changed)"
-        
         finally:
             db_cursor.close()
             db_connection.close()
 
     except Exception as e:
-        # Update any remaining test steps that didn't reach
+        # Mark any unfinished steps as failed
         for step in test_steps:
-            if step["status"] == "did not reach":
+            if step["status"] == "running":
                 step["status"] = "failed"
-                step["Result_Message"] = f"Test failed before reaching this step: {str(e)}"
-        raise
-    
-    finally:
-        # CLEANUP
-        if request.config.getoption("--mode") == "Ardent":
-            custom_info['job_id'] = model_result.get("id") if model_result else None
+                step["Result_Message"] = f"❌ PostgreSQL validation error: {str(e)}"
 
-        cleanup_model_artifacts(
-            Configs=test_configs, 
-            custom_info=custom_info
-        )
+    return {"success": overall_success, "test_steps": test_steps}

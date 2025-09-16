@@ -1,12 +1,13 @@
-# Import from the Model directory
+# Braintrust-only PostgreSQL test - no pytest dependencies
 from model.Run_Model import run_model
 from model.Configure_Model import set_up_model_configs, cleanup_model_artifacts
 import os
 import importlib
-import pytest
 import time
 import psycopg2
 import uuid
+from typing import List, Dict, Any
+from Fixtures.base_fixture import DEBenchFixture
 
 # Dynamic config loading
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -19,157 +20,224 @@ test_timestamp = int(time.time())
 test_uuid = uuid.uuid4().hex[:8]
 
 
-@pytest.mark.postgresql
-@pytest.mark.database
-@pytest.mark.code_writing
-@pytest.mark.two
-@pytest.mark.parametrize("postgres_resource", [{
-    "resource_id": f"add_record_postgresql_{test_timestamp}_{test_uuid}",
-    "databases": [
-        {
-            "name": f"add_record_test_db_{test_timestamp}_{test_uuid}",
-            "sql_file": "schema.sql"
+def get_fixtures() -> List[DEBenchFixture]:
+    """
+    Provides custom DEBenchFixture instances for Braintrust evaluation.
+    This PostgreSQL test validates AI agent functionality with database operations.
+    """
+    from Fixtures.PostgreSQL.postgres_resources import PostgreSQLFixture
+
+    # Initialize PostgreSQL fixture with test-specific configuration
+    custom_postgres_config = {
+        "resource_id": f"add_record_postgresql_{test_timestamp}_{test_uuid}_{test_timestamp}_{test_uuid}",
+        "test_module_path": __file__,  # Pass current module path for SQL file resolution
+        "databases": [
+            {
+                "name": f"add_record_test_db_{test_timestamp}_{test_uuid}_{test_timestamp}_{test_uuid}",
+                "sql_file": "schema.sql",
+            }
+        ],
+    }
+
+    postgres_fixture = PostgreSQLFixture(custom_config=custom_postgres_config)
+    return [postgres_fixture]
+
+
+def create_config(fixtures: List[DEBenchFixture]) -> Dict[str, Any]:
+    """
+    Create test-specific config using the set-up fixtures.
+    This function has access to all fixture data after setup.
+    """
+    import os
+
+    # Find the PostgreSQL fixture
+    postgres_fixture = next(
+        (f for f in fixtures if f.get_resource_type() == "postgresql_resource"), None
+    )
+
+    if not postgres_fixture:
+        raise Exception("PostgreSQL fixture not found")
+
+    # Get the actual resource data from the fixture
+    resource_data = getattr(postgres_fixture, "_resource_data", None)
+    if not resource_data:
+        raise Exception("PostgreSQL resource data not available")
+
+    # Build config using actual connection details and database names
+    connection_params = resource_data["connection_params"]
+    created_resources = resource_data["created_resources"]
+
+    return {
+        "services": {
+            "postgreSQL": {
+                "hostname": connection_params["host"],
+                "port": connection_params["port"],
+                "username": connection_params["user"],
+                "password": connection_params["password"],
+                "databases": [{"name": db["name"]} for db in created_resources],
+            }
         }
-    ]
-}], indirect=True)
-def test_postgresql_agent_add_record(request, postgres_resource, supabase_account_resource):
-    """Test that validates AI agent can add a record to PostgreSQL database via fixture."""
-    
-    # Set up test tracking
-    request.node.user_properties.append(("user_query", Test_Configs.User_Input))
-    
+    }
+
+
+def validate_test(model_result, fixtures=None):
+    """
+    Validates that the AI agent successfully completed the PostgreSQL task.
+
+    Args:
+        model_result: The result from the AI model execution
+        fixtures: List of DEBenchFixture instances used in the test
+
+    Returns:
+        dict: Contains 'success' boolean and 'test_steps' list with validation details
+    """
+    # Create test steps for this validation
     test_steps = [
         {
             "name": "Agent Task Execution",
-            "description": "AI Agent executes task to add new user record",
-            "status": "did not reach",
-            "Result_Message": "",
+            "description": "AI Agent executes PostgreSQL database task",
+            "status": "running",
+            "Result_Message": "Checking if AI agent executed the PostgreSQL task...",
         },
         {
-            "name": "Record Insertion Validation", 
-            "description": "Verify that Alice Green was added to the users table",
-            "status": "did not reach",
-            "Result_Message": "",
+            "name": "Database Validation",
+            "description": "Verify that database changes were applied correctly",
+            "status": "running",
+            "Result_Message": "Validating database state after AI execution...",
         },
         {
             "name": "Data Integrity Validation",
-            "description": "Verify that existing records were not modified",
-            "status": "did not reach",
-            "Result_Message": "",
-        }
+            "description": "Verify data integrity and relationships are preserved",
+            "status": "running",
+            "Result_Message": "Validating data integrity and relationships...",
+        },
     ]
-    request.node.user_properties.append(("test_steps", test_steps))
 
-    # SECTION 1: SETUP THE TEST
-    config_results = None
-    model_result = None  # Initialize for cleanup
-    custom_info = {"mode": request.config.getoption("--mode")}
-    created_db_name = postgres_resource["created_resources"][0]["name"]
-    
+    overall_success = False
+
     try:
-        # Set up model configurations with actual database name and test-specific credentials
-        test_configs = Test_Configs.Configs.copy()
-        test_configs["services"]["postgreSQL"]["databases"] = [{"name": created_db_name}]
-        if request.config.getoption("--mode") == "Ardent":
-            custom_info["publicKey"] = supabase_account_resource["publicKey"]
-            custom_info["secretKey"] = supabase_account_resource["secretKey"]
+        # Step 1: Check that the agent task executed
+        if not model_result or model_result.get("status") == "failed":
+            test_steps[0]["status"] = "failed"
+            test_steps[0][
+                "Result_Message"
+            ] = "❌ AI Agent task execution failed or returned no result"
+            return {"success": False, "test_steps": test_steps}
 
-        # Set up model configs using the configuration from Test_Configs
-        config_results = set_up_model_configs(Configs=test_configs,custom_info=custom_info)
+        print("🔍 Model result:")
+        print(model_result)
 
-        custom_info = {
-            **custom_info,
-            **config_results,
-        }
+        print("🔍 Fixtures:")
+        print(fixtures)
 
-        print(test_configs)
-
-        # SECTION 2: RUN THE MODEL
-        start_time = time.time()
-        model_result = run_model(container=None, task=Test_Configs.User_Input, configs=test_configs,extra_information = custom_info)
-        end_time = time.time()
-        request.node.user_properties.append(("model_runtime", end_time - start_time))
-        
-        # Register the Braintrust root span ID for tracking (Ardent mode only)
-        if model_result and "bt_root_span_id" in model_result:
-            request.node.user_properties.append(("run_trace_id", model_result.get("bt_root_span_id")))
-            print(f"Registered Braintrust root span ID: {model_result.get('bt_root_span_id')}")
-        
         test_steps[0]["status"] = "passed"
-        test_steps[0]["Result_Message"] = "AI Agent completed task execution"
+        test_steps[0][
+            "Result_Message"
+        ] = "✅ AI Agent completed task execution successfully"
 
-        # SECTION 3: VERIFY THE OUTCOMES
-        
-        # Connect to database to verify results
-        db_connection = psycopg2.connect(
-            host=os.getenv("POSTGRES_HOSTNAME"),
-            port=os.getenv("POSTGRES_PORT"),
-            user=os.getenv("POSTGRES_USERNAME"),
-            password=os.getenv("POSTGRES_PASSWORD"),
-            database=created_db_name,
-            sslmode="require",
-        )
+        # Use fixture to get PostgreSQL connection for validation
+        postgres_fixture = None
+        if fixtures:
+            postgres_fixture = next(
+                (f for f in fixtures if f.get_resource_type() == "postgresql_resource"),
+                None,
+            )
+
+        if not postgres_fixture:
+            print("❌ PostgreSQL fixture not found")
+            raise Exception("PostgreSQL fixture not found")
+
+        # Get PostgreSQL resource data from fixture
+        resource_data = getattr(postgres_fixture, "_resource_data", None)
+        if not resource_data:
+            print("❌ PostgreSQL resource data not available")
+            raise Exception("PostgreSQL resource data not available")
+
+        created_resources = resource_data["created_resources"]
+        created_db_name = created_resources[0]["name"]
+
+        # Connect to database for validation
+        db_connection = postgres_fixture.get_connection(created_db_name)
         db_cursor = db_connection.cursor()
-        
+
+        print("🔍 Database connection:")
+        print(db_connection)
+        print("🔍 Database cursor:")
+        print(db_cursor)
+
         try:
-            # Step 2: Verify Alice Green was added
-            db_cursor.execute("SELECT name, email, age FROM users WHERE name = 'Alice Green'")
+            # Step 2: Validate that Alice Green was added correctly
+            print("🔍 Checking if Alice Green was added...")
+            db_cursor.execute(
+                "SELECT id, name, email, age FROM users WHERE name = 'Alice Green'"
+            )
             alice_record = db_cursor.fetchone()
-            
-            if alice_record and alice_record == ("Alice Green", "alice@example.com", 28):
+
+            if alice_record and alice_record[1:] == (
+                "Alice Green",
+                "alice@example.com",
+                28,
+            ):
                 test_steps[1]["status"] = "passed"
-                test_steps[1]["Result_Message"] = f"Alice Green record found with correct data: {alice_record}"
+                test_steps[1][
+                    "Result_Message"
+                ] = f"✅ Alice Green record found with correct data: {alice_record}"
             else:
-                test_steps[1]["status"] = "failed" 
-                test_steps[1]["Result_Message"] = f"Alice Green record incorrect or missing. Found: {alice_record}"
-                raise AssertionError("Agent failed to insert Alice Green correctly")
-            
-            # Step 3: Verify original records are intact
-            db_cursor.execute("SELECT name, email, age FROM users WHERE name IN ('John Doe', 'Jane Smith', 'Bob Johnson') ORDER BY name")
+                test_steps[1]["status"] = "failed"
+                test_steps[1][
+                    "Result_Message"
+                ] = f"❌ Alice Green record incorrect or missing. Found: {alice_record}"
+                raise Exception("Agent failed to insert Alice Green correctly")
+
+            # Step 3: Verify original records are preserved
+            print("🔍 Checking that original records are preserved...")
+            db_cursor.execute(
+                "SELECT name, email, age FROM users WHERE name IN ('John Doe', 'Jane Smith', 'Bob Johnson') ORDER BY name"
+            )
             original_records = db_cursor.fetchall()
-            
+
             expected_original = [
                 ("Bob Johnson", "bob@example.com", 35),
-                ("Jane Smith", "jane@example.com", 25), 
-                ("John Doe", "john@example.com", 30)
+                ("Jane Smith", "jane@example.com", 25),
+                ("John Doe", "john@example.com", 30),
             ]
-            
+
             if original_records == expected_original:
                 test_steps[2]["status"] = "passed"
-                test_steps[2]["Result_Message"] = "Original records preserved correctly"
+                test_steps[2][
+                    "Result_Message"
+                ] = "✅ Original records preserved correctly"
             else:
                 test_steps[2]["status"] = "failed"
-                test_steps[2]["Result_Message"] = f"Original records modified. Expected: {expected_original}, Got: {original_records}"
-                raise AssertionError("Agent modified existing records incorrectly")
-            
+                test_steps[2][
+                    "Result_Message"
+                ] = f"❌ Original records modified. Expected: {expected_original}, Got: {original_records}"
+                raise Exception("Agent modified existing records incorrectly")
+
             # Final verification: Total record count should be 4
             db_cursor.execute("SELECT COUNT(*) FROM users")
             total_count = db_cursor.fetchone()[0]
-            
+
             if total_count == 4:
-                    # Test completed successfully - Alice Green added without modifying existing records
-                assert True, "Add Record to PostgreSQL Agent test passed - record inserted correctly"
+                # Test completed successfully
+                overall_success = True
+                print(
+                    "✅ Add Record to PostgreSQL Agent test passed - record inserted correctly"
+                )
             else:
-                raise AssertionError(f"Unexpected record count. Expected 4, got {total_count}")
-        
+                raise Exception(
+                    f"Unexpected record count. Expected 4, got {total_count}"
+                )
+
         finally:
             db_cursor.close()
             db_connection.close()
 
     except Exception as e:
-        # Update any remaining test steps that didn't reach
+        # Mark any unfinished steps as failed
         for step in test_steps:
-            if step["status"] == "did not reach":
+            if step["status"] == "running":
                 step["status"] = "failed"
-                step["Result_Message"] = f"Test failed before reaching this step: {str(e)}"
-        raise
-    
-    finally:
-        # CLEANUP
-        if request.config.getoption("--mode") == "Ardent":
-            custom_info['job_id'] = model_result.get("id") if model_result else None
+                step["Result_Message"] = f"❌ PostgreSQL validation error: {str(e)}"
 
-        cleanup_model_artifacts(
-            Configs=test_configs, 
-            custom_info=custom_info
-        )
+    return {"success": overall_success, "test_steps": test_steps}
