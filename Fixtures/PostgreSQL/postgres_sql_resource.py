@@ -155,7 +155,7 @@ def postgres_resource(request):
 
         resource_data = {
             "resource_id": resource_id,
-            "type": "postgresql_resource",
+            "type": "postgres_resource",
             "test_name": test_name,
             "creation_time": time.time(),
             "worker_pid": os.getpid(),

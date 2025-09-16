@@ -113,7 +113,7 @@ def validate_test(model_result, fixtures=None):
         postgres_fixture = None
         if fixtures:
             postgres_fixture = next(
-                (f for f in fixtures if f.get_resource_type() == "postgresql_resource"),
+                (f for f in fixtures if f.get_resource_type() == "postgres_resource"),
                 None,
             )
 

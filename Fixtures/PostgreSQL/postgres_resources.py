@@ -161,7 +161,7 @@ class PostgreSQLFixture(
         # Store resource data on the fixture instance for later access
         resource_data = PostgreSQLResourceData(
             resource_id=resource_id,
-            type="postgresql_resource",
+            type="postgres_resource",
             creation_time=creation_start,
             creation_duration=creation_duration,
             description=f"PostgreSQL resource for {resource_id}",
@@ -325,7 +325,7 @@ class PostgreSQLFixture(
     @classmethod
     def get_resource_type(cls) -> str:
         """Return the resource type identifier"""
-        return "postgresql_resource"
+        return "postgres_resource"
 
     @classmethod
     def get_default_config(cls) -> PostgreSQLResourceConfig:
