@@ -80,7 +80,11 @@ def signal_handler(signum: int, frame: Any) -> None:
 
 def discover_available_tests(filter_patterns: Optional[List[str]] = None) -> List[str]:
     """
-    Discover available tests for Braintrust evaluation with optional filtering.
+    Dynamically discover available tests for Braintrust evaluation with optional filtering.
+
+    Scans the Tests directory and finds all tests that follow the new pattern:
+    - Have a test file with get_fixtures() and create_config() functions
+    - Have a Test_Configs.py with User_Input
 
     Args:
         filter_patterns: List of regex patterns to filter test names
@@ -88,21 +92,37 @@ def discover_available_tests(filter_patterns: Optional[List[str]] = None) -> Lis
     Returns:
         List of test names that match the filter patterns (if any)
     """
-    # For now, hardcode the available tests - in the future this could scan directories
-    available_tests = [
-        "MongoDB_Agent_Add_Record",
-        "MySQL_Agent_Update_Records",
-        "Simple_Hello_World_Test",
-        "Airflow_Agent_Hello_Universe_Pipeline",
-        "Airflow_Agent_Sales_Fact_Table",
-        "PostgreSQL_Agent_Add_Multiple_Records",
-        "PostgreSQL_Agent_Add_Multiple_Records_Ambigious",
-        "PostgreSQL_Agent_Add_Record",
-        "PostgreSQL_Agent_Integer_Division_Fix",
-        "PostgreSQL_Agent_Missing_Users_Fix",
-        "PostgreSQL_Agent_Sales_Fact_Table_Stress_Test",
-        "PostgreSQL_Agent_Unnormalized_Normalized_ManyToMany",
-    ]
+    import importlib
+    import inspect
+
+    available_tests = []
+    tests_dir = "Tests"
+
+    if not os.path.exists(tests_dir):
+        print(f"⚠️  Tests directory '{tests_dir}' not found")
+        return []
+
+    # Scan all directories in Tests/
+    for item in os.listdir(tests_dir):
+        test_dir_path = os.path.join(tests_dir, item)
+
+        # Skip if not a directory or starts with . or __
+        if (
+            not os.path.isdir(test_dir_path)
+            or item.startswith(".")
+            or item.startswith("__")
+        ):
+            continue
+
+        # Check if this test follows the new pattern
+        if _is_valid_new_pattern_test(item):
+            available_tests.append(item)
+            print(f"✅ Discovered test: {item}")
+        else:
+            print(f"⚠️  Skipping {item} - doesn't follow new pattern or has errors")
+
+    # Sort for consistent ordering
+    available_tests.sort()
 
     # Apply filters if provided
     if filter_patterns:
@@ -121,7 +141,75 @@ def discover_available_tests(filter_patterns: Optional[List[str]] = None) -> Lis
     return available_tests
 
 
-# Note: update_configs_with_fixture_data is now used inside run_de_bench_task
+def _is_valid_new_pattern_test(test_name: str) -> bool:
+    """
+    Check if a test follows the new pattern with get_fixtures() and create_config().
+
+    Args:
+        test_name: Name of the test directory
+
+    Returns:
+        True if test follows new pattern, False otherwise
+    """
+    try:
+        # Check if Test_Configs.py exists and has User_Input
+        config_module_path = f"Tests.{test_name}.Test_Configs"
+        config_module = importlib.import_module(config_module_path)
+
+        if not hasattr(config_module, "User_Input"):
+            return False
+
+        # Find test files in the directory
+        test_dir = f"Tests/{test_name}"
+        test_files = []
+
+        for file in os.listdir(test_dir):
+            if file.startswith("test_") and file.endswith(".py"):
+                test_files.append(file[:-3])  # Remove .py extension
+
+        if not test_files:
+            return False
+
+        # Check the first test file for required functions
+        test_module_path = f"Tests.{test_name}.{test_files[0]}"
+        try:
+            test_module = importlib.import_module(test_module_path)
+        except Exception as e:
+            print(
+                f"Test '{test_name}' does not match pattern: failed to import '{test_module_path}': {e}"
+            )
+            return False
+
+        # Must have get_fixtures function
+        if not hasattr(test_module, "get_fixtures"):
+            print(f"Test '{test_name}' does not match pattern: missing 'get_fixtures'")
+            return False
+
+        # Must have create_config function
+        if not hasattr(test_module, "create_config"):
+            print(f"Test '{test_name}' does not match pattern: missing 'create_config'")
+            return False
+
+        # Must have validate_test function
+        if not hasattr(test_module, "validate_test"):
+            print(f"Test '{test_name}' does not match pattern: missing 'validate_test'")
+            return False
+
+        # Verify get_fixtures returns a list
+        get_fixtures_func = getattr(test_module, "get_fixtures")
+        if not callable(get_fixtures_func):
+            print(
+                f"Test '{test_name}' does not match pattern: 'get_fixtures' is not callable"
+            )
+            return False
+
+        # All checks passed
+        return True
+
+    except Exception as e:
+        # Any import errors or missing attributes mean it's not a valid test
+        print(f"Test '{test_name}' does not match pattern: {e}")
+        return False
 
 
 def fetch_git_info() -> Dict[str, Any]:

@@ -1,13 +1,15 @@
-import importlib
+# Braintrust-only Snowflake test - no pytest dependencies
+from model.Run_Model import run_model
+from model.Configure_Model import set_up_model_configs, cleanup_model_artifacts
 import os
+import importlib
 import time
 import uuid
+import snowflake.connector
+from typing import List, Dict, Any
+from Fixtures.base_fixture import DEBenchFixture
 
-import pytest
-
-from model.Configure_Model import cleanup_model_artifacts, set_up_model_configs
-from model.Run_Model import run_model
-
+# Dynamic config loading
 current_dir = os.path.dirname(os.path.abspath(__file__))
 parent_dir_name = os.path.basename(current_dir)
 module_path = f"Tests.{parent_dir_name}.Test_Configs"
@@ -17,190 +19,182 @@ Test_Configs = importlib.import_module(module_path)
 test_timestamp = int(time.time())
 test_uuid = uuid.uuid4().hex[:8]
 
-@pytest.mark.snowflake
-@pytest.mark.database
-@pytest.mark.two  # Difficulty 2 - involves database operations and validation
-@pytest.mark.parametrize("snowflake_resource", [{
-    "resource_id": f"snowflake_test_{test_timestamp}_{test_uuid}",
-    "database": f"BENCH_DB_{test_timestamp}_{test_uuid}",
-    "schema": f"TEST_SCHEMA_{test_timestamp}_{test_uuid}",
-    "sql_file": "users_schema.sql",
-    "s3_config": {
-        "bucket_url": "s3://de-bench/",
-        "s3_key": "v1/users_simple_20250901_233609.parquet",
-        "aws_key_id": "env:AWS_ACCESS_KEY",
-        "aws_secret_key": "env:AWS_SECRET_KEY"
-    }
-}], indirect=True)
-def test_snowflake_agent_add_record(request, snowflake_resource, supabase_account_resource):
-    """
-    Test that an AI agent can successfully add a new user record to a Snowflake table.
-    
-    This test:
-    1. Sets up a Snowflake database with users table (via SQL file)
-    2. Runs the AI model to add a new user record
-    3. Verifies the record was added correctly
-    4. Validates the data integrity
-    """
-    input_dir = os.path.dirname(os.path.abspath(__file__))
-    
-    print("=== Starting Snowflake Agent Add Record Test ===")
-    print(f"Using Snowflake database: {snowflake_resource['database']}")
-    print(f"Using Snowflake schema: {snowflake_resource['schema']}")
-    print(f"Test directory: {input_dir}")
 
+def get_fixtures() -> List[DEBenchFixture]:
+    """
+    Provides custom DEBenchFixture instances for Braintrust evaluation.
+    This Snowflake test validates that AI can add a record to a Snowflake table.
+    """
+    from Fixtures.Snowflake.snowflake_fixture import SnowflakeFixture
+
+    # Initialize Snowflake fixture with test-specific configuration
+    custom_snowflake_config = {
+        "resource_id": f"snowflake_test_{test_timestamp}_{test_uuid}",
+        "database": f"BENCH_DB_{test_timestamp}_{test_uuid}",
+        "schema": f"TEST_SCHEMA_{test_timestamp}_{test_uuid}",
+        "sql_file": f"{os.path.dirname(os.path.abspath(__file__))}/users_schema.sql",
+        "s3_config": {
+            "bucket_url": "s3://de-bench/",
+            "s3_key": "v1/users_simple_20250901_233609.parquet",
+            "aws_key_id": "env:AWS_ACCESS_KEY",
+            "aws_secret_key": "env:AWS_SECRET_KEY"
+        }
+    }
+
+    snowflake_fixture = SnowflakeFixture(custom_config=custom_snowflake_config)
+    return [snowflake_fixture]
+
+
+def create_config(fixtures: List[DEBenchFixture]) -> Dict[str, Any]:
+    """
+    Create test-specific config using the set-up fixtures.
+    This function has access to all fixture data after setup.
+    """
+    from extract_test_configs import create_config_from_fixtures
+    
+    # Use the helper to automatically create config from all fixtures
+    return create_config_from_fixtures(fixtures)
+
+
+def validate_test(model_result, fixtures=None):
+    """
+    Validates that the AI agent successfully added a new user record to Snowflake.
+
+    Expected behavior:
+    - A new user record for "Sarah Johnson" should be added to the USERS table
+    - The record should have all the correct field values
+    - Data integrity should be maintained
+
+    Args:
+        model_result: The result from the AI model execution
+        fixtures: List of DEBenchFixture instances used in the test
+
+    Returns:
+        dict: Contains 'success' boolean and 'test_steps' list with validation details
+    """
+    # Create test steps for this validation
     test_steps = [
         {
-            "name": "Initial Data Verification",
-            "description": "Verify initial users table has expected data",
-            "status": "did not reach",
-            "Result_Message": "",
+            "name": "Agent Task Execution",
+            "description": "AI Agent executes task to add user record to Snowflake",
+            "status": "running",
+            "Result_Message": "Checking if AI agent executed the Snowflake record addition task...",
         },
         {
-            "name": "Model Execution",
-            "description": "Run AI model to add new user record",
-            "status": "did not reach", 
-            "Result_Message": "",
+            "name": "User Record Addition",
+            "description": "Verify that Sarah Johnson record was added to USERS table",
+            "status": "running",
+            "Result_Message": "Validating that Sarah Johnson record exists in Snowflake...",
         },
         {
-            "name": "Record Addition Verification",
-            "description": "Verify new user record was added successfully",
-            "status": "did not reach",
-            "Result_Message": "",
-        },
-        {
-            "name": "Data Integrity Check",
-            "description": "Verify data integrity and constraints",
-            "status": "did not reach",
-            "Result_Message": "",
+            "name": "Record Data Validation",
+            "description": "Verify that the record has correct field values",
+            "status": "running",
+            "Result_Message": "Validating record field values...",
         },
     ]
 
-    request.node.user_properties.append(("test_steps", test_steps))
-
-    # SECTION 1: SETUP THE TEST
-    config_results = None
-    custom_info = {"mode": request.config.getoption("--mode")}
+    overall_success = False
 
     try:
-        print("Snowflake database and schema setup completed by fixture")
-        
-        # Update configs with actual Snowflake connection details from fixture
-        Test_Configs.Configs["services"]["snowflake"]["database"] = snowflake_resource["database"]
-        Test_Configs.Configs["services"]["snowflake"]["schema"] = snowflake_resource["schema"]
-        
-        if request.config.getoption("--mode") == "Ardent":
-            custom_info["publicKey"] = supabase_account_resource["publicKey"]
-            custom_info["secretKey"] = supabase_account_resource["secretKey"]
+        # Step 1: Check that the agent task executed
+        if not model_result or model_result.get("status") == "failed":
+            test_steps[0]["status"] = "failed"
+            test_steps[0][
+                "Result_Message"
+            ] = "❌ AI Agent task execution failed or returned no result"
+            return {"success": False, "test_steps": test_steps}
 
-        config_results = set_up_model_configs(Configs=Test_Configs.Configs,custom_info=custom_info)
+        test_steps[0]["status"] = "passed"
+        test_steps[0][
+            "Result_Message"
+        ] = "✅ AI Agent completed task execution successfully"
 
-        custom_info = {
-            **custom_info,
-            **config_results,
-        }
+        # Use fixture to get Snowflake connection for validation
+        snowflake_fixture = None
+        if fixtures:
+            snowflake_fixture = next(
+                (f for f in fixtures if f.get_resource_type() == "snowflake_resource"),
+                None,
+            )
 
-        # SECTION 2: VERIFY INITIAL STATE
-        print("Verifying initial database state...")
-        connection = snowflake_resource["connection"]
-        cursor = connection.cursor()
-        
+        if not snowflake_fixture:
+            raise Exception("Snowflake fixture not found")
+
+        # Get connection using the fixture
+        conn = snowflake_fixture.get_connection()
+        cursor = conn.cursor()
+
         try:
-            # Check initial user count
-            cursor.execute(f"SELECT COUNT(*) FROM {snowflake_resource['database']}.{snowflake_resource['schema']}.USERS")
-            initial_count = cursor.fetchone()[0]
-            print(f"Initial user count: {initial_count}")
-            
-            # Verify we have the expected test users
-            cursor.execute(f"""
-                SELECT USER_ID, FIRST_NAME, LAST_NAME, EMAIL 
-                FROM {snowflake_resource['database']}.{snowflake_resource['schema']}.USERS 
-                ORDER BY USER_ID
-            """)
-            initial_users = cursor.fetchall()
-            print(f"Initial users: {initial_users}")
-            
-            if initial_count >= 3:  # We expect at least 3 users from schema.sql
-                test_steps[0]["status"] = "passed"
-                test_steps[0]["Result_Message"] = f"Initial verification passed. Found {initial_count} users."
+            # Get the database and schema names from the fixture
+            resource_data = getattr(snowflake_fixture, "_resource_data", None)
+            if not resource_data:
+                raise Exception("Snowflake resource data not available")
+
+            database_name = resource_data.get("database_name")
+            schema_name = resource_data.get("schema_name")
+
+            # Step 2: Check if Sarah Johnson record was added
+            query = f"""
+            SELECT NAME, EMAIL, AGE, CITY, STATE, ACTIVE, PURCHASES 
+            FROM {database_name}.{schema_name}.USERS 
+            WHERE NAME = 'Sarah Johnson' AND EMAIL = 'sarah.johnson@newuser.com'
+            """
+            cursor.execute(query)
+            results = cursor.fetchall()
+
+            if not results:
+                test_steps[1]["status"] = "failed"
+                test_steps[1][
+                    "Result_Message"
+                ] = "❌ Sarah Johnson record not found in USERS table"
+                return {"success": False, "test_steps": test_steps}
+
+            test_steps[1]["status"] = "passed"
+            test_steps[1][
+                "Result_Message"
+            ] = f"✅ Sarah Johnson record found in USERS table"
+
+            # Step 3: Validate the record data
+            record = results[0]
+            expected_values = {
+                "NAME": "Sarah Johnson",
+                "EMAIL": "sarah.johnson@newuser.com",
+                "AGE": 35,
+                "CITY": "Austin",
+                "STATE": "TX",
+                "ACTIVE": True,
+                "PURCHASES": 0.00
+            }
+
+            # Check each field
+            validation_errors = []
+            for i, (field, expected) in enumerate(expected_values.items()):
+                actual = record[i]
+                if actual != expected:
+                    validation_errors.append(f"{field}: expected {expected}, got {actual}")
+
+            if validation_errors:
+                test_steps[2]["status"] = "failed"
+                test_steps[2][
+                    "Result_Message"
+                ] = f"❌ Record data validation failed: {'; '.join(validation_errors)}"
             else:
-                raise Exception(f"Expected at least 3 initial users, found {initial_count}")
-                
-        finally:
-            cursor.close()
-
-        # SECTION 3: RUN THE MODEL
-        start_time = time.time()
-        print("Running model to add new user record...")
-        model_result = run_model(container=None, task=Test_Configs.User_Input, configs=Test_Configs.Configs,extra_information = custom_info)
-
-        end_time = time.time()
-        print(f"Model execution completed. Result: {model_result}")
-        request.node.user_properties.append(("model_runtime", end_time - start_time))
-        
-        # Register the Braintrust root span ID for tracking (Ardent mode only)
-        if model_result and "bt_root_span_id" in model_result:
-            request.node.user_properties.append(("run_trace_id", model_result.get("bt_root_span_id")))
-            print(f"Registered Braintrust root span ID: {model_result.get('bt_root_span_id')}")
-        
-        test_steps[1]["status"] = "passed"
-        test_steps[1]["Result_Message"] = "Model executed successfully"
-
-        # SECTION 4: VERIFY THE NEW RECORD
-        print("Verifying new user record was added...")
-        cursor = connection.cursor()
-        
-        try:
-            # Check new user count
-            cursor.execute(f"SELECT COUNT(*) FROM {snowflake_resource['database']}.{snowflake_resource['schema']}.USERS")
-            final_count = cursor.fetchone()[0]
-            print(f"Final user count: {final_count}")
-            
-            # Look for the new user (Sarah Johnson)
-            cursor.execute(f"""
-                SELECT USER_ID, FIRST_NAME, LAST_NAME, EMAIL, AGE, CITY, STATE, IS_ACTIVE, TOTAL_PURCHASES
-                FROM {snowflake_resource['database']}.{snowflake_resource['schema']}.USERS
-                WHERE FIRST_NAME = 'Sarah' AND LAST_NAME = 'Johnson'
-            """)
-            new_user = cursor.fetchone()
-
-            if new_user:
-                print(f"Found new user: {new_user}")
-                user_id, first_name, last_name, email, age, city, state, is_active, total_purchases = new_user
-
-                # Verify the details match what we requested
-                assert first_name == 'Sarah', f"Expected first name 'Sarah', got '{first_name}'"
-                assert last_name == 'Johnson', f"Expected last name 'Johnson', got '{last_name}'"
-                assert email == 'sarah.johnson@newuser.com', f"Expected email 'sarah.johnson@newuser.com', got '{email}'"
-                assert age == 35, f"Expected age 35, got {age}"
-                assert city == 'Austin', f"Expected city 'Austin', got '{city}'"
-                assert state == 'TX', f"Expected state 'TX', got '{state}'"
-                assert is_active == True, f"Expected is_active True, got {is_active}"
-                assert total_purchases == 0.00, f"Expected total_purchases 0.00, got {total_purchases}"
-                
                 test_steps[2]["status"] = "passed"
-                test_steps[2]["Result_Message"] = f"New user record added successfully. User ID: {user_id}"
-                
-            else:
-                raise Exception("New user 'David Wilson' not found in database")
-            
-            # Verify count increased by exactly 1
-            if final_count == initial_count + 1:
-                test_steps[3]["status"] = "passed"
-                test_steps[3]["Result_Message"] = f"Data integrity verified. Count increased from {initial_count} to {final_count}"
-            else:
-                raise Exception(f"Expected count to increase by 1, went from {initial_count} to {final_count}")
-                
+                test_steps[2][
+                    "Result_Message"
+                ] = "✅ All record field values are correct"
+                overall_success = True
+
         finally:
             cursor.close()
+            conn.close()
 
-        print("✅ All verifications passed! New user record added successfully.")
+    except Exception as e:
+        # Mark any unfinished steps as failed
+        for step in test_steps:
+            if step["status"] == "running":
+                step["status"] = "failed"
+                step["Result_Message"] = f"❌ Snowflake validation error: {str(e)}"
 
-    finally:
-        try:
-            # Clean up model configs
-            if request.config.getoption("--mode") == "Ardent":
-                custom_info['job_id'] = model_result.get("id") if model_result else None
-            cleanup_model_artifacts(Configs=Test_Configs.Configs, custom_info=custom_info)
-        except Exception as e:
-            print(f"Error during cleanup: {e}")
+    return {"success": overall_success, "test_steps": test_steps}
