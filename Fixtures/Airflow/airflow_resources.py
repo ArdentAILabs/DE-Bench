@@ -686,7 +686,7 @@ def _validate_deployment_status(deployment_name: str, expected_status: str) -> N
     """
     start_time = time.time()
     print(
-        f"Worker {os.getpid()}: Waiting for deployment {deployment_name} to have a hibernation status..."
+        f"Worker {os.getpid()}: Waiting for deployment '{deployment_name}' to have status '{expected_status}'..."
     )
     for _ in range(30):
         status = _check_deployment_status(deployment_name)
