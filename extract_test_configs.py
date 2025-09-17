@@ -93,26 +93,21 @@ def extract_test_configuration(test_name: str) -> TestConfiguration:
                         f"📦 {test_name} provides custom fixtures: {[f.get_resource_type() for f in custom_fixtures]}"
                     )
 
-                    # Require create_config function for all new tests
-                    create_config_func = None
-                    if hasattr(test_module, "create_config"):
-                        create_config_func = test_module.create_config
+                    create_model_inputs_func = None
+                    if hasattr(test_module, "create_model_inputs"):
+                        create_model_inputs_func = test_module.create_model_inputs
                         print(
-                            f"⚙️  {test_name} provides custom config creation function"
-                        )
-                    else:
-                        print(
-                            f"⚠️  {test_name} missing create_config function - will use base configs"
+                            f"⚙️  {test_name} provides custom inputs modification function"
                         )
 
                     resource_configs = {
                         "custom_fixtures": custom_fixtures,
-                        "create_config_func": create_config_func,
+                        "create_model_inputs_func": create_model_inputs_func,
                     }
                 else:
                     # Legacy test - not supported anymore
                     raise ValueError(
-                        f"❌ {test_name} uses legacy pattern. All tests must provide get_fixtures() and create_config() functions."
+                        f"❌ {test_name} uses legacy pattern. All tests must provide get_fixtures() and create_model_inputs() functions."
                     )
             else:
                 # No test files found
@@ -407,7 +402,7 @@ def setup_test_resources(
 
         return resources, fixtures
 
-    # All tests must now use the new pattern with get_fixtures() and create_config()
+    # All tests must now use the new pattern with get_fixtures() and create_model_inputs()
     # This fallback should never be reached since we enforce the new pattern above
     raise ValueError(
         f"❌ Invalid test configuration for {resource_configs}"

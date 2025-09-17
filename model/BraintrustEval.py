@@ -36,6 +36,79 @@ def _cleanup_test_resources_for_task(
         print(f"⚠️ Error cleaning up test resources for {test_name}: {e}")
 
 
+def full_model_run(
+    test_name,
+    mode,
+    test_resources,
+    fixture_instances,
+    model_configs,
+    task_description,
+):
+    """
+    Step 3 and 4: Set up model configurations if needed and execute the model.
+    """
+    config_results = None
+    custom_info = {"mode": mode}
+
+    if mode == "Ardent" and "supabase_account_resource" in test_resources:
+        print(f"🔧 Setting up model configs for {test_name}...")
+
+        custom_info.update(
+            {
+                "publicKey": test_resources["supabase_account_resource"]["publicKey"],
+                "secretKey": test_resources["supabase_account_resource"]["secretKey"],
+            }
+        )
+
+        config_results = set_up_model_configs(
+            Configs=model_configs,
+            custom_info=custom_info,
+        )
+        print(f"✅ Model configs set up for {test_name}")
+
+    elif mode == "Claude_Code":
+        # Add Claude_Code-specific setup
+        if "kubernetes_object" in test_resources:
+            custom_info.update(
+                {
+                    "kubernetes_object": test_resources["kubernetes_object"],
+                    "pod_name": test_resources["pod_name"],
+                }
+            )
+
+    # 4. Execute the model
+    print(f"🤖 Running model for {test_name}...")
+    model_result = run_model(
+        container=None,
+        task=task_description,
+        configs=model_configs,
+        extra_information=custom_info,
+    )
+    print(f"✅ Model execution completed for {test_name}")
+
+    # Clean up model artifacts first (but keep test resources for validation)
+    if (
+        config_results
+        and mode == "Ardent"
+        and "supabase_account_resource" in test_resources
+    ):
+        print(f"🧹 Cleaning up model artifacts for {test_name}...")
+        cleanup_model_artifacts(
+            Configs=model_configs,
+            custom_info=custom_info,
+        )
+        print(f"✅ Model artifacts cleaned up for {test_name}")
+
+    return {
+        "result": model_result,
+        "fixtures": fixture_instances,
+        "test_name": test_name,
+        "test_resources": test_resources,
+        "model_configs": model_configs,
+        "custom_info": custom_info,
+    }
+
+
 def run_de_bench_task(test_input):
     """
     Convert DE-Bench test to Braintrust task function with per-test resource management.
@@ -51,7 +124,6 @@ def run_de_bench_task(test_input):
 
     test_resources = {}
     fixture_instances = []
-    config_results = None
 
     try:
         # 1. Extract test configuration and set up per-test resources
@@ -64,83 +136,42 @@ def run_de_bench_task(test_input):
         )
         print(f"✅ Resources set up for {test_name}")
 
-        # 2. Create configs using fixtures (all tests must have create_config now)
-        create_config_func = test_data["resource_configs"].get("create_config_func")
-        if not create_config_func:
-            raise ValueError(
-                f"❌ Test {test_name} is missing create_config function - all tests must use the new pattern"
-            )
-
-        # Use test-specific config creation function
-        print(f"⚙️  Using custom config creation for {test_name}")
-        updated_configs = create_config_func(fixture_instances)
-
-        # 3. Set up model configurations if needed
-        custom_info = {"mode": mode}
-
-        if mode == "Ardent" and "supabase_account_resource" in test_resources:
-            print(f"🔧 Setting up model configs for {test_name}...")
-
-            custom_info.update(
-                {
-                    "publicKey": test_resources["supabase_account_resource"][
-                        "publicKey"
-                    ],
-                    "secretKey": test_resources["supabase_account_resource"][
-                        "secretKey"
-                    ],
-                }
-            )
-
-            config_results = set_up_model_configs(
-                Configs=updated_configs,
-                custom_info=custom_info,
-            )
-            print(f"✅ Model configs set up for {test_name}")
-
-        elif mode == "Claude_Code":
-            # Add Claude_Code-specific setup
-            if "kubernetes_object" in test_resources:
-                custom_info.update(
-                    {
-                        "kubernetes_object": test_resources["kubernetes_object"],
-                        "pod_name": test_resources["pod_name"],
-                    }
-                )
-
-        # 4. Execute the model
-        print(f"🤖 Running model for {test_name}...")
-        model_result = run_model(
-            container=None,
-            task=task_description,
-            configs=updated_configs,
-            extra_information=custom_info,
-        )
-        print(f"✅ Model execution completed for {test_name}")
-
-        # Clean up model artifacts first (but keep test resources for validation)
-        if (
-            config_results
-            and mode == "Ardent"
-            and "supabase_account_resource" in test_resources
-        ):
-            print(f"🧹 Cleaning up model artifacts for {test_name}...")
-            cleanup_model_artifacts(
-                Configs=updated_configs,
-                custom_info=custom_info,
-            )
-            print(f"✅ Model artifacts cleaned up for {test_name}")
-
-        # Return both the model result and the fixture instances for validation
-        # Store test_name and other cleanup info needed later
-        return {
-            "result": model_result,
-            "fixtures": fixture_instances,  # Pass actual fixture instances with _resource_data
+        model_inputs_base = {
             "test_name": test_name,
-            "test_resources": test_resources,  # Keep resource data for cleanup
-            "updated_configs": updated_configs,
-            "custom_info": custom_info,
+            "mode": mode,
+            "test_resources": test_resources,
+            "fixture_instances": fixture_instances,
+            "task_description": task_description,
         }
+
+        # 3. Modify inputs if needed
+        create_model_inputs_func = test_data["resource_configs"].get(
+            "create_model_inputs_func"
+        )
+        if create_model_inputs_func:
+            final_full_model_run_args = create_model_inputs_func(
+                model_inputs_base, fixture_instances
+            )
+        else:
+            raise ValueError(
+                f"❌ Test {test_name} is missing create_model_inputs_func function"
+            )
+
+        # Validate that model_configs and task_description are in the final_full_model_run_args
+        if "model_configs" not in final_full_model_run_args:
+            raise ValueError(
+                f"❌ Test {test_name} did not return model_configs from create_model_inputs_func"
+            )
+        if "task_description" not in final_full_model_run_args:
+            raise ValueError(
+                f"❌ Test {test_name} did not return task_description from create_model_inputs_func"
+            )
+
+        # 3 & 4. Set up model configs and run model
+        result = full_model_run(**final_full_model_run_args)
+
+        # Note: Cleanup doesn't happen here, it happens in the validator because we need to access the fixture instances
+        return result
 
     except Exception as e:
         print(f"❌ Error in test execution for {test_name}: {e}")

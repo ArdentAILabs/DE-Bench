@@ -10,8 +10,8 @@ Create an Airflow DAG that:
 3. Runs daily at midnight
 4. Has a single task named 'create_sales_fact_table'
 5. Name the DAG 'sales_fact_creation_dag'
-6. Create it in a branch called 'BRANCH_NAME_SALES_FACT_TABLE'
-7. Name the PR 'PR_NAME_SALES_FACT_TABLE'
+6. Create it in a branch called 'BRANCH_NAME'
+7. Name the PR 'PR_NAME'
 """
 
 # Configuration will be generated dynamically by create_config function

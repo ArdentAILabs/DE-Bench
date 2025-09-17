@@ -84,7 +84,7 @@ def discover_available_tests(filter_patterns: Optional[List[str]] = None) -> Lis
     Dynamically discover available tests for Braintrust evaluation with optional filtering.
 
     Scans the Tests directory and finds all tests that follow the new pattern:
-    - Have a test file with get_fixtures() and create_config() functions
+    - Have a test file with get_fixtures() and create_model_inputs() functions
     - Have a Test_Configs.py with User_Input
 
     Args:
@@ -141,7 +141,7 @@ def discover_available_tests(filter_patterns: Optional[List[str]] = None) -> Lis
 
 def _is_valid_new_pattern_test(test_name: str) -> bool:
     """
-    Check if a test follows the new pattern with get_fixtures() and create_config().
+    Check if a test follows the new pattern with get_fixtures() and create_model_inputs().
 
     Args:
         test_name: Name of the test directory
@@ -186,8 +186,10 @@ def _is_valid_new_pattern_test(test_name: str) -> bool:
             return False
 
         # Must have create_config function
-        if not hasattr(test_module, "create_config"):
-            print(f"Test '{test_name}' does not match pattern: missing 'create_config'")
+        if not hasattr(test_module, "create_model_inputs"):
+            print(
+                f"Test '{test_name}' does not match pattern: missing 'create_model_inputs'"
+            )
             return False
 
         # Must have validate_test function
