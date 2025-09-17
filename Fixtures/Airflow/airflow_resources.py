@@ -88,6 +88,10 @@ def astro_login():
     A session-scoped fixture that ensures Astro is logged in once for the entire test session.
     Uses file-based coordination to prevent multiple logins in parallel execution.
     """
+    # We don't need to login if the API token is set
+    if os.getenv("ASTRO_API_TOKEN"):
+        print(f"Worker {os.getpid()}: Astro API token found, skipping login")
+        return None
     return _ensure_astro_login()
 
 
@@ -178,7 +182,6 @@ def airflow_resource(request, astro_login, shared_cache_manager):
     resource_id = build_template["resource_id"]
     required_envars = [
         "ASTRO_WORKSPACE_ID",
-        "ASTRO_ACCESS_TOKEN",
         "AIRFLOW_GITHUB_TOKEN",
         "AIRFLOW_REPO",
         "ASTRO_CLOUD_PROVIDER",
@@ -186,6 +189,9 @@ def airflow_resource(request, astro_login, shared_cache_manager):
     ]
     if missing_envars := [envar for envar in required_envars if not os.getenv(envar)]:
         raise ValueError(f"The following envars are not set: {missing_envars}")  # noqa
+    # make sure either ASTRO_ACCESS_TOKEN or ASTRO_API_TOKEN is set
+    if not os.getenv("ASTRO_ACCESS_TOKEN") and not os.getenv("ASTRO_API_TOKEN"):
+        raise ValueError("Either ASTRO_ACCESS_TOKEN or ASTRO_API_TOKEN must be set")
 
     # make sure the astro cli is installed
     _parse_astro_version()
@@ -415,6 +421,9 @@ def _check_and_update_gh_secrets(deployment_id: str, deployment_name: str, astro
         "ASTRO_DEPLOYMENT_NAME": deployment_name,
         "ASTRO_ACCESS_TOKEN": astro_access_token,
     }
+    # if the ASTRO_API_TOKEN is set, don't update the ASTRO_ACCESS_TOKEN secret
+    if os.getenv("ASTRO_API_TOKEN"):
+        gh_secrets.pop("ASTRO_ACCESS_TOKEN")
     airflow_github_repo = os.getenv("AIRFLOW_REPO")
     g = Github(os.getenv("AIRFLOW_GITHUB_TOKEN"))
     if "github.com" in airflow_github_repo:
