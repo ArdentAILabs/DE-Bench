@@ -198,6 +198,7 @@ class AirflowFixture(
                 deployment_id=astro_deployment_id,
                 deployment_name=astro_deployment_name,
                 astro_access_token=os.environ["ASTRO_ACCESS_TOKEN"],
+                astro_workspace_id=os.environ["ASTRO_WORKSPACE_ID"],
             )
 
             # Get deployment API URL
