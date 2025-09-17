@@ -20,11 +20,11 @@ def run_model(container, task, configs, extra_information = {}):
 
     mode = extra_information.get("mode", "Ardent")
     
-
-    print(container)
-    print(task)
-    print(configs)
-    print(extra_information)
+    print(f"{mode=}")
+    print(f"{container=}")
+    print(f"{task=}")
+    print(f"{configs=}")
+    print(f"{extra_information=}")
 
     #create the ardent client with the specific creds then we go!
     if mode == "Ardent":
