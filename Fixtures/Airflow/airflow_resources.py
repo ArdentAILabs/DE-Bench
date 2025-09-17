@@ -421,6 +421,9 @@ def _check_and_update_gh_secrets(deployment_id: str, deployment_name: str, astro
         "ASTRO_DEPLOYMENT_NAME": deployment_name,
         "ASTRO_ACCESS_TOKEN": astro_access_token,
     }
+    # if the ASTRO_API_TOKEN is set, don't update the ASTRO_ACCESS_TOKEN secret
+    if os.getenv("ASTRO_API_TOKEN"):
+        gh_secrets.pop("ASTRO_ACCESS_TOKEN")
     airflow_github_repo = os.getenv("AIRFLOW_REPO")
     g = Github(os.getenv("AIRFLOW_GITHUB_TOKEN"))
     if "github.com" in airflow_github_repo:
