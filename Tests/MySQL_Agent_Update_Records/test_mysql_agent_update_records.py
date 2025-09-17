@@ -91,7 +91,7 @@ def create_model_inputs(
     This function has access to all fixture data after setup.
     """
     from extract_test_configs import create_config_from_fixtures
-    
+
     # Use the helper to automatically create config from all fixtures
     return {
         **base_model_inputs,

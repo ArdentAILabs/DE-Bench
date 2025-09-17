@@ -36,7 +36,7 @@ def create_model_inputs(
     For this simple test, we don't need any real config since it's just a hello world test.
     """
     from extract_test_configs import create_config_from_fixtures
-    
+
     # Use the helper to automatically create config from all fixtures
     # MongoDB fixture will provide minimal config even though we don't use it
     return {
