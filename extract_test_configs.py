@@ -310,7 +310,7 @@ def cleanup_test_resources_from_fixtures(
 
         if resource_type in resources:
             try:
-                fixture.teardown_resource(resources[resource_type])
+                fixture._teardown_resource(resources[resource_type])
                 print(f"✅ Cleaned up {resource_type} using provided fixture")
             except Exception as e:
                 print(f"❌ Failed to clean up {resource_type}: {e}")

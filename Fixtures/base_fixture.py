@@ -1,6 +1,7 @@
 from abc import ABC, abstractmethod
 from typing import Dict, Any, TypeVar, Generic, Optional
 from typing_extensions import TypedDict
+from braintrust import traced
 
 # Generic type variables for configuration and resource data
 ConfigT = TypeVar("ConfigT", bound=Dict[str, Any])
@@ -59,7 +60,17 @@ class DEBenchFixture(ABC, Generic[ConfigT, ResourceT, SessionT]):
         """
         Set up and initialize the resource based on configuration.
         """
-        resource_data = self.setup_resource(resource_config)
+
+        @traced(name=f"{self.get_resource_type()}.setup_resource")
+        def inner_setup_resource(
+            resource_config: Optional[ConfigT] = None,
+        ) -> ResourceT:
+            """
+            Inner setup resource method.
+            """
+            return self.setup_resource(resource_config)
+
+        resource_data = inner_setup_resource(resource_config)
         self._resource_data = resource_data
         return resource_data
 
@@ -72,6 +83,20 @@ class DEBenchFixture(ABC, Generic[ConfigT, ResourceT, SessionT]):
             resource_data: Resource data returned from setup_resource
         """
         pass
+
+    def _teardown_resource(self, resource_data: ResourceT) -> None:
+        """
+        Clean up and destroy the resource.
+        """
+
+        @traced(name=f"{self.get_resource_type()}.teardown_resource")
+        def inner_teardown_resource(resource_data: ResourceT) -> None:
+            """
+            Inner teardown resource method.
+            """
+            return self.teardown_resource(resource_data)
+
+        inner_teardown_resource(resource_data)
 
     @classmethod
     @abstractmethod
