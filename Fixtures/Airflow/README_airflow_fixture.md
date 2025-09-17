@@ -14,7 +14,7 @@ The fixture creates and manages Airflow deployments in Astronomer Cloud for each
 - **Deployment Hibernation**: Automatically hibernates deployments after tests for cost optimization
 - **Automatic cleanup**: Resources are automatically cleaned up and returned to cache after each test
 - **GitHub integration**: Automatically syncs with GitHub repositories for DAG deployment
-- **API token authentication**: Uses Bearer token authentication for API access
+- **API token authentication**: Uses Bearer token authentication for API access with support for both long-lived and short-lived tokens
 - **Parallel execution support**: File-based coordination prevents conflicts in parallel test execution
 - **Session-scoped login**: Astro CLI login is managed once per test session
 
@@ -27,10 +27,16 @@ The fixture requires the following environment variables to be set:
 ```bash
 # Astronomer Cloud credentials (REQUIRED)
 ASTRO_WORKSPACE_ID=your_workspace_id
-ASTRO_ACCESS_TOKEN=your_astro_access_token  # visit https://cloud.astronomer.io/token for a token
 ASTRO_CLOUD_PROVIDER=aws  # or gcp, azure
 ASTRO_REGION=us-east-1
 ASTRO_RUNTIME_VERSION=13.1.0  # Optional, defaults to 13.1.0
+
+# Astronomer authentication (CHOOSE ONE)
+# Option 1: Long-lived API token (RECOMMENDED)
+ASTRO_API_TOKEN=your_astro_api_token  # see https://www.astronomer.io/docs/astro/automation-authentication for more information and how to create one
+
+# Option 2: Short-lived access token (1 hour expiry)
+ASTRO_ACCESS_TOKEN=your_astro_access_token  # visit https://cloud.astronomer.io/token for a token
 
 # GitHub integration (REQUIRED)
 AIRFLOW_GITHUB_TOKEN=your_github_token
@@ -39,10 +45,15 @@ AIRFLOW_REPO=https://github.com/your-org/your-repo
 # Airflow user credentials (OPTIONAL, defaults to "airflow")
 AIRFLOW_USERNAME=airflow
 AIRFLOW_PASSWORD=airflow
-
-# Optional: Pre-existing API token
-ASTRO_API_TOKEN=your_existing_api_token
 ```
+
+#### Token Selection Priority
+
+The fixture will use tokens in the following priority order:
+1. **ASTRO_API_TOKEN** (if set) - Long-lived token with configurable expiry
+2. **ASTRO_ACCESS_TOKEN** (if set) - Short-lived token with 1-hour expiry
+
+**Recommendation**: Use `ASTRO_API_TOKEN` for better reliability and longer test sessions, as `ASTRO_ACCESS_TOKEN` expires after 1 hour and may cause test failures in longer-running test suites.
 
 ### Required Tools
 
@@ -292,6 +303,7 @@ def test_airflow_fixture(airflow_resource):
 ### Common Issues
 
 - **Missing environment variables**: Ensure all required environment variables are set
+- **Token expiry issues**: Use `ASTRO_API_TOKEN` instead of `ASTRO_ACCESS_TOKEN` for longer test sessions (ASTRO_ACCESS_TOKEN expires after 1 hour)
 - **Astro CLI not installed**: Install Astro CLI and ensure it's in PATH
 - **GitHub access issues**: Verify GitHub token has repository access
 - **Deployment creation failures**: Check Astronomer Cloud quotas and permissions
@@ -326,6 +338,14 @@ The fixture provides detailed logging including:
 - **Cache persistence**: Survives across test sessions
 - **Manual cache reset**: Delete the cache database file to start fresh
 - **Cache monitoring**: Check cache database for deployment status and usage
+
+### Token Management Best Practices
+
+- **Use ASTRO_API_TOKEN**: Prefer `ASTRO_API_TOKEN` over `ASTRO_ACCESS_TOKEN` for better reliability
+- **Token expiry**: `ASTRO_ACCESS_TOKEN` expires after 1 hour, which can cause test failures in longer test suites
+- **Token scope**: `ASTRO_API_TOKEN` allows you to configure custom expiry times for your specific needs
+- **Security**: Both tokens provide the same level of access - choose based on your session duration requirements
+- **Fallback behavior**: If both tokens are set, `ASTRO_API_TOKEN` takes precedence
 
 ## Dependencies
 
