@@ -88,6 +88,10 @@ def astro_login():
     A session-scoped fixture that ensures Astro is logged in once for the entire test session.
     Uses file-based coordination to prevent multiple logins in parallel execution.
     """
+    # We don't need to login if the API token is set
+    if os.getenv("ASTRO_API_TOKEN"):
+        print(f"Worker {os.getpid()}: Astro API token found, skipping login")
+        return None
     return _ensure_astro_login()
 
 
