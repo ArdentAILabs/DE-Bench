@@ -182,7 +182,6 @@ def airflow_resource(request, astro_login, shared_cache_manager):
     resource_id = build_template["resource_id"]
     required_envars = [
         "ASTRO_WORKSPACE_ID",
-        "ASTRO_ACCESS_TOKEN",
         "AIRFLOW_GITHUB_TOKEN",
         "AIRFLOW_REPO",
         "ASTRO_CLOUD_PROVIDER",
@@ -190,6 +189,9 @@ def airflow_resource(request, astro_login, shared_cache_manager):
     ]
     if missing_envars := [envar for envar in required_envars if not os.getenv(envar)]:
         raise ValueError(f"The following envars are not set: {missing_envars}")  # noqa
+    # make sure either ASTRO_ACCESS_TOKEN or ASTRO_API_TOKEN is set
+    if not os.getenv("ASTRO_ACCESS_TOKEN") and not os.getenv("ASTRO_API_TOKEN"):
+        raise ValueError("Either ASTRO_ACCESS_TOKEN or ASTRO_API_TOKEN must be set")
 
     # make sure the astro cli is installed
     _parse_astro_version()
