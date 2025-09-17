@@ -43,7 +43,9 @@ def get_fixtures() -> List[DEBenchFixture]:
     return [postgres_fixture]
 
 
-def create_config(fixtures: List[DEBenchFixture]) -> Dict[str, Any]:
+def create_model_inputs(
+    base_model_inputs: Dict[str, Any], fixtures: List[DEBenchFixture]
+) -> Dict[str, Any]:
     """
     Create test-specific config using the set-up fixtures.
     This function has access to all fixture data after setup.
@@ -51,7 +53,10 @@ def create_config(fixtures: List[DEBenchFixture]) -> Dict[str, Any]:
     from extract_test_configs import create_config_from_fixtures
 
     # Use the helper to automatically create config from all fixtures
-    return create_config_from_fixtures(fixtures)
+    return {
+        **base_model_inputs,
+        "model_configs": create_config_from_fixtures(fixtures),
+    }
 
 
 def validate_test(model_result, fixtures=None):

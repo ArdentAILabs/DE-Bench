@@ -28,16 +28,21 @@ def get_fixtures() -> List[DEBenchFixture]:
     return [mongo_fixture]
 
 
-def create_config(fixtures: List[DEBenchFixture]) -> Dict[str, Any]:
+def create_model_inputs(
+    base_model_inputs: Dict[str, Any], fixtures: List[DEBenchFixture]
+) -> Dict[str, Any]:
     """
     Create test-specific config using the set-up fixtures.
     For this simple test, we don't need any real config since it's just a hello world test.
     """
     from extract_test_configs import create_config_from_fixtures
-
+    
     # Use the helper to automatically create config from all fixtures
     # MongoDB fixture will provide minimal config even though we don't use it
-    return create_config_from_fixtures(fixtures)
+    return {
+        **base_model_inputs,
+        "model_configs": create_config_from_fixtures(fixtures),
+    }
 
 
 def validate_test(model_result, fixtures=None):

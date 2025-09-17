@@ -185,7 +185,7 @@ def _is_valid_new_pattern_test(test_name: str) -> bool:
             print(f"Test '{test_name}' does not match pattern: missing 'get_fixtures'")
             return False
 
-        # Must have create_config function
+        # Must have create_model_inputs function
         if not hasattr(test_module, "create_model_inputs"):
             print(
                 f"Test '{test_name}' does not match pattern: missing 'create_model_inputs'"
