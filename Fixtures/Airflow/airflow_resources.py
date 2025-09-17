@@ -20,6 +20,7 @@ from github import Github
 from Fixtures import parse_test_name
 from Fixtures.Airflow.Airflow import Airflow_Local
 from Fixtures.Databricks.cache_manager import CacheManager
+from braintrust import traced
 
 VALIDATE_ASTRO_INSTALL = "Please check if the Astro CLI is installed and in PATH."
 load_dotenv()
@@ -288,16 +289,6 @@ def airflow_resource(request, astro_login, shared_cache_manager):
         print(
             f"Worker {os.getpid()}: Using fresh deployment ID {fresh_deployment_id} for {astro_deployment_name}"
         )
-
-        # create a token for the airflow resource
-        api_token = api_token or _create_astro_deployment_api_token(
-            deployment_id=fresh_deployment_id,
-            deployment_name=astro_deployment_name,
-        )
-        # check if the token has any prefix
-        if "astro api" in api_token.lower():
-            api_token = api_token[api_token.find("\n") + 1 : -1].strip()
-
         # create a user in the airflow deployment (ardent needs username and password for the Airflowconfig)
         _create_variables_in_airflow_deployment(astro_deployment_name)
 
@@ -445,6 +436,7 @@ def _run_and_validate_subprocess(
         raise e from e
 
 
+@traced(name="_check_and_update_gh_secrets")
 def _check_and_update_gh_secrets(
     deployment_id: str,
     deployment_name: str,
@@ -496,6 +488,7 @@ def _check_and_update_gh_secrets(
         raise e from e
 
 
+@traced(name="_create_deployment_in_astronomer")
 def _create_deployment_in_astronomer(
     deployment_name: str, wait: Optional[bool] = True
 ) -> Optional[str]:
@@ -583,6 +576,7 @@ def _create_dir_and_astro_project(unique_id: str) -> Path:
     return temp_dir
 
 
+@traced(name="fetch_astro_deployments")
 def fetch_astro_deployments() -> list[dict[str, str]]:
     """
     Helper method to find the hibernating deployment in Astronomer.
@@ -625,6 +619,7 @@ def fetch_astro_deployments() -> list[dict[str, str]]:
     return astro_deployments
 
 
+@traced(name="_check_deployment_status")
 def _check_deployment_status(deployment_name: str) -> str:
     """
     Helper method to check the status of a deployment in Astronomer.
@@ -654,6 +649,7 @@ def _check_deployment_status(deployment_name: str) -> str:
         return "UNKNOWN"
 
 
+@traced(name="_wake_up_deployment")
 def _wake_up_deployment(deployment_name: str) -> None:
     """
     Helper method to wake up a deployment in Astronomer.
@@ -675,6 +671,7 @@ def _wake_up_deployment(deployment_name: str) -> None:
         raise EnvironmentError(f"Unable to wake up deployment {deployment_name}")
 
 
+@traced(name="_validate_deployment_status")
 def _validate_deployment_status(deployment_name: str, expected_status: str) -> None:
     """
     Validates the status of a deployment in Astronomer.
@@ -736,6 +733,7 @@ def _hibernate_deployment(deployment_name: str) -> None:
         raise EnvironmentError(f"Unable to hibernate deployment {deployment_name}")
 
 
+@traced(name="_create_variables_in_airflow_deployment")
 def _create_variables_in_airflow_deployment(deployment_name: str) -> None:
     """
     Helper method to create a user in the Airflow deployment using Astronomer CLI and environment variables in Airflow.
@@ -842,6 +840,7 @@ def _create_variables_in_airflow_deployment(deployment_name: str) -> None:
                         # Continue with other variables rather than failing completely
 
 
+@traced(name="cleanup_airflow_resource")
 def cleanup_airflow_resource(
     resource_id: str,
     test_resources: list[tuple],
@@ -943,6 +942,7 @@ def _get_deployment_id_by_name(deployment_name: str) -> Optional[str]:
         return None
 
 
+@traced(name="_create_astro_deployment_api_token")
 def _create_astro_deployment_api_token(
     deployment_id: str, deployment_name: str, retries: int = 5
 ) -> str:
@@ -1007,6 +1007,10 @@ def _create_astro_deployment_api_token(
                                 f"Worker {os.getpid()}: Successfully created API token for deployment {deployment_name}"
                             )
                             return api_token
+                        else:
+                            print(
+                                f"Worker {os.getpid()}: No API token returned for deployment {deployment_name}"
+                            )
                     except subprocess.CalledProcessError as cmd_error:
                         # Capture the actual error output for debugging
                         stderr_output = (

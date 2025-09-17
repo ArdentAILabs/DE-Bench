@@ -227,14 +227,12 @@ class AirflowFixture(
                     f"Could not find deployment ID for {astro_deployment_name}"
                 )
 
-            api_token = _create_astro_deployment_api_token(
-                deployment_id=fresh_deployment_id,
-                deployment_name=astro_deployment_name,
-            )
+            api_token = os.getenv("ASTRO_API_TOKEN")
 
-            # Clean up token format if needed
-            if "astro api" in api_token.lower():
-                api_token = api_token[api_token.find("\n") + 1 : -1].strip()
+            if not api_token:
+                raise ValueError(
+                    "ASTRO_API_TOKEN is not set. This is now a required environment variable."
+                )
 
             # Create user in Airflow deployment
             _create_variables_in_airflow_deployment(astro_deployment_name)
@@ -342,6 +340,8 @@ class AirflowFixture(
             raise Exception(
                 "Airflow resource data not available - ensure setup_resource was called"
             )
+
+        print(f"resource_data: {resource_data}")
 
         # Extract connection details from resource data
         github_token = resource_data.get(

@@ -55,11 +55,18 @@ class Airflow_Local:
                 f"{self.AIRFLOW_HOST}/health",
                 headers={"Authorization": f"Bearer {self.API_TOKEN}"},
             )
-            if response.status_code == 200:
+
+            if response.status_code == 401:
+                print(
+                    f"WARNING: 401 Unauthorized Encountered while querying Airflow webserver status. Will retry. {retries} retries left. Message: {response.text}"
+                )
+            elif response.status_code == 200:
                 print("Airflow webserver is ready")
                 return True
+
             retries -= 1
             time.sleep(60)
+
         print("Airflow webserver is not ready")
         return False
 
@@ -75,7 +82,8 @@ class Airflow_Local:
         :rtype: bool
         """
         wait_time_seconds = 20  # Increased from 10s to 20s per attempt
-        max_retries = (max_wait_minutes * wait_time_seconds) // 60
+        max_wait_seconds = max_wait_minutes * 60
+        max_retries = max_wait_seconds // wait_time_seconds
 
         for attempt in range(max_retries):
             print(
