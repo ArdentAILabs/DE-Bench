@@ -33,6 +33,11 @@ def _ensure_astro_login() -> None:
     :raises EnvironmentError: If login fails.
     :rtype: None
     """
+    # We don't need to login if the API token is set
+    if os.getenv("ASTRO_API_TOKEN"):
+        print(f"Worker {os.getpid()}: Astro API token found, skipping login")
+        return None
+
     # Create a lock file for coordination
     lock_file_path = os.path.join(tempfile.gettempdir(), "astro_login.lock")
 
@@ -460,6 +465,10 @@ def _check_and_update_gh_secrets(
         "ASTRO_ACCESS_TOKEN": astro_access_token,
         "ASTRO_WORKSPACE_ID": astro_workspace_id,
     }
+    # if the ASTRO_API_TOKEN is set, don't update the ASTRO_ACCESS_TOKEN secret
+    if os.getenv("ASTRO_API_TOKEN"):
+        gh_secrets.pop("ASTRO_ACCESS_TOKEN")
+
     airflow_github_repo = os.getenv("AIRFLOW_REPO")
     g = Github(os.getenv("AIRFLOW_GITHUB_TOKEN"))
     if "github.com" in airflow_github_repo:

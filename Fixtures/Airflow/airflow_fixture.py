@@ -93,7 +93,6 @@ class AirflowFixture(
         # Verify required environment variables
         required_envars = [
             "ASTRO_WORKSPACE_ID",
-            "ASTRO_ACCESS_TOKEN",
             "AIRFLOW_GITHUB_TOKEN",
             "AIRFLOW_REPO",
             "ASTRO_CLOUD_PROVIDER",
@@ -105,6 +104,10 @@ class AirflowFixture(
             raise ValueError(
                 f"Missing required environment variables: {missing_envars}"
             )
+
+        # make sure either ASTRO_ACCESS_TOKEN or ASTRO_API_TOKEN is set
+        if not os.getenv("ASTRO_ACCESS_TOKEN") and not os.getenv("ASTRO_API_TOKEN"):
+            raise ValueError("Either ASTRO_ACCESS_TOKEN or ASTRO_API_TOKEN must be set")
 
         # 1. Ensure Astro login
         print("🔐 Ensuring Astro CLI login...")
