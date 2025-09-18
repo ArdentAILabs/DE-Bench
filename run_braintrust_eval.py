@@ -18,6 +18,7 @@ from extract_test_configs import (
 )
 import traceback
 from typing import Callable
+from pydantic import validate_call
 
 # Note: set_up_model_configs and cleanup_model_artifacts are now used inside run_de_bench_task
 
@@ -246,29 +247,30 @@ def fetch_git_info() -> Dict[str, Any]:
         }
 
 
-def run_parallel_apply(func: Callable, items: List[Any]) -> List[Any]:
+@validate_call
+def map_func(func: Callable, items: List[Any]) -> List[Any]:
     """
     Apply a function to a list of items in parallel using ThreadPoolExecutor.
-    
+
     This is like map() but parallel - perfect for I/O-bound operations.
-    
+
     Args:
         func: Function to apply to each item
         items: List of items to process
-        
+
     Returns:
         List of results in the same order as input items
-        
+
     Example:
         def process_item(item):
             # Some I/O-bound work
             return f"processed_{item}"
-            
+
         results = run_parallel_apply(process_item, ["a", "b", "c"])
         # Returns: ["processed_a", "processed_b", "processed_c"]
     """
     from concurrent.futures import ThreadPoolExecutor
-    
+
     with ThreadPoolExecutor() as executor:
         return list(executor.map(func, items))
 
@@ -277,6 +279,7 @@ def run_parallel_apply(func: Callable, items: List[Any]) -> List[Any]:
 def run_parallel_map(func: Callable, items: List[Any]) -> List[Any]:
     """Direct wrapper around ThreadPoolExecutor.map for convenience"""
     from concurrent.futures import ThreadPoolExecutor
+
     with ThreadPoolExecutor() as executor:
         return list(executor.map(func, items))
 
@@ -501,7 +504,7 @@ def run_multi_test_evaluation(
             # Note: Model artifacts and test resources are now cleaned up inside run_de_bench_task
 
         # Run mode experiments in parallel
-        results = run_parallel_apply(run_experiment_in_mode, modes)
+        map_func(run_experiment_in_mode, modes)
 
         return results
 
