@@ -17,6 +17,7 @@ from extract_test_configs import (
     cleanup_session_fixtures,
 )
 import traceback
+from typing import Callable
 
 # Note: set_up_model_configs and cleanup_model_artifacts are now used inside run_de_bench_task
 
@@ -245,6 +246,41 @@ def fetch_git_info() -> Dict[str, Any]:
         }
 
 
+def run_parallel_apply(func: Callable, items: List[Any]) -> List[Any]:
+    """
+    Apply a function to a list of items in parallel using ThreadPoolExecutor.
+    
+    This is like map() but parallel - perfect for I/O-bound operations.
+    
+    Args:
+        func: Function to apply to each item
+        items: List of items to process
+        
+    Returns:
+        List of results in the same order as input items
+        
+    Example:
+        def process_item(item):
+            # Some I/O-bound work
+            return f"processed_{item}"
+            
+        results = run_parallel_apply(process_item, ["a", "b", "c"])
+        # Returns: ["processed_a", "processed_b", "processed_c"]
+    """
+    from concurrent.futures import ThreadPoolExecutor
+    
+    with ThreadPoolExecutor() as executor:
+        return list(executor.map(func, items))
+
+
+# Alternative: You can also use this directly without a wrapper
+def run_parallel_map(func: Callable, items: List[Any]) -> List[Any]:
+    """Direct wrapper around ThreadPoolExecutor.map for convenience"""
+    from concurrent.futures import ThreadPoolExecutor
+    with ThreadPoolExecutor() as executor:
+        return list(executor.map(func, items))
+
+
 def construct_experiment_name(mode: str) -> str:
     """
     Construct a meaningful experiment name using git information and mode.
@@ -382,8 +418,7 @@ def run_multi_test_evaluation(
 
         results = {}
 
-        # Run one experiment per mode
-        for mode in modes:
+        def run_experiment_in_mode(mode: str):
             print(f"\n🧪 Running Braintrust experiment for {mode} mode...")
             experiment_name = construct_experiment_name(mode)
 
@@ -401,8 +436,6 @@ def run_multi_test_evaluation(
                     "metadata": {**config["case"]["metadata"], "mode": mode},
                 }
                 mode_samples.append(sample)
-
-            # Note: Model config setup and per-test resource setup now happens inside run_de_bench_task
 
             # Create unified validator that can handle all test types
             def unified_validator(input, output, expected=None):
@@ -466,6 +499,9 @@ def run_multi_test_evaluation(
             print(f"   Summary: {result.summary}")
 
             # Note: Model artifacts and test resources are now cleaned up inside run_de_bench_task
+
+        # Run mode experiments in parallel
+        results = run_parallel_apply(run_experiment_in_mode, modes)
 
         return results
 
