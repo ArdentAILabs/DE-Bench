@@ -263,7 +263,7 @@ def construct_experiment_name(mode: str) -> str:
     if mode == "Ardent":
         # Fetch git info for experiment naming
         git_info = fetch_git_info()
-        return f"Ardent-AI-Backend/{git_info.get('branch')}"
+        return f"Ardent/{git_info.get('branch')}"
     else:
         return f"{mode.lower()}"
 
