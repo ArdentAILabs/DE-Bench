@@ -467,7 +467,7 @@ def run_multi_test_evaluation(
                     "git_info": git_info,
                 },
                 # TODO: Make this configurable
-                max_concurrency=10,
+                max_concurrency=20,
             )
 
             results[mode] = result
