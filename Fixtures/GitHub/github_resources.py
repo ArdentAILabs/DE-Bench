@@ -3,12 +3,12 @@ This module provides a pytest fixture for managing GitHub operations in Airflow 
 """
 
 import os
-import re
 import time
 
 import pytest
 
-from .github_manager import GitHubManager
+from Fixtures import parse_test_name
+from Fixtures.GitHub.github_manager import GitHubManager
 
 
 @pytest.fixture(scope="function")
@@ -17,10 +17,14 @@ def github_resource(request):
     A function-scoped fixture that provides a GitHub manager for test operations.
     Each test gets its own GitHub manager instance.
     """
-    raw_test_name = request.node.name
-    # Sanitize test name to remove pytest parametrization brackets  
-    test_name = re.sub(r'[^\w\-]', '_', raw_test_name)
-    resource_id = f"github_resource_{test_name}"
+    build_template = request.param
+    test_name = parse_test_name(request.node.name)
+    if "resource_id" not in build_template:
+        import uuid
+        time_stamp = int(time.time())
+        test_uuid = uuid.uuid4().hex[:8]
+        build_template["resource_id"] = f"{test_name}_{time_stamp}_{test_uuid}"
+    resource_id = build_template["resource_id"]
     # Verify required environment variables
     required_envars = [
         "AIRFLOW_GITHUB_TOKEN",
@@ -31,13 +35,13 @@ def github_resource(request):
         raise ValueError(f"The following envars are not set: {missing_envars}")
 
     start_time = time.time()
-    print(f"Worker {os.getpid()}: Starting github_resource for {test_name}")
+    print(f"Worker {os.getpid()}: Starting github_resource for {resource_id}")
     
     # Create GitHub manager
     access_token = os.getenv("AIRFLOW_GITHUB_TOKEN")
     repo_url = os.getenv("AIRFLOW_REPO")
     
-    github_manager = GitHubManager(access_token, repo_url, test_name)
+    github_manager = GitHubManager(access_token, repo_url, resource_id)
     
     try:
         # Clear the main dags folder
@@ -45,7 +49,7 @@ def github_resource(request):
             github_manager.clear_folder("dags", keep_file_names=[".gitkeep"])
         except Exception as e:
             print(f"Warning: Could not clear main dags folder: {e}")
-        print(f"Worker {os.getpid()}: Released GitHub lock for {test_name}")
+        print(f"Worker {os.getpid()}: Released GitHub lock for {resource_id}")
 
         creation_end = time.time()
         print(f"Worker {os.getpid()}: GitHub resource creation took {creation_end - start_time:.2f}s")
@@ -58,7 +62,7 @@ def github_resource(request):
             "creation_time": time.time(),
             "worker_pid": os.getpid(),
             "creation_duration": creation_end - start_time,
-            "description": f"A GitHub resource for {test_name}",
+            "description": f"A GitHub resource for {resource_id}",
             "status": "active",
             "github_manager": github_manager,
             "repo_info": github_manager.get_repo_info(),
@@ -80,14 +84,12 @@ def github_resource(request):
 
 def cleanup_github_resource(
     github_manager: GitHubManager,
-):
+) -> None:
     """
     Cleans up a GitHub resource, including the temp directory and the created resources in GitHub.
 
-    :param test_name: The name of the test.
-    :param resource_id: The ID of the resource.
-    :param created_resources: The list of created resources.
-    :param test_dir: The path to the test directory.
+    :param GitHubManager github_manager : The GitHubManager instance managing the GitHub operations.
+    :rtype: None
     """
     github_manager.reset_repo_state("dags")
     github_manager.cleanup_requirements()

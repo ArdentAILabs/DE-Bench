@@ -11,15 +11,4 @@ Please analyze the database structure, identify what's causing users to disappea
 Test your solution to verify that all users are properly represented in queries.
 """
 
-# Basic system configuration for PostgreSQL agent testing
-Configs = {
-    "services": {
-        "postgreSQL": {
-            "hostname": os.getenv("POSTGRES_HOSTNAME"),
-            "port": os.getenv("POSTGRES_PORT"),
-            "username": os.getenv("POSTGRES_USERNAME"),
-            "password": os.getenv("POSTGRES_PASSWORD"),
-            "databases": []  # Will be populated during test execution
-        }
-    }
-} 
+# Configuration will be generated dynamically by create_config function

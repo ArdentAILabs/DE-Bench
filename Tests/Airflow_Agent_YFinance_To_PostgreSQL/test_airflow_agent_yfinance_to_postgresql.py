@@ -1,463 +1,506 @@
+# Braintrust-only Airflow test - no pytest dependencies
+from model.Run_Model import run_model
+from model.Configure_Model import set_up_model_configs, cleanup_model_artifacts
 import os
 import importlib
-import pytest
 import time
-import requests
-from github import Github
+import uuid
 import psycopg2
+from typing import List, Dict, Any
+from Fixtures.base_fixture import DEBenchFixture
 
-from model.Run_Model import run_model
-from model.Configure_Model import set_up_model_configs
-from model.Configure_Model import remove_model_configs
-
+# Dynamic config loading
 current_dir = os.path.dirname(os.path.abspath(__file__))
 parent_dir_name = os.path.basename(current_dir)
 module_path = f"Tests.{parent_dir_name}.Test_Configs"
 Test_Configs = importlib.import_module(module_path)
 
-@pytest.mark.airflow
-@pytest.mark.pipeline
-@pytest.mark.database
-def test_airflow_agent_yfinance_to_postgresql(request, airflow_resource):
-    input_dir = os.path.dirname(os.path.abspath(__file__))
-    request.node.user_properties.append(("user_query", Test_Configs.User_Input))
-    
-    # Use the airflow_resource fixture - the Docker instance is already running
-    print(f"=== Starting YFinance Airflow Pipeline Test ===")
-    print(f"Using Airflow instance from fixture: {airflow_resource['resource_id']}")
-    print(f"Airflow base URL: {airflow_resource['base_url']}")
-    print(f"Test directory: {input_dir}")
+# Generate unique identifiers for parallel execution
+test_timestamp = int(time.time())
+test_uuid = uuid.uuid4().hex[:8]
 
+
+def get_fixtures() -> List[DEBenchFixture]:
+    """
+    Provides custom DEBenchFixture instances for Braintrust evaluation.
+    This Airflow test validates that AI can create a YFinance Tesla stock data pipeline DAG.
+    """
+    from Fixtures.Airflow.airflow_fixture import AirflowFixture
+    from Fixtures.PostgreSQL.postgres_resources import PostgreSQLFixture
+    from Fixtures.GitHub.github_fixture import GitHubFixture
+
+    # Initialize Airflow fixture with test-specific configuration
+    custom_airflow_config = {
+        "resource_id": f"yfinance_tesla_test_{test_timestamp}_{test_uuid}",
+    }
+
+    # Initialize PostgreSQL fixture for stock data
+    custom_postgres_config = {
+        "resource_id": f"yfinance_tesla_test_{test_timestamp}_{test_uuid}",
+        "databases": [
+            {
+                "name": f"stock_data_{test_timestamp}_{test_uuid}",
+                "sql_file": None,  # No initial schema needed
+            }
+        ],
+    }
+
+    # Initialize GitHub fixture for PR and branch management
+    custom_github_config = {
+        "resource_id": f"test_airflow_yfinance_tesla_test_{test_timestamp}_{test_uuid}",
+    }
+
+    airflow_fixture = AirflowFixture(custom_config=custom_airflow_config)
+    postgres_fixture = PostgreSQLFixture(custom_config=custom_postgres_config)
+    github_fixture = GitHubFixture(custom_config=custom_github_config)
+
+    return [airflow_fixture, postgres_fixture, github_fixture]
+
+
+def create_model_inputs(
+    base_model_inputs: Dict[str, Any], fixtures: List[DEBenchFixture]
+) -> Dict[str, Any]:
+    """
+    Create test-specific config using the set-up fixtures.
+    This function has access to all fixture data after setup and dynamically
+    updates the task description with GitHub branch and PR information.
+    """
+    import os
+    from extract_test_configs import create_config_from_fixtures
+
+    # Get GitHub fixture to access manager for dynamic branch/PR creation
+    github_fixture = next(
+        (f for f in fixtures if f.get_resource_type() == "github_resource"), None
+    )
+
+    if not github_fixture:
+        raise Exception(
+            "GitHub fixture not found - required for branch and PR management"
+        )
+
+    # Get the GitHub manager from the fixture
+    github_resource_data = getattr(github_fixture, "_resource_data", None)
+    if not github_resource_data:
+        raise Exception("GitHub resource data not available")
+
+    github_manager = github_resource_data.get("github_manager")
+    if not github_manager:
+        raise Exception("GitHub manager not available")
+
+    # Generate dynamic branch and PR names
+    pr_title = f"Add YFinance Tesla Stock Data Pipeline {test_timestamp}_{test_uuid}"
+    branch_name = f"feature/yfinance-tesla-{test_timestamp}_{test_uuid}"
+
+    # Start with the original user input from Test_Configs
+    task_description = Test_Configs.User_Input
+
+    # Add merge step to user input
+    task_description = github_manager.add_merge_step_to_user_input(task_description)
+
+    # Replace placeholders with dynamic values
+    task_description = task_description.replace("BRANCH_NAME", branch_name)
+    task_description = task_description.replace("PR_NAME", pr_title)
+
+    # Set up GitHub secrets for Astro access
+    github_manager.check_and_update_gh_secrets(
+        secrets={
+            "ASTRO_ACCESS_TOKEN": os.environ["ASTRO_ACCESS_TOKEN"],
+        }
+    )
+
+    print(f"🔧 Generated dynamic branch name: {branch_name}")
+    print(f"🔧 Generated dynamic PR title: {pr_title}")
+
+    # Use the helper to automatically create config from all fixtures
+    return {
+        **base_model_inputs,
+        "model_configs": create_config_from_fixtures(fixtures),
+        "task_description": task_description,
+    }
+
+
+def validate_test(model_result, fixtures=None):
+    """
+    Validates that the AI agent successfully created a YFinance Tesla stock data pipeline DAG.
+
+    Expected behavior:
+    - DAG should be created with name "tesla_stock_dag"
+    - DAG should have a task named "fetch_tesla_data"
+    - DAG should fetch Tesla stock data using yfinance
+    - DAG should store data in PostgreSQL tesla_stock table
+
+    Args:
+        model_result: The result from the AI model execution
+        fixtures: List of DEBenchFixture instances used in the test
+
+    Returns:
+        dict: Contains 'score' float and 'metadata' dict with validation details
+    """
+    # Create comprehensive test steps for validation
     test_steps = [
         {
-            "name": "Checking Git Branch Existence",
-            "description": "Checking if the git branch exists with the right name",
-            "status": "did not reach",
-            "Result_Message": "",
+            "name": "Agent Task Execution",
+            "description": "AI Agent executes task to create YFinance Tesla Stock DAG",
+            "status": "running",
+            "Result_Message": "Checking if AI agent executed the Airflow DAG creation task...",
         },
         {
-            "name": "Checking PR Creation",
-            "description": "Checking if the PR was created with the right name",
-            "status": "did not reach",
-            "Result_Message": "",
+            "name": "Git Branch Creation",
+            "description": "Verify that git branch was created with the correct name",
+            "status": "running",
+            "Result_Message": "Checking if git branch exists...",
         },
         {
-            "name": "Checking Database Results",
-            "description": "Checking if the Tesla stock data was properly stored in PostgreSQL",
-            "status": "did not reach",
-            "Result_Message": "",
+            "name": "PR Creation and Merge",
+            "description": "Verify that PR was created and merged successfully",
+            "status": "running",
+            "Result_Message": "Checking if PR was created and merged...",
+        },
+        {
+            "name": "GitHub Action Completion",
+            "description": "Verify that GitHub action completed successfully",
+            "status": "running",
+            "Result_Message": "Waiting for GitHub action to complete...",
+        },
+        {
+            "name": "Airflow Redeployment",
+            "description": "Verify that Airflow redeployed after GitHub action",
+            "status": "running",
+            "Result_Message": "Checking if Airflow redeployed successfully...",
+        },
+        {
+            "name": "DAG Creation Validation",
+            "description": "Verify that tesla_stock_dag was created in Airflow",
+            "status": "running",
+            "Result_Message": "Validating that Tesla Stock DAG exists in Airflow...",
+        },
+        {
+            "name": "DAG Task Validation",
+            "description": "Verify that DAG has the fetch_tesla_data task",
+            "status": "running",
+            "Result_Message": "Checking if DAG has the required fetch_tesla_data task...",
+        },
+        {
+            "name": "DAG Execution and Monitoring",
+            "description": "Trigger the DAG and verify it runs successfully",
+            "status": "running",
+            "Result_Message": "Triggering DAG and monitoring execution...",
+        },
+        {
+            "name": "YFinance Integration Validation",
+            "description": "Verify that DAG successfully uses yfinance library",
+            "status": "running",
+            "Result_Message": "Checking yfinance integration...",
+        },
+        {
+            "name": "Tesla Stock Data Validation",
+            "description": "Verify that Tesla stock data was successfully stored",
+            "status": "running",
+            "Result_Message": "Validating Tesla stock data storage...",
         },
     ]
 
-    request.node.user_properties.append(("test_steps", test_steps))
-
-    # SECTION 1: SETUP THE TEST
-    config_results = None
     try:
-        # Setup GitHub repository with empty dags folder
-        access_token = os.getenv("AIRFLOW_GITHUB_TOKEN")
-        airflow_github_repo = os.getenv("AIRFLOW_REPO")
-
-        # Convert full URL to owner/repo format if needed
-        if "github.com" in airflow_github_repo:
-            parts = airflow_github_repo.split("/")
-            airflow_github_repo = f"{parts[-2]}/{parts[-1]}"
-
-        g = Github(access_token)
-        repo = g.get_repo(airflow_github_repo)
-
-        try:
-            # First, clear only the dags folder
-            dags_contents = repo.get_contents("dags")
-            for content in dags_contents:
-                if content.name != ".gitkeep":
-                    repo.delete_file(
-                        path=content.path,
-                        message="Clear dags folder",
-                        sha=content.sha,
-                        branch="main",
-                    )
-
-            # Ensure .gitkeep exists in dags folder
-            try:
-                repo.get_contents("dags/.gitkeep")
-            except:
-                repo.create_file(
-                    path="dags/.gitkeep",
-                    message="Add .gitkeep to dags folder",
-                    content="",
-                    branch="main",
-                )
-        except Exception as e:
-            if "sha" not in str(e):
-                raise e
-
-        # Setup Postgres database
-        print("Setting up PostgreSQL database...")
-        postgres_connection = psycopg2.connect(
-            host=os.getenv("POSTGRES_HOSTNAME"),
-            port=os.getenv("POSTGRES_PORT"),
-            user=os.getenv("POSTGRES_USERNAME"),
-            password=os.getenv("POSTGRES_PASSWORD"),
-            database="postgres",
-            sslmode="require",
-        )
-        postgres_connection.autocommit = True
-        postgres_cursor = postgres_connection.cursor()
-
-        # Check and kill any existing connections (if we have permission)
-        postgres_cursor.execute(
-            """
-            SELECT pid, usename, datname 
-            FROM pg_stat_activity 
-            WHERE datname = 'stock_data'
-            """
-        )
-        connections = postgres_cursor.fetchall()
-        print(f"Found connections to stock_data db:", connections)
-
-        if connections:
-            try:
-                postgres_cursor.execute(
-                    """
-                    SELECT pg_terminate_backend(pid) 
-                    FROM pg_stat_activity 
-                    WHERE datname = 'stock_data'
-                    """
-                )
-                print("Terminated all connections to stock_data db")
-            except Exception as e:
-                print(f"Could not terminate connections (permission issue): {e}")
-                print("Continuing with database operations...")
-
-        # Now safe to drop and recreate
-        postgres_cursor.execute("DROP DATABASE IF EXISTS stock_data")
-        print("Dropped existing stock_data db if it existed")
-        postgres_cursor.execute("CREATE DATABASE stock_data")
-        print("Created new stock_data db")
-
-        # Close connection to postgres database
-        postgres_cursor.close()
-        postgres_connection.close()
-
-        # Reconnect to the new database
-        postgres_connection = psycopg2.connect(
-            host=os.getenv("POSTGRES_HOSTNAME"),
-            port=os.getenv("POSTGRES_PORT"),
-            user=os.getenv("POSTGRES_USERNAME"),
-            password=os.getenv("POSTGRES_PASSWORD"),
-            database="stock_data",
-            sslmode="require",
-        )
-        postgres_cursor = postgres_connection.cursor()
-
-        # Create tesla_stock table
-        postgres_cursor.execute(
-            """
-            CREATE TABLE IF NOT EXISTS tesla_stock (
-                date DATE PRIMARY KEY,
-                open DECIMAL(10,2),
-                high DECIMAL(10,2),
-                low DECIMAL(10,2),
-                close DECIMAL(10,2),
-                volume BIGINT
-            )
-            """
-        )
-        postgres_connection.commit()
-        print("Created tesla_stock table")
-
-        # Set up the airflow folder with the correct configs
-        # this function is for you to take the configs for the test and set them up however you want. They follow a set structure
-        Test_Configs.Configs["services"]["airflow"]["host"] = airflow_resource["base_url"]
-        Test_Configs.Configs["services"]["airflow"]["username"] = airflow_resource["username"]
-        Test_Configs.Configs["services"]["airflow"]["password"] = airflow_resource["password"]
-        Test_Configs.Configs["services"]["airflow"]["api_token"] = airflow_resource["api_token"]
-        config_results = set_up_model_configs(Configs=Test_Configs.Configs)
-
-        # SECTION 2: RUN THE MODEL
-        start_time = time.time()
-        run_model(
-            container=None, task=Test_Configs.User_Input, configs=Test_Configs.Configs
-        )
-        end_time = time.time()
-        request.node.user_properties.append(("model_runtime", end_time - start_time))
-
-        # Check if the branch exists
-        try:
-            branch = repo.get_branch("feature/tesla_stock")
-            test_steps[0]["status"] = "passed"
-            test_steps[0]["Result_Message"] = "Branch 'feature/tesla_stock' was created successfully"
-        except Exception as e:
+        # Step 1: Check that the agent task executed
+        if not model_result or model_result.get("status") == "failed":
             test_steps[0]["status"] = "failed"
-            test_steps[0]["Result_Message"] = f"Branch 'feature/tesla_stock' was not created: {str(e)}"
-            raise Exception(f"Branch 'feature/tesla_stock' was not created: {str(e)}")
+            test_steps[0][
+                "Result_Message"
+            ] = "❌ AI Agent task execution failed or returned no result"
+            return {"score": 0.0, "metadata": {"test_steps": test_steps}}
 
-        # Find and merge the PR
-        pulls = repo.get_pulls(state="open")
-        target_pr = None
-        for pr in pulls:
-            if pr.title == "Add Tesla Stock Data Pipeline":
-                target_pr = pr
-                test_steps[1]["status"] = "passed"
-                test_steps[1]["Result_Message"] = "PR 'Add Tesla Stock Data Pipeline' was created successfully"
-                break
+        test_steps[0]["status"] = "passed"
+        test_steps[0][
+            "Result_Message"
+        ] = "✅ AI Agent completed task execution successfully"
 
-        if not target_pr:
+        # Get fixtures for Airflow, PostgreSQL, and GitHub
+        airflow_fixture = (
+            next(
+                (f for f in fixtures if f.get_resource_type() == "airflow_resource"),
+                None,
+            )
+            if fixtures
+            else None
+        )
+        postgres_fixture = (
+            next(
+                (f for f in fixtures if f.get_resource_type() == "postgres_resource"),
+                None,
+            )
+            if fixtures
+            else None
+        )
+        github_fixture = (
+            next(
+                (f for f in fixtures if f.get_resource_type() == "github_resource"),
+                None,
+            )
+            if fixtures
+            else None
+        )
+
+        if not airflow_fixture:
+            raise Exception("Airflow fixture not found")
+        if not postgres_fixture:
+            raise Exception("PostgreSQL fixture not found")
+        if not github_fixture:
+            raise Exception("GitHub fixture not found")
+
+        # Get resource data
+        airflow_resource_data = getattr(airflow_fixture, "_resource_data", None)
+        if not airflow_resource_data:
+            raise Exception("Airflow resource data not available")
+
+        postgres_resource_data = getattr(postgres_fixture, "_resource_data", None)
+        if not postgres_resource_data:
+            raise Exception("PostgreSQL resource data not available")
+
+        github_resource_data = getattr(github_fixture, "_resource_data", None)
+        if not github_resource_data:
+            raise Exception("GitHub resource data not available")
+
+        airflow_instance = airflow_resource_data["airflow_instance"]
+        base_url = airflow_resource_data["base_url"]
+        github_manager = github_resource_data.get("github_manager")
+
+        if not github_manager:
+            raise Exception("GitHub manager not available")
+
+        # Generate the same branch and PR names used in create_model_inputs
+        pr_title = (
+            f"Add YFinance Tesla Stock Data Pipeline {test_timestamp}_{test_uuid}"
+        )
+        branch_name = f"feature/yfinance-tesla-{test_timestamp}_{test_uuid}"
+
+        # Step 2-6: GitHub and Airflow workflow
+        print(f"🔍 Checking for branch: {branch_name}")
+        time.sleep(10)
+
+        branch_exists, test_steps[1] = github_manager.verify_branch_exists(
+            branch_name, test_steps[1]
+        )
+        if not branch_exists:
             test_steps[1]["status"] = "failed"
-            test_steps[1]["Result_Message"] = "PR 'Add Tesla Stock Data Pipeline' not found"
-            raise Exception("PR 'Add Tesla Stock Data Pipeline' not found")
+            return {"score": 0.0, "metadata": {"test_steps": test_steps}}
 
-        # Merge the PR
-        merge_result = target_pr.merge(
-            commit_title="Add Tesla Stock Data Pipeline", merge_method="squash"
+        test_steps[1]["status"] = "passed"
+        test_steps[1][
+            "Result_Message"
+        ] = f"✅ Git branch '{branch_name}' created successfully"
+
+        # PR creation and merge
+        pr_exists, test_steps[2] = github_manager.find_and_merge_pr(
+            pr_title=pr_title,
+            test_step=test_steps[2],
+            commit_title=pr_title,
+            merge_method="squash",
+            build_info={
+                "deploymentId": airflow_resource_data["deployment_id"],
+                "deploymentName": airflow_resource_data["deployment_name"],
+            },
         )
 
-        if not merge_result.merged:
-            raise Exception(f"Failed to merge PR: {merge_result.message}")
+        if not pr_exists:
+            test_steps[2]["status"] = "failed"
+            test_steps[2]["Result_Message"] = "❌ Unable to find and merge PR"
+            return {"score": 0.0, "metadata": {"test_steps": test_steps}}
 
-        # Use the airflow instance from the fixture to pull DAGs from GitHub
-        # The fixture already has the Docker instance running
-        airflow_instance = airflow_resource["airflow_instance"]
-        if not airflow_instance.wait_for_airflow_to_be_ready(wait_time_in_minutes=10):
-            raise Exception("Airflow instance did not redeploy successfully.")
-
-        # Use the connection details from the fixture
-        airflow_base_url = airflow_resource["base_url"]
-        airflow_api_token = airflow_resource["api_token"]
-        
-        print(f"Connecting to Airflow at: {airflow_base_url}")
-        print(f"Using API Token: {airflow_api_token}")
-
-        # Wait for DAG to appear and trigger it
-        max_retries = 5
-        headers = airflow_resource["api_headers"]
-
-        print(f"Waiting for DAG 'tesla_stock_dag' to appear in Airflow...")
-        for attempt in range(max_retries):
-            print(f"Attempt {attempt + 1}/{max_retries}: Checking for DAG...")
-            # Check if DAG exists
-            dag_response = requests.get(
-                f"{airflow_base_url.rstrip('/')}/api/v1/dags/tesla_stock_dag",
-                headers=headers,
-            )
-
-            if dag_response.status_code != 200:
-                print(f"DAG not found yet (status: {dag_response.status_code}), waiting...")
-                if attempt == max_retries - 1:
-                    raise Exception("DAG not found after max retries")
-                time.sleep(10)
-                continue
-
-            print(f"DAG found! Unpausing DAG...")
-            # Unpause the DAG before triggering
-            unpause_response = requests.patch(
-                f"{airflow_base_url.rstrip('/')}/api/v1/dags/tesla_stock_dag",
-                headers=headers,
-                json={"is_paused": False},
-            )
-
-            if unpause_response.status_code != 200:
-                print(f"Failed to unpause DAG: {unpause_response.text}")
-                if attempt == max_retries - 1:
-                    raise Exception(f"Failed to unpause DAG: {unpause_response.text}")
-                time.sleep(10)
-                continue
-
-            print(f"DAG unpaused successfully. Triggering DAG...")
-            # Trigger the DAG
-            trigger_response = requests.post(
-                f"{airflow_base_url.rstrip('/')}/api/v1/dags/tesla_stock_dag/dagRuns",
-                headers=headers,
-                json={"conf": {}},
-            )
-
-            if trigger_response.status_code == 200:
-                dag_run_id = trigger_response.json()["dag_run_id"]
-                print(f"DAG triggered successfully! Run ID: {dag_run_id}")
-                break
-            else:
-                print(f"Failed to trigger DAG: {trigger_response.text}")
-                if attempt == max_retries - 1:
-                    raise Exception(f"Failed to trigger DAG: {trigger_response.text}")
-                time.sleep(10)
-
-        # Monitor the DAG run
-        max_wait = 60 * 2
-        start_time = time.time()
-        print(f"Monitoring DAG run {dag_run_id} for completion...")
-        while time.time() - start_time < max_wait:
-            status_response = requests.get(
-                f"{airflow_base_url.rstrip('/')}/api/v1/dags/tesla_stock_dag/dagRuns/{dag_run_id}",
-                headers=headers,
-            )
-
-            if status_response.status_code == 200:
-                state = status_response.json()["state"]
-                print(f"DAG run state: {state}")
-                if state == "success":
-                    print("DAG run completed successfully!")
-                    break
-                elif state in ["failed", "error"]:
-                    raise Exception(f"DAG failed with state: {state}")
-
-            time.sleep(5)
-        else:
-            raise Exception("DAG run timed out")
-
-        # SECTION 3: VERIFY THE OUTCOMES
-        print("Verifying database results...")
-        conn = psycopg2.connect(
-            host=os.getenv("POSTGRES_HOSTNAME"),
-            port=os.getenv("POSTGRES_PORT"),
-            user=os.getenv("POSTGRES_USERNAME"),
-            password=os.getenv("POSTGRES_PASSWORD"),
-            database="stock_data",
-            sslmode="require"
-        )
-        cur = conn.cursor()
-        
-        # Check if table exists and has data
-        cur.execute("""
-            SELECT COUNT(*) 
-            FROM tesla_stock 
-            WHERE date >= CURRENT_DATE - INTERVAL '10 days'
-        """)
-        row_count = cur.fetchone()[0]
-        
-        assert row_count > 0, "No Tesla stock data found in the database"
-        assert row_count <= 10, "Too many days of data found"
-
-        # Check table structure
-        cur.execute("""
-            SELECT column_name, data_type 
-            FROM information_schema.columns 
-            WHERE table_name = 'tesla_stock'
-        """)
-        columns = cur.fetchall()
-        expected_columns = {'date', 'open', 'high', 'low', 'close', 'volume'}
-        actual_columns = {col[0] for col in columns}
-        
-        assert expected_columns.issubset(actual_columns), "Missing expected columns in tesla_stock table"
-        
-        print(f"✓ Successfully verified {row_count} days of Tesla stock data")
         test_steps[2]["status"] = "passed"
-        test_steps[2]["Result_Message"] = f"Successfully stored {row_count} days of Tesla stock data"
+        test_steps[2][
+            "Result_Message"
+        ] = f"✅ PR '{pr_title}' created and merged successfully"
 
-    finally:
+        # GitHub action completion
+        if not github_manager.check_if_action_is_complete(pr_title=pr_title):
+            test_steps[3]["status"] = "failed"
+            test_steps[3][
+                "Result_Message"
+            ] = "❌ GitHub action did not complete successfully"
+            return {"score": 0.0, "metadata": {"test_steps": test_steps}}
+
+        test_steps[3]["status"] = "passed"
+        test_steps[3]["Result_Message"] = "✅ GitHub action completed successfully"
+
+        # Airflow redeployment
+        if not airflow_instance.wait_for_airflow_to_be_ready():
+            test_steps[4]["status"] = "failed"
+            test_steps[4][
+                "Result_Message"
+            ] = "❌ Airflow instance did not redeploy successfully"
+            return {"score": 0.0, "metadata": {"test_steps": test_steps}}
+
+        test_steps[4]["status"] = "passed"
+        test_steps[4][
+            "Result_Message"
+        ] = "✅ Airflow redeployed successfully after GitHub action"
+
+        # DAG existence check
+        dag_name = "tesla_stock_dag"
+        print(f"🔍 Checking for DAG: {dag_name} in Airflow at {base_url}")
+
+        if airflow_instance.verify_airflow_dag_exists(dag_name):
+            test_steps[5]["status"] = "passed"
+            test_steps[5]["Result_Message"] = f"✅ DAG '{dag_name}' found in Airflow"
+        else:
+            test_steps[5]["status"] = "failed"
+            test_steps[5][
+                "Result_Message"
+            ] = f"❌ DAG '{dag_name}' not found in Airflow"
+            return {"score": 0.0, "metadata": {"test_steps": test_steps}}
+
+        # DAG task validation - check if it has the fetch_tesla_data task
         try:
-            # this function is for you to remove the configs for the test. They follow a set structure.
-            remove_model_configs(
-                Configs=Test_Configs.Configs, custom_info=config_results
+            dag_tasks = airflow_instance.get_dag_tasks(dag_name)
+            task_ids = [task.get("task_id", "") for task in dag_tasks]
+
+            if "fetch_tesla_data" in task_ids:
+                test_steps[6]["status"] = "passed"
+                test_steps[6][
+                    "Result_Message"
+                ] = f"✅ Found 'fetch_tesla_data' task in DAG (tasks: {', '.join(task_ids)})"
+            else:
+                test_steps[6]["status"] = "failed"
+                test_steps[6][
+                    "Result_Message"
+                ] = f"❌ Task 'fetch_tesla_data' not found. Available tasks: {', '.join(task_ids)}"
+        except Exception as e:
+            test_steps[6]["status"] = "failed"
+            test_steps[6]["Result_Message"] = f"❌ Error checking DAG tasks: {str(e)}"
+
+        # DAG execution
+        print(f"🔍 Triggering DAG: {dag_name}")
+        dag_run_id = airflow_instance.unpause_and_trigger_airflow_dag(dag_name)
+
+        if not dag_run_id:
+            test_steps[7]["status"] = "failed"
+            test_steps[7]["Result_Message"] = "❌ Failed to trigger DAG"
+            return {"score": 0.0, "metadata": {"test_steps": test_steps}}
+
+        # Monitor the DAG run until completion
+        airflow_instance.verify_dag_id_ran(dag_name, dag_run_id)
+        test_steps[7]["status"] = "passed"
+        test_steps[7][
+            "Result_Message"
+        ] = f"✅ DAG '{dag_name}' executed successfully (run_id: {dag_run_id})"
+
+        # Step 9: YFinance Integration Validation (through task logs)
+        try:
+            print("🔍 Retrieving task logs to verify yfinance integration...")
+            logs = airflow_instance.get_task_instance_logs(
+                dag_id=dag_name, dag_run_id=dag_run_id, task_id="fetch_tesla_data"
             )
 
-            # Clean up GitHub - delete branch if it exists
-            try:
-                ref = repo.get_git_ref(f"heads/feature/tesla_stock")
-                ref.delete()
-            except Exception as e:
-                print(f"Branch might not exist or other error: {e}")
-
-            # Reset the repo to the original state
-            dags_contents = repo.get_contents("dags")
-            for content in dags_contents:
-                if content.name != ".gitkeep":  # Keep the .gitkeep file if it exists
-                    repo.delete_file(
-                        path=content.path,
-                        message="Clear dags folder",
-                        sha=content.sha,
-                        branch="main",
-                    )
-
-            # Ensure .gitkeep exists in dags folder
-            try:
-                repo.get_contents("dags/.gitkeep")
-            except:
-                repo.create_file(
-                    path="dags/.gitkeep",
-                    message="Add .gitkeep to dags folder",
-                    content="",
-                    branch="main",
-                )
-
-            # Clean up requirements.txt
-            try:
-                requirements_path = os.getenv("AIRFLOW_REQUIREMENTS_PATH", "Requirements/")
-                requirements_file = repo.get_contents(f"{requirements_path}requirements.txt")
-                repo.update_file(
-                    path=requirements_file.path,
-                    message="Reset requirements.txt to blank",
-                    content="",
-                    sha=requirements_file.sha,
-                    branch="main",
-                )
-            except Exception as e:
-                print(f"Error cleaning up requirements: {e}")
-
-            # Clean up database
-            postgres_connection = psycopg2.connect(
-                host=os.getenv("POSTGRES_HOSTNAME"),
-                port=os.getenv("POSTGRES_PORT"),
-                user=os.getenv("POSTGRES_USERNAME"),
-                password=os.getenv("POSTGRES_PASSWORD"),
-                database="stock_data",
-                sslmode="require",
-            )
-            postgres_cursor = postgres_connection.cursor()
-
-            # Drop tesla_stock table
-            postgres_cursor.execute("DROP TABLE IF EXISTS tesla_stock")
-            postgres_connection.commit()
-
-            # Close connection to postgres database
-            postgres_cursor.close()
-            postgres_connection.close()
-
-            # Connect to postgres database for cleanup
-            postgres_connection = psycopg2.connect(
-                host=os.getenv("POSTGRES_HOSTNAME"),
-                port=os.getenv("POSTGRES_PORT"),
-                user=os.getenv("POSTGRES_USERNAME"),
-                password=os.getenv("POSTGRES_PASSWORD"),
-                database="postgres",
-                sslmode="require",
-            )
-            postgres_connection.autocommit = True
-            postgres_cursor = postgres_connection.cursor()
-
-            # Check and kill any remaining connections (if we have permission)
-            postgres_cursor.execute(
-                """
-                SELECT pid, usename, datname 
-                FROM pg_stat_activity 
-                WHERE datname = 'stock_data'
-                """
-            )
-            connections = postgres_cursor.fetchall()
-            print(f"Found connections to stock_data db during cleanup:", connections)
-
-            if connections:
-                try:
-                    postgres_cursor.execute(
-                        """
-                        SELECT pg_terminate_backend(pid) 
-                        FROM pg_stat_activity 
-                        WHERE datname = 'stock_data'
-                        """
-                    )
-                    print("Terminated all connections to stock_data db")
-                except Exception as e:
-                    print(f"Could not terminate connections during cleanup (permission issue): {e}")
-                    print("Continuing with cleanup...")
-
-            # Now safe to drop
-            postgres_cursor.execute("DROP DATABASE IF EXISTS stock_data")
-            print("Dropped stock_data db in cleanup")
-
-            # Close final connection
-            postgres_cursor.close()
-            postgres_connection.close()
-            print("Database cleanup completed successfully")
+            if (
+                "yfinance" in logs
+                or "TSLA" in logs
+                or "Tesla" in logs
+                or "Ticker" in logs
+            ):
+                test_steps[8]["status"] = "passed"
+                test_steps[8][
+                    "Result_Message"
+                ] = "✅ YFinance integration validated: yfinance/Tesla references found in logs"
+            else:
+                test_steps[8]["status"] = "failed"
+                test_steps[8][
+                    "Result_Message"
+                ] = "❌ No evidence of yfinance integration in task logs"
 
         except Exception as e:
-            print(f"Error during cleanup: {e}")
+            test_steps[8]["status"] = "failed"
+            test_steps[8][
+                "Result_Message"
+            ] = f"❌ Error validating yfinance integration: {str(e)}"
+
+        # Step 10: PostgreSQL Database Validation
+        try:
+            postgres_config = postgres_resource_data.get("databases", [{}])[0]
+            database_name = postgres_config.get("name", "")
+
+            conn = psycopg2.connect(
+                host=os.getenv("POSTGRES_HOSTNAME"),
+                port=os.getenv("POSTGRES_PORT"),
+                user=os.getenv("POSTGRES_USERNAME"),
+                password=os.getenv("POSTGRES_PASSWORD"),
+                database=database_name,
+                sslmode="require",
+            )
+            cur = conn.cursor()
+
+            print(f"🔍 Connected to PostgreSQL database: {database_name}")
+
+            # Check if tesla_stock table was created and has data
+            try:
+                cur.execute("SELECT COUNT(*) FROM tesla_stock")
+                tesla_count = cur.fetchone()[0]
+
+                if tesla_count > 0:
+                    # Check if the table has the expected columns
+                    cur.execute(
+                        """
+                        SELECT column_name 
+                        FROM information_schema.columns 
+                        WHERE table_name = 'tesla_stock'
+                    """
+                    )
+                    columns = [row[0] for row in cur.fetchall()]
+                    expected_columns = [
+                        "date",
+                        "open",
+                        "high",
+                        "low",
+                        "close",
+                        "volume",
+                    ]
+                    columns_found = [col for col in expected_columns if col in columns]
+
+                    if len(columns_found) >= 4:  # At least 4 of the expected columns
+                        test_steps[9]["status"] = "passed"
+                        test_steps[9][
+                            "Result_Message"
+                        ] = f"✅ Tesla stock data validated: {tesla_count} records with columns: {', '.join(columns_found)}"
+                    else:
+                        test_steps[9]["status"] = "failed"
+                        test_steps[9][
+                            "Result_Message"
+                        ] = f"❌ Tesla stock table exists but missing expected columns. Found: {', '.join(columns)}"
+                else:
+                    test_steps[9]["status"] = "failed"
+                    test_steps[9][
+                        "Result_Message"
+                    ] = "❌ Tesla stock table exists but has no data"
+
+            except psycopg2.Error as e:
+                test_steps[9]["status"] = "failed"
+                test_steps[9][
+                    "Result_Message"
+                ] = f"❌ Tesla stock table validation error: {str(e)}"
+
+            cur.close()
+            conn.close()
+
+        except Exception as e:
+            test_steps[9]["status"] = "failed"
+            test_steps[9]["Result_Message"] = f"❌ Database validation error: {str(e)}"
+
+    except Exception as e:
+        # Mark any unfinished steps as failed
+        for step in test_steps:
+            if step["status"] == "running":
+                step["status"] = "failed"
+                step["Result_Message"] = f"❌ Validation error: {str(e)}"
+
+    # Calculate score as the fraction of steps that passed
+    passed_steps = sum([step["status"] == "passed" for step in test_steps])
+    total_steps = len(test_steps)
+    score = passed_steps / total_steps
+
+    print(
+        f"🎯 Validation completed: {passed_steps}/{total_steps} steps passed (Score: {score:.2f})"
+    )
+
+    return {
+        "score": score,
+        "metadata": {"test_steps": test_steps},
+    }

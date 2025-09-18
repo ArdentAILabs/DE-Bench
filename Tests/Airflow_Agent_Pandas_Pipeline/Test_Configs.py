@@ -17,20 +17,8 @@ Create an Airflow DAG that:
 5. Runs daily at midnight
 6. Has a single task named 'process_dataframe'
 7. Name the DAG 'pandas_dataframe_dag'
-8. Create it in a branch called 'feature/pandas_dataframe'
-9. Name the PR 'Add Pandas DataFrame Processing DAG'
+8. Create it in a branch called 'BRANCH_NAME'
+9. Name the PR 'PR_NAME'
 """
 
-Configs = {
-    "services": {
-        "airflow": {
-            "github_token": os.getenv("AIRFLOW_GITHUB_TOKEN"),
-            "repo": os.getenv("AIRFLOW_REPO"),
-            "dag_path": os.getenv("AIRFLOW_DAG_PATH"),
-            "requirements_path": os.getenv("AIRFLOW_REQUIREMENTS_PATH"),
-            "host": os.getenv("AIRFLOW_HOST"),
-            "username": os.getenv("AIRFLOW_USERNAME"),
-            "password": os.getenv("AIRFLOW_PASSWORD"),
-        }
-    }
-} 
+# Configuration will be generated dynamically by create_model_inputs function

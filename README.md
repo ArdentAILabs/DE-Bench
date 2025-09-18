@@ -1,64 +1,249 @@
 # DE-Bench
 DE Bench: Can Agents Solve Real-World Data Engineering Problems?
 
-This is repository of real world problems for Data Engineering Agents to solve. It was designed to test Ardent's Agents
+This repository contains real-world data engineering problems for AI agents to solve, designed to evaluate agent capabilities across various data engineering tasks including databases, data pipelines, and workflow orchestration.
 
-There is a README within each test folder to explain the problem and the tests
+## 📖 **For Test Development**
 
-To Run this testing yourself:
+**See [Tests/TESTS.md](Tests/TESTS.md)** for comprehensive documentation on:
+- **Test pattern and structure** 
+- **Writing new tests**
+- **Fixture system usage**
+- **Validation patterns**
+- **Best practices**
 
-1. Clone the repo into wherever you want. Ideally a tests folder
+## 🚀 **Quick Start**
 
-2. Set Environment variables
+### 1. Clone and Setup
 
-  You will have to set a ton of environment variables for the tests to work. This provides the neccesary information for the tests to set up the right environments as well as provide the agent enough information to make solving the problem possible.
+```bash
+git clone <repo-url>
+cd DE-Bench
+```
 
+### 2. Environment Variables
+
+Set up your environment variables to provide credentials and configuration for various services:
 
 ## Environment Variables Template:
 
 Below is a template of all environment variables needed for the tests. Copy this to your `.env` file and replace the placeholder values with your own credentials. If there is an actual value there already do not change it:
 
 <pre><code>
+# AWS Credentials
+ACCESS_KEY_ID_AWS="YOUR_AWS_ACCESS_KEY_ID"
+SECRET_ACCESS_KEY_AWS="YOUR_AWS_SECRET_ACCESS_KEY"
+
+# AWS S3 Credentials (for Snowflake S3 integration)
+AWS_ACCESS_KEY="YOUR_AWS_ACCESS_KEY"
+AWS_SECRET_KEY="YOUR_AWS_SECRET_KEY"
 
 # MongoDB
-MONGODB_URI="YOUR_MONGODB_CONNECTION_STRING"         # MongoDB connection string
+MONGODB_URI="YOUR_MONGODB_CONNECTION_STRING"
 
 # MySQL
-MYSQL_HOST="YOUR_MYSQL_HOST"                         # MySQL host address
-MYSQL_PORT="YOUR MYSQL PORT"                         # MySQL port (typically 3306)
-MYSQL_USERNAME="YOUR_MYSQL_USERNAME"                 # MySQL username
-MYSQL_PASSWORD="YOUR_MYSQL_PASSWORD"                 # MySQL password
+MYSQL_HOST="YOUR_MYSQL_HOST"
+MYSQL_PORT=3306
+MYSQL_USERNAME="YOUR_MYSQL_USERNAME"
+MYSQL_PASSWORD="YOUR_MYSQL_PASSWORD"
 
-# Postgres
-POSTGRES_HOSTNAME="YOUR_POSTGRES_HOSTNAME"           # Postgres hostname
-POSTGRES_PORT="YOUR POSTGRES PORT"                   # Postgres port (typically 5432)
-POSTGRES_USERNAME="YOUR_POSTGRES_USERNAME"           # Postgres username
-POSTGRES_PASSWORD="YOUR_POSTGRES_PASSWORD"           # Postgres password
+# Supabase
+SUPABASE_PROJECT_URL="YOUR_SUPABASE_PROJECT_URL"
+SUPABASE_API_KEY="YOUR_SUPABASE_API_KEY"
+SUPABASE_URL="YOUR_SUPABASE_URL"
+SUPABASE_SERVICE_ROLE_KEY="YOUR_SUPABASE_SERVICE_ROLE_KEY"
+SUPABASE_JWT_SECRET="YOUR_SUPABASE_JWT_SECRET"
 
-# Airflow
-AIRFLOW_GITHUB_TOKEN="YOUR_GITHUB_TOKEN"             # GitHub token with full repo access
-AIRFLOW_REPO="YOUR_AIRFLOW_REPO_URL"                 # Repo URL (e.g., https://github.com/YOUR_ORG/YOUR_REPO)
-AIRFLOW_DAG_PATH="dags/"                             # Path to the DAG folder
-AIRFLOW_HOST="http://localhost:8888"                 # Airflow host URL
-AIRFLOW_USERNAME="airflow"                           # Airflow username
-AIRFLOW_PASSWORD="airflow"                           # Airflow password
-AIRFLOW_UID=501                                      # User ID for Airflow
-AIRFLOW_GID=0                                        # Group ID for Airflow
-AIRFLOW_IMAGE_NAME="apache/airflow:2.10.5"           # Docker image for Airflow
-_AIRFLOW_WWW_USER_USERNAME="airflow"                 # Airflow web UI username
-_AIRFLOW_WWW_USER_PASSWORD="airflow"                 # Airflow web UI password
-AIRFLOW__CORE__LOAD_EXAMPLES=false                   # Whether to load example DAGs
+# PostgreSQL
+POSTGRES_HOSTNAME="YOUR_POSTGRES_HOSTNAME"
+POSTGRES_PORT=5432
+POSTGRES_USERNAME="YOUR_POSTGRES_USERNAME"
+POSTGRES_PASSWORD="YOUR_POSTGRES_PASSWORD"
 
-# Benchmark
-BENCHMARK_ROOT="FULL_PATH_TO_BENCHMARK_FOLDER"       # Full path of the folder you clone the repo into
-MODEL_PATH="PATH_TO_YOUR_MODEL"                      # Path to your model
+# Snowflake
+SNOWFLAKE_ACCOUNT="YOUR_SNOWFLAKE_ACCOUNT"
+SNOWFLAKE_USER="YOUR_SNOWFLAKE_USER"
+SNOWFLAKE_PASSWORD="YOUR_SNOWFLAKE_PASSWORD"
+SNOWFLAKE_WAREHOUSE="YOUR_SNOWFLAKE_WAREHOUSE"
+SNOWFLAKE_ROLE="SYSADMIN"
+
+# Azure SQL
+AZURE_SQL_SERVER="YOUR_AZURE_SQL_SERVER"
+AZURE_SQL_USERNAME="YOUR_AZURE_SQL_USERNAME"
+AZURE_SQL_PASSWORD="YOUR_AZURE_SQL_PASSWORD"
+AZURE_SQL_VERSION=18
+
+# Airflow Configuration
+AIRFLOW_GITHUB_TOKEN="YOUR_GITHUB_TOKEN"
+AIRFLOW_REPO="YOUR_AIRFLOW_REPO_URL"
+AIRFLOW_DAG_PATH="dags/"
+AIRFLOW_REQUIREMENTS_PATH="Requirements/"
+AIRFLOW_HOST="http://localhost:8888"
+AIRFLOW_USERNAME="airflow"
+AIRFLOW_PASSWORD="airflow"
+AIRFLOW_UID=501
+AIRFLOW_GID=0
+AIRFLOW_IMAGE_NAME="apache/airflow:2.10.5"
+_AIRFLOW_WWW_USER_USERNAME="airflow"
+_AIRFLOW_WWW_USER_PASSWORD="airflow"
+AIRFLOW__CORE__LOAD_EXAMPLES=false
+
+# Databricks Configuration
+DATABRICKS_HOST="YOUR_DATABRICKS_HOST"
+DATABRICKS_TOKEN="YOUR_DATABRICKS_TOKEN"
+DATABRICKS_CLUSTER_ID="YOUR_DATABRICKS_CLUSTER_ID"
+DATABRICKS_HTTP_PATH="YOUR_DATABRICKS_HTTP_PATH"
+DATABRICKS_JOBS_WORKSPACE_URL="YOUR_DATABRICKS_WORKSPACE_URL"
+DATABRICKS_JOBS_ACCESS_TOKEN="YOUR_DATABRICKS_ACCESS_TOKEN"
+DATABRICKS_JOBS_GITHUB_TOKEN="YOUR_DATABRICKS_GITHUB_TOKEN"
+DATABRICKS_JOBS_REPO="YOUR_DATABRICKS_REPO_URL"
+DATABRICKS_JOBS_REPO_PATH="YOUR_DATABRICKS_REPO_PATH"
+
+# Finch API
+FINCH_ACCESS_TOKEN="YOUR_FINCH_ACCESS_TOKEN"
+
+# Astronomer Cloud Configuration
+ASTRO_WORKSPACE_ID="YOUR_ASTRO_WORKSPACE_ID"
+ASTRO_ACCESS_TOKEN="YOUR_ASTRO_ACCESS_TOKEN"
+ASTRO_API_TOKEN="YOUR_ASTRO_API_TOKEN"   # This can be used instead of the ASTRO_ACCESS_TOKEN
+ASTRO_CLOUD_PROVIDER="aws"
+ASTRO_REGION="us-east-1"
+
+# Azure Configuration (for Claude_Code mode and container services)
+# Azure Service Principal (for AKS access)
+AZURE_CLIENT_ID="YOUR_AZURE_SERVICE_PRINCIPAL_CLIENT_ID"
+AZURE_CLIENT_SECRET="YOUR_AZURE_SERVICE_PRINCIPAL_CLIENT_SECRET"
+AZURE_TENANT_ID="YOUR_AZURE_TENANT_ID"
+AZURE_SUBSCRIPTION_ID="YOUR_AZURE_SUBSCRIPTION_ID"
+
+# Azure Container Services
+ACI_RESOURCE_GROUP="YOUR_AKS_RESOURCE_GROUP_NAME"
+ACI_CONTAINER_GROUP_NAME="YOUR_CONTAINER_GROUP_NAME"
+ACR_REGISTRY_SERVER="YOUR_ACR_REGISTRY_SERVER"
+ACR_REGISTRY_USERNAME="YOUR_ACR_USERNAME"
+ACR_REGISTRY_PASSWORD="YOUR_ACR_PASSWORD"
+
+# Azure Kubernetes Service
+AKS_CLUSTER_NAME="YOUR_AKS_CLUSTER_NAME"
+AKS_IMAGE_NAME="YOUR_AKS_IMAGE_NAME"
+
+# Azure Storage Account
+AZURE_STORAGE_ACCOUNT_NAME="YOUR_STORAGE_ACCOUNT_NAME"
+AZURE_STORAGE_ACCOUNT_KEY="YOUR_STORAGE_ACCOUNT_KEY"
+
+# Azure Key Vault
+AZURE_KEY_VAULT_NAME="YOUR_KEY_VAULT_NAME"
+
+# AWS Credentials for Claude Code (Bedrock access)
+AWS_ACCESS_KEY_ID_CLAUDE="YOUR_AWS_ACCESS_KEY_FOR_CLAUDE_BEDROCK"
+AWS_SECRET_ACCESS_KEY_CLAUDE="YOUR_AWS_SECRET_KEY_FOR_CLAUDE_BEDROCK"
+AWS_DEFAULT_REGION_CLAUDE="us-east-1"
+
+# Claude Code Configuration
+IS_SANDBOX=1
+
+# OpenAI Configuration (for OpenAI_Codex mode)
+OPENAI_API_KEY="YOUR_OPENAI_API_KEY"
+AZURE_OPENAI_API_KEY="YOUR_AZURE_OPENAI_API_KEY"
+AZURE_OPENAI_ENDPOINT="YOUR_AZURE_OPENAI_ENDPOINT"
+AZURE_OPENAI_API_VERSION="2023-12-01-preview"
+AZURE_OPENAI_CHAT_DEPLOYMENT_NAME="YOUR_DEPLOYMENT_NAME"
+</code></pre>
+
+### Custom Variables for Your Setup
+
+Below are custom variables for your specific setup. We set up the Ardent configs as an example:
+
+<pre><code>
+# Ardent AI Configuration (Example Custom Setup)
+ARDENT_PUBLIC_KEY="YOUR_ARDENT_PUBLIC_KEY"
+ARDENT_SECRET_KEY="YOUR_ARDENT_SECRET_KEY"
+ARDENT_BASE_URL="http://localhost:8000"
 </code></pre>
 
 3. Edit the Run_Model.py file to edit the wrapper and import in your model. You must make sure MODEL_PATH is the same path for your model import. Plug in your model to the wrapper function in Run_Model
 
-4. Install Requirements: `pip install -r requirements.txt`
 
-5. Configure your tools and permissions:
+
+
+4. Set up and run the Docker Compose environment:
+
+```bash
+# Copy the environment template
+cp env.example .env
+
+# Edit the .env file with your actual credentials
+# Replace TODO_REQUIRED values with your credentials
+# TODO_OPTIONAL values can be left empty if you don't need those services
+```
+
+The template includes:
+- **Core Framework Variables**: Required for all tests (Supabase, Ardent)
+- **Execution Mode Configuration**: Choose between Ardent, Claude_Code, or OpenAI_Codex modes
+- **Database Services**: MongoDB, MySQL, PostgreSQL, Snowflake, Azure SQL
+- **Workflow Orchestration**: Airflow, Databricks, Astronomer
+- **Cloud Services**: AWS, Azure configurations
+- **Third-party APIs**: Finch and other service integrations
+
+Each section is clearly documented with:
+- Purpose and usage explanations
+- Required vs optional variables
+- Default values where applicable
+- Example formats for complex values
+
+### 3. Install Dependencies
+
+```bash
+pip install -r requirements.txt
+```
+
+### 4. Run Tests
+
+The framework uses Braintrust for evaluation. Run tests using the evaluation script:
+
+```bash
+# Run all tests
+python run_braintrust_eval.py Ardent
+
+# Run specific test
+python run_braintrust_eval.py --filter "MongoDB_Agent_Add_Record" Ardent
+
+# Run tests by category
+python run_braintrust_eval.py --filter "PostgreSQL_Agent.*" Ardent
+python run_braintrust_eval.py --filter "Airflow_Agent.*" Ardent
+
+# Run multiple test patterns
+python run_braintrust_eval.py --filter "MongoDB.*" "MySQL.*" Ardent
+
+# Run with different AI modes
+python run_braintrust_eval.py --filter "MongoDB_Agent_Add_Record" Claude_Code
+python run_braintrust_eval.py --filter "MongoDB_Agent_Add_Record" OpenAI_Codex
+
+```
+
+### Available Modes:
+- **Ardent** (Default) - Uses Ardent AI's backend service
+- **Claude_Code** - Uses Claude Code via AWS Bedrock in Kubernetes containers
+- **OpenAI_Codex** - Uses OpenAI Codex via OpenAI API in Kubernetes containers
+
+### Filter Examples:
+```bash
+# Database tests
+python run_braintrust_eval.py --filter ".*Agent_Add_Record" Ardent
+
+# Airflow pipeline tests  
+python run_braintrust_eval.py --filter "Airflow_Agent.*" Ardent
+
+# Specific database types
+python run_braintrust_eval.py --filter "PostgreSQL.*" Ardent
+python run_braintrust_eval.py --filter "Snowflake.*" Ardent
+python run_braintrust_eval.py --filter "MongoDB.*" Ardent
+
+```
+
+### 5. Service Configuration
+
+Configure your tools and permissions:
 
 MongoDB:
 - Required Role: dbAdmin
@@ -67,20 +252,103 @@ MongoDB:
   - Create/Delete Databases
   - Read/Write to Collections
 
-6. Use pytest to run. 
-`pytest -n auto -sv` -- will run with default settings
-`pytest -sv -k "keyword"` -- run tests by keyword
-`pytest` -- will run all tests
-Pytest supports `and` & `or` operators too. Something like `pytest -m "one and two"` will work.
+Snowflake:
+- Required Role: SYSADMIN (or custom role with database creation permissions)
+- Required Permissions:
+  - CREATE DATABASE
+  - CREATE SCHEMA
+  - CREATE TABLE
+  - COPY INTO (for S3 loading)
+- AWS S3 Access: Ensure AWS credentials have S3 read permissions for parquet files
 
-7. A lot of the tests run on tools or frameworks. We've set up a clean .env file with all the necessary variables needed. We've tried to optimize the setup of all the tests but it will likely charge some credits through the tools. Keep that in mind.
+## 📝 **Important Notes**
 
+**Cost Awareness**: Many tests use cloud services that may incur charges. Monitor your usage across:
+- Database services (MongoDB Atlas, AWS RDS, Snowflake)
+- Airflow/Astronomer deployments 
+- AWS S3 and other cloud resources
 
+**Service-Specific Requirements**:
+- **MongoDB**: Must have permissions to create and drop collections and databases
+- **Airflow**: Must be set up with git sync enabled to your repository
+- **MySQL**: Check credentials regularly (AWS RDS defaults rotate weekly)
+- **PostgreSQL**: Must have the default `postgres` database available
+- **Tigerbeetle**: Must be set up with VOPR for testing (if used)
 
-Notes:
+**AI Mode Requirements**:
+- **Claude_Code**: Requires AWS Bedrock access and Azure Kubernetes Service setup
+- **OpenAI_Codex**: Requires valid OpenAI API key and Azure Kubernetes Service setup
 
--Tigerbeetle must be set up with VOPR for testing.
--Mongo must have permisions to create and drop collections and databases
--Airflow must be set up with git sync enabled to the repo you provide
--make sure your mySQL password and username are up to date. AWS sets defaults to rotate once a week...
--Postgres must have the postgres db in it to function (i mean u shouldn't have deleted this anyway)
+## 🔍 **Test Discovery & Debugging**
+
+### Viewing Available Tests
+```bash
+# See all available tests
+python run_braintrust_eval.py --help
+
+# Tests are automatically discovered from Tests/ directory
+# Each test must follow the standard pattern (see Tests/TESTS.md)
+```
+
+### Debugging Failed Tests
+```bash
+# Use verbose mode for detailed error information
+python run_braintrust_eval.py --filter "Test_Name" --verbose Ardent
+
+# Check Braintrust dashboard for detailed execution logs
+# URL will be provided in the output
+```
+
+### Test Development
+- See **[Tests/TESTS.md](Tests/TESTS.md)** for the complete development guide
+- All tests use the unified `DEBenchFixture` pattern
+- Resources are automatically set up and cleaned up
+- Validation includes detailed test steps for debugging
+
+## ⚠️ **Common Errors**
+
+### **Astronomer Token Expired**
+```
+subprocess.CalledProcessError: Command '['astro', 'login', '--token-login', 'eyJhbGciOiJSUzI1NiIs...']' returned non-zero exit status 1.
+```
+**Solution:** Your `ASTRO_ACCESS_TOKEN` has expired. Generate a new token from your Astronomer account and update your `.env` file.
+
+### **Database Connection Errors**
+```
+psycopg2.OperationalError: could not connect to server
+mysql.connector.errors.DatabaseError: Can't connect to MySQL server
+```
+**Solution:** Check your database credentials in the `.env` file. For AWS RDS, credentials may rotate weekly - update them as needed.
+
+### **Test Discovery Issues**
+```
+❌ Test 'Test_Name' does not match pattern: missing 'get_fixtures'
+```
+**Solution:** Test doesn't follow the new pattern. See [Tests/TESTS.md](Tests/TESTS.md) for conversion guide. Tests must have `get_fixtures()`, `create_model_inputs()`, and `validate_test()` functions.
+
+### **Resource Setup Failures**
+```
+Exception: MongoDB resource data not available - ensure test_setup was called
+```
+**Solution:** Fixture setup failed. Check environment variables for the specific service and ensure credentials are correct.
+
+### **Configuration Validation Errors**
+```
+ardent.exceptions.ArdentValidationError: Invalid type at user. Expected str, got NoneType
+```
+**Solution:** Environment variable is missing or None. Check your `.env` file for the required service credentials.
+
+---
+
+## 🎯 **Framework Benefits**
+
+This new DE-Bench framework provides:
+
+- **🔄 Unified Testing**: All tests follow the same pattern for consistency
+- **🛡️ Robust Resource Management**: Automatic setup and cleanup of databases, services
+- **📊 Detailed Validation**: Test steps provide granular pass/fail information  
+- **⚡ Parallel Execution**: Tests run efficiently with proper resource isolation
+- **🔍 Easy Debugging**: Clear error messages and Braintrust integration
+- **📚 Comprehensive Documentation**: Complete guides in [Tests/TESTS.md](Tests/TESTS.md)
+
+For detailed test development, patterns, and examples, see **[Tests/TESTS.md](Tests/TESTS.md)**.
