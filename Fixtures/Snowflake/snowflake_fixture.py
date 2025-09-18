@@ -104,6 +104,15 @@ class SnowflakeFixture(
         resource_id = config["resource_id"]
         print(f"❄️ Setting up Snowflake resource: {resource_id}")
 
+        # Store connection parameters for later use in create_config_section
+        self._connection_params = {
+            "account": os.getenv("SNOWFLAKE_ACCOUNT"),
+            "user": os.getenv("SNOWFLAKE_USER"),
+            "password": os.getenv("SNOWFLAKE_PASSWORD"),
+            "warehouse": os.getenv("SNOWFLAKE_WAREHOUSE"),
+            "role": os.getenv("SNOWFLAKE_ROLE", "SYSADMIN"),
+        }
+
         # Generate unique database and schema names
         timestamp = int(time.time())
         test_uuid = uuid.uuid4().hex[:8]
@@ -207,14 +216,26 @@ class SnowflakeFixture(
             # Look for SQL file relative to test directories
             sql_file_path = Path(sql_file)
             if not sql_file_path.exists():
-                # Try to find it in test directories
-                for test_dir in Path("Tests").glob("**/"):
-                    potential_path = test_dir / sql_file
-                    if potential_path.exists():
-                        sql_file = str(potential_path)
-                        break
+                # Try to find it in test directories using absolute path
+                # Get the absolute path to the project root
+                current_dir = os.path.dirname(os.path.abspath(__file__))
+                project_root = os.path.dirname(
+                    os.path.dirname(current_dir)
+                )  # Go up two levels from Fixtures/Snowflake/
+                tests_dir = os.path.join(project_root, "Tests")
+
+                if os.path.exists(tests_dir):
+                    for test_dir in Path(tests_dir).glob("**/"):
+                        potential_path = test_dir / sql_file
+                        if potential_path.exists():
+                            sql_file = str(potential_path)
+                            break
+                    else:
+                        raise FileNotFoundError(f"SQL file not found: {sql_file}")
                 else:
-                    raise FileNotFoundError(f"SQL file not found: {sql_file}")
+                    raise FileNotFoundError(
+                        f"SQL file not found: {sql_file} (Tests directory not found at {tests_dir})"
+                    )
 
         if not os.path.exists(sql_file):
             raise FileNotFoundError(f"SQL file not found: {sql_file}")
@@ -368,23 +389,14 @@ class SnowflakeFixture(
                 "Snowflake resource data not available - ensure setup_resource was called"
             )
 
-        # Extract connection details from resource data
-        connection_params = resource_data.get("connection_params", {})
-
         return {
             "snowflake": {
-                "account": connection_params.get(
-                    "account", os.getenv("SNOWFLAKE_ACCOUNT")
-                ),
-                "user": connection_params.get("user", os.getenv("SNOWFLAKE_USERNAME")),
-                "password": connection_params.get(
-                    "password", os.getenv("SNOWFLAKE_PASSWORD")
-                ),
-                "database": resource_data.get("database_name"),
-                "schema": resource_data.get("schema_name"),
-                "warehouse": connection_params.get(
-                    "warehouse", os.getenv("SNOWFLAKE_WAREHOUSE")
-                ),
-                "role": connection_params.get("role", os.getenv("SNOWFLAKE_ROLE")),
+                "account": self._connection_params["account"],
+                "user": self._connection_params["user"],
+                "password": self._connection_params["password"],
+                "database": resource_data.get("database"),
+                "schema": resource_data.get("schema"),
+                "warehouse": self._connection_params["warehouse"],
+                "role": self._connection_params["role"],
             }
         }

@@ -207,14 +207,26 @@ class PostgreSQLFixture(
                 # Fallback: Look for SQL file relative to current working directory first
                 sql_file_path = Path(sql_file)
                 if not sql_file_path.exists():
-                    # Try to find it in test directories
-                    for test_dir in Path("Tests").glob("**/"):
-                        potential_path = test_dir / sql_file
-                        if potential_path.exists():
-                            sql_file = str(potential_path)
-                            break
+                    # Try to find it in test directories using absolute path
+                    # Get the absolute path to the project root
+                    current_dir = os.path.dirname(os.path.abspath(__file__))
+                    project_root = os.path.dirname(
+                        os.path.dirname(current_dir)
+                    )  # Go up two levels from Fixtures/PostgreSQL/
+                    tests_dir = os.path.join(project_root, "Tests")
+
+                    if os.path.exists(tests_dir):
+                        for test_dir in Path(tests_dir).glob("**/"):
+                            potential_path = test_dir / sql_file
+                            if potential_path.exists():
+                                sql_file = str(potential_path)
+                                break
+                        else:
+                            raise FileNotFoundError(f"SQL file not found: {sql_file}")
                     else:
-                        raise FileNotFoundError(f"SQL file not found: {sql_file}")
+                        raise FileNotFoundError(
+                            f"SQL file not found: {sql_file} (Tests directory not found at {tests_dir})"
+                        )
 
         if not os.path.exists(sql_file):
             raise FileNotFoundError(f"SQL file not found: {sql_file}")

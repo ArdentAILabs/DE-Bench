@@ -68,6 +68,9 @@ class MongoDBFixture(
         )
         creation_start = time.time()
 
+        # Store connection string for later use in create_config_section
+        self._connection_string = os.getenv("MONGODB_URI")
+
         created_resources = []
 
         # Process databases from template
@@ -164,13 +167,21 @@ class MongoDBFixture(
                 "MongoDB resource data not available - ensure setup_resource was called"
             )
 
-        # Extract database names from created resources
-        database_names = [db["name"] for db in resource_data["created_resources"]]
+        # Extract database and collection information from created resources
+        databases = {}
+        for resource in resource_data["created_resources"]:
+            db_name = resource["db"]
+            collection_name = resource["collection"]
+
+            if db_name not in databases:
+                databases[db_name] = {"name": db_name, "collections": []}
+
+            databases[db_name]["collections"].append({"name": collection_name})
 
         return {
-            "mongoDB": {
-                "connectionString": self._connection_string,
-                "databases": [{"name": db_name} for db_name in database_names],
+            "mongodb": {
+                "connection_string": self._connection_string,
+                "databases": list(databases.values()),
             }
         }
 

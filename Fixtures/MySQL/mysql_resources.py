@@ -87,16 +87,24 @@ class MySQLFixture(
 
         created_resources = []
 
+        # Store connection parameters for later use in create_config_section
+        self._connection_params = {
+            "host": os.getenv("MYSQL_HOST"),
+            "port": os.getenv("MYSQL_PORT"),
+            "user": os.getenv("MYSQL_USERNAME"),
+            "password": os.getenv("MYSQL_PASSWORD"),
+        }
+
         print(
-            f"Connecting to MySQL\nHost: {os.getenv('MYSQL_HOST')}\nPort: {os.getenv('MYSQL_PORT')}\nUsername: {os.getenv('MYSQL_USERNAME')}\nPassword: {os.getenv('MYSQL_PASSWORD')}"
+            f"Connecting to MySQL\nHost: {self._connection_params['host']}\nPort: {self._connection_params['port']}\nUsername: {self._connection_params['user']}\nPassword: {self._connection_params['password']}"
         )
 
         # Connect to MySQL (single connection for everything)
         connection = mysql.connector.connect(
-            host=os.getenv("MYSQL_HOST"),
-            port=os.getenv("MYSQL_PORT"),
-            user=os.getenv("MYSQL_USERNAME"),
-            password=os.getenv("MYSQL_PASSWORD"),
+            host=self._connection_params["host"],
+            port=self._connection_params["port"],
+            user=self._connection_params["user"],
+            password=self._connection_params["password"],
             connect_timeout=10,
             autocommit=True,  # Enable autocommit for DDL operations
             sql_mode="",  # Disable strict mode to avoid issues

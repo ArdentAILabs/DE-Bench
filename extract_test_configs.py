@@ -76,7 +76,9 @@ def extract_test_configuration(test_name: str) -> TestConfiguration:
         # Try to import the test module to check for get_fixtures function
         try:
             test_files = []
-            test_dir = f"Tests/{test_name}"
+            # Use absolute path to avoid working directory issues during parallel execution
+            current_dir = os.path.dirname(os.path.abspath(__file__))
+            test_dir = os.path.join(current_dir, "Tests", test_name)
 
             for file in os.listdir(test_dir):
                 if file.startswith("test_") and file.endswith(".py"):
@@ -480,7 +482,9 @@ def get_test_validator(test_name: str) -> callable:
 
             # Dynamically import the validate_test function from the test file
             test_files = []
-            test_dir = f"{os.path.dirname(os.path.abspath(__file__))}/Tests/{test_name}"
+            # Use absolute path to avoid working directory issues during parallel execution
+            current_dir = os.path.dirname(os.path.abspath(__file__))
+            test_dir = os.path.join(current_dir, "Tests", test_name)
 
             # Find test files in the directory
             for file in os.listdir(test_dir):
