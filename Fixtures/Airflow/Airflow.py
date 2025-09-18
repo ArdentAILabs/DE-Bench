@@ -267,6 +267,177 @@ class Airflow_Local:
         print(f"Task logs received for task '{task_id}' with try number: {try_number}")
         return task_logs_response.text
 
+    def get_dag_source_code(self, dag_id: str, github_manager=None) -> dict:
+        """
+        Get the DAG source code and details from Airflow and GitHub.
+        
+        :param str dag_id: The ID of the DAG to retrieve source for.
+        :param github_manager: Optional GitHub manager to get source code from repository.
+        :return: Dictionary containing DAG details and source code.
+        :rtype: dict
+        """
+        print(f"🔍 Retrieving DAG source code for: {dag_id}")
+        
+        # Get DAG details from Airflow API
+        dag_details_response = requests.get(
+            f"{self.AIRFLOW_HOST.rstrip('/')}/api/v1/dags/{dag_id}/details",
+            headers=self.API_HEADERS,
+        )
+        
+        dag_info = {
+            "dag_id": dag_id,
+            "source_code": None,
+            "github_files": {},
+            "file_path": None,
+            "dag_details": None,
+            "error": None
+        }
+        
+        if dag_details_response.status_code == 200:
+            dag_details = dag_details_response.json()
+            dag_info["dag_details"] = dag_details
+            dag_info["file_path"] = dag_details.get("fileloc")
+            
+            print(f"📄 DAG file location: {dag_details.get('fileloc', 'Unknown')}")
+            
+        else:
+            dag_info["error"] = f"Failed to retrieve DAG details: {dag_details_response.text}"
+            print(f"❌ {dag_info['error']}")
+        
+        # Try to get source code from GitHub if manager is provided
+        if github_manager:
+            try:
+                print("🐙 Retrieving DAG files from GitHub...")
+                dag_files = github_manager.get_all_dag_files()
+                dag_info["github_files"] = dag_files
+                
+                # Try to find the specific DAG file
+                for filename, file_data in dag_files.items():
+                    if dag_id in file_data["content"] or dag_id in filename:
+                        dag_info["source_code"] = file_data["content"]
+                        print(f"✅ Found DAG source code in {filename}")
+                        break
+                
+                if not dag_info["source_code"] and dag_files:
+                    # If we can't find the specific DAG, return the first Python file
+                    first_file = next(iter(dag_files.values()))
+                    dag_info["source_code"] = first_file["content"]
+                    print(f"📄 Using first DAG file as source code")
+                    
+            except Exception as e:
+                print(f"⚠️ Could not retrieve DAG files from GitHub: {e}")
+                dag_info["github_error"] = str(e)
+        
+        return dag_info
+
+    def get_dag_import_errors(self) -> list:
+        """
+        Get all DAG import errors from Airflow.
+        
+        :return: List of import errors.
+        :rtype: list
+        """
+        print("🔍 Retrieving DAG import errors...")
+        
+        import_errors_response = requests.get(
+            f"{self.AIRFLOW_HOST.rstrip('/')}/api/v1/importErrors",
+            headers=self.API_HEADERS,
+        )
+        
+        if import_errors_response.status_code == 200:
+            import_errors = import_errors_response.json().get("import_errors", [])
+            print(f"📋 Found {len(import_errors)} import errors")
+            return import_errors
+        else:
+            print(f"❌ Failed to retrieve import errors: {import_errors_response.text}")
+            return []
+
+    def get_all_task_logs_for_dag_run(self, dag_id: str, dag_run_id: str) -> dict:
+        """
+        Get logs for all tasks in a DAG run.
+        
+        :param str dag_id: The ID of the DAG.
+        :param str dag_run_id: The ID of the DAG run.
+        :return: Dictionary mapping task_id to logs.
+        :rtype: dict
+        """
+        print(f"🔍 Retrieving all task logs for DAG run: {dag_run_id}")
+        
+        # Get all task instances for this DAG run
+        task_instances_response = requests.get(
+            f"{self.AIRFLOW_HOST.rstrip('/')}/api/v1/dags/{dag_id}/dagRuns/{dag_run_id}/taskInstances",
+            headers=self.API_HEADERS,
+        )
+        
+        all_logs = {}
+        
+        if task_instances_response.status_code == 200:
+            task_instances = task_instances_response.json().get("task_instances", [])
+            
+            for task_instance in task_instances:
+                task_id = task_instance["task_id"]
+                try_number = task_instance.get("try_number", 1)
+                state = task_instance.get("state", "unknown")
+                
+                try:
+                    logs = self.get_task_instance_logs(dag_id, dag_run_id, task_id)
+                    all_logs[task_id] = {
+                        "logs": logs,
+                        "state": state,
+                        "try_number": try_number,
+                        "start_date": task_instance.get("start_date"),
+                        "end_date": task_instance.get("end_date"),
+                        "duration": task_instance.get("duration")
+                    }
+                except Exception as e:
+                    all_logs[task_id] = {
+                        "logs": f"Error retrieving logs: {str(e)}",
+                        "state": state,
+                        "try_number": try_number,
+                        "error": str(e)
+                    }
+        else:
+            print(f"❌ Failed to retrieve task instances: {task_instances_response.text}")
+        
+        return all_logs
+
+    def get_comprehensive_dag_info(self, dag_id: str, dag_run_id: str = None, github_manager=None) -> dict:
+        """
+        Get comprehensive information about a DAG including source code, errors, and logs.
+        
+        :param str dag_id: The ID of the DAG.
+        :param str dag_run_id: Optional DAG run ID for execution logs.
+        :param github_manager: Optional GitHub manager to get source code from repository.
+        :return: Comprehensive DAG information.
+        :rtype: dict
+        """
+        print(f"📊 Gathering comprehensive DAG information for: {dag_id}")
+        
+        comprehensive_info = {
+            "dag_id": dag_id,
+            "dag_run_id": dag_run_id,
+            "timestamp": time.time(),
+            "dag_source": self.get_dag_source_code(dag_id, github_manager),
+            "import_errors": self.get_dag_import_errors(),
+            "task_logs": {},
+            "dag_run_info": None
+        }
+        
+        # If we have a DAG run ID, get execution details
+        if dag_run_id:
+            comprehensive_info["task_logs"] = self.get_all_task_logs_for_dag_run(dag_id, dag_run_id)
+            
+            # Get DAG run details
+            dag_run_response = requests.get(
+                f"{self.AIRFLOW_HOST.rstrip('/')}/api/v1/dags/{dag_id}/dagRuns/{dag_run_id}",
+                headers=self.API_HEADERS,
+            )
+            
+            if dag_run_response.status_code == 200:
+                comprehensive_info["dag_run_info"] = dag_run_response.json()
+        
+        return comprehensive_info
+
     def check_dag_task_instances(self, dag_id: str, dag_run_id: str) -> bool:
         """
         Check if all tasks in a DAG have been executed.
