@@ -4,6 +4,7 @@ import os
 import psycopg2
 import subprocess
 from psycopg2.extensions import ISOLATION_LEVEL_AUTOCOMMIT
+from braintrust import traced
 
 
 @pytest.fixture(scope="function")
@@ -154,7 +155,7 @@ def postgres_resource(request):
 
         resource_data = {
             "resource_id": resource_id,
-            "type": "postgresql_resource",
+            "type": "postgres_resource",
             "test_name": test_name,
             "creation_time": time.time(),
             "worker_pid": os.getpid(),

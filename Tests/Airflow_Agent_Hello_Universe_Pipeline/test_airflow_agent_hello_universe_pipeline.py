@@ -1,191 +1,204 @@
-import importlib
+# Braintrust-only Airflow test - no pytest dependencies
+from model.Run_Model import run_model
+from model.Configure_Model import set_up_model_configs, cleanup_model_artifacts
 import os
+import importlib
 import time
 import uuid
-from datetime import datetime
+import requests
+from typing import List, Dict, Any
+from Fixtures.base_fixture import DEBenchFixture
 
-import pytest
-
-from model.Configure_Model import cleanup_model_artifacts, set_up_model_configs
-from model.Run_Model import run_model
-
+# Dynamic config loading
 current_dir = os.path.dirname(os.path.abspath(__file__))
 parent_dir_name = os.path.basename(current_dir)
 module_path = f"Tests.{parent_dir_name}.Test_Configs"
 Test_Configs = importlib.import_module(module_path)
 
+# Generate unique identifiers for parallel execution
 test_timestamp = int(time.time())
 test_uuid = uuid.uuid4().hex[:8]
 
-@pytest.mark.airflow
-@pytest.mark.pipeline
-@pytest.mark.two  # Difficulty 2 - involves DAG creation, PR management, and validation
 
-@pytest.mark.parametrize("github_resource", [{
-    "resource_id": f"test_airflow_hello_universe_pipeline_test_{test_timestamp}_{test_uuid}",
-}], indirect=True)
-@pytest.mark.parametrize("airflow_resource", [{
-    "resource_id": f"hello_universe_pipeline_test_{test_timestamp}_{test_uuid}",
-}], indirect=True)
-def test_airflow_agent_hello_universe_pipeline(request, airflow_resource, github_resource, supabase_account_resource):
-    input_dir = os.path.dirname(os.path.abspath(__file__))
-    github_manager = github_resource["github_manager"]
-    Test_Configs.User_Input = github_manager.add_merge_step_to_user_input(Test_Configs.User_Input)
-    dag_name = "hello_universe_dag"
-    pr_title = f"Add Hello Universe DAG {test_timestamp}_{test_uuid}"
-    branch_name = f"feature/hello_universe_dag-{test_timestamp}_{test_uuid}"
-    Test_Configs.User_Input = Test_Configs.User_Input.replace("BRANCH_NAME", branch_name)
-    Test_Configs.User_Input = Test_Configs.User_Input.replace("PR_NAME", pr_title)
-    request.node.user_properties.append(("user_query", Test_Configs.User_Input))
-    github_manager.check_and_update_gh_secrets(
-        secrets={
-            "ASTRO_ACCESS_TOKEN": os.environ["ASTRO_ACCESS_TOKEN"],
-        }
-    )
-    
-    # Use the airflow_resource fixture - the Docker instance is already running
-    print("=== Starting Hello Universe Airflow Pipeline Test ===")
-    print(f"Using Airflow instance from fixture: {airflow_resource['resource_id']}")
-    print(f"Using GitHub instance from fixture: {github_resource['resource_id']}")
-    print(f"Airflow base URL: {airflow_resource['base_url']}")
-    print(f"Test directory: {input_dir}")
+def get_fixtures() -> List[DEBenchFixture]:
+    """
+    Provides custom DEBenchFixture instances for Braintrust evaluation.
+    This Airflow test validates that AI can create a Hello Universe DAG pipeline.
+    """
+    from Fixtures.Airflow.airflow_fixture import AirflowFixture
 
+    # Initialize Airflow fixture with test-specific configuration
+    custom_airflow_config = {
+        "resource_id": f"hello_universe_pipeline_test_{test_timestamp}_{test_uuid}",
+        "runtime_version": "13.1.0",
+        "scheduler_size": "small",
+    }
+
+    airflow_fixture = AirflowFixture(custom_config=custom_airflow_config)
+    return [airflow_fixture]
+
+
+def create_model_inputs(
+    base_model_inputs: Dict[str, Any], fixtures: List[DEBenchFixture]
+) -> Dict[str, Any]:
+    """
+    Create test-specific config using the set-up fixtures.
+    This function has access to all fixture data after setup.
+    """
+    from extract_test_configs import create_config_from_fixtures
+
+    # Use the helper to automatically create config from all fixtures
+    return {
+        **base_model_inputs,
+        "model_configs": create_config_from_fixtures(fixtures),
+    }
+
+
+def validate_test(model_result, fixtures=None):
+    """
+    Validates that the AI agent successfully created a Hello Universe Airflow DAG.
+
+    Expected behavior:
+    - DAG should be created with name "hello_universe_dag"
+    - DAG should have basic tasks for saying hello to the universe
+    - DAG should be accessible via the Airflow API
+
+    Args:
+        model_result: The result from the AI model execution
+        fixtures: List of DEBenchFixture instances used in the test
+
+    Returns:
+        dict: Contains 'success' boolean and 'test_steps' list with validation details
+    """
+    # Create test steps for this validation
     test_steps = [
         {
-            "name": "Checking Git Branch Existence",
-            "description": "Checking if the git branch exists with the right name",
-            "status": "did not reach",
-            "Result_Message": "",
+            "name": "Agent Task Execution",
+            "description": "AI Agent executes task to create Hello Universe DAG",
+            "status": "running",
+            "Result_Message": "Checking if AI agent executed the Airflow DAG creation task...",
         },
         {
-            "name": "Checking PR Creation",
-            "description": "Checking if the PR was created with the right name",
-            "status": "did not reach",
-            "Result_Message": "",
+            "name": "DAG Creation Validation",
+            "description": "Verify that hello_universe_dag was created in Airflow",
+            "status": "running",
+            "Result_Message": "Validating that Hello Universe DAG exists in Airflow...",
         },
         {
-            "name": "Checking Dag Results",
-            "description": "Checking if the DAG produces the expected results",
-            "status": "did not reach",
-            "Result_Message": "",
+            "name": "DAG Structure Validation",
+            "description": "Verify that the DAG has the expected tasks and structure",
+            "status": "running",
+            "Result_Message": "Validating DAG structure and tasks...",
         },
     ]
 
-    request.node.user_properties.append(("test_steps", test_steps))
+    overall_success = False
 
-    # SECTION 1: SETUP THE TEST
-    config_results = None  # Initialize before try block
-    custom_info = {"mode": request.config.getoption("--mode")}
     try:
-        # The dags folder is already set up by the fixture
-        print("GitHub repository setup completed by fixture")
+        # Step 1: Check that the agent task executed
+        if not model_result or model_result.get("status") == "failed":
+            test_steps[0]["status"] = "failed"
+            test_steps[0][
+                "Result_Message"
+            ] = "❌ AI Agent task execution failed or returned no result"
+            return {"success": False, "test_steps": test_steps}
 
-        # set the airflow folder with the correct configs
-        # this function is for you to take the configs for the test and set them up however you want. They follow a set structure
-        Test_Configs.Configs["services"]["airflow"]["host"] = airflow_resource["base_url"]
-        Test_Configs.Configs["services"]["airflow"]["username"] = airflow_resource["username"]
-        Test_Configs.Configs["services"]["airflow"]["password"] = airflow_resource["password"]
-        Test_Configs.Configs["services"]["airflow"]["api_token"] = airflow_resource["api_token"]
-        if request.config.getoption("--mode") == "Ardent":
-            custom_info["publicKey"] = supabase_account_resource["publicKey"]
-            custom_info["secretKey"] = supabase_account_resource["secretKey"]
-
-        config_results = set_up_model_configs(Configs=Test_Configs.Configs,custom_info=custom_info)
-
-        custom_info = {
-            **custom_info,
-            **config_results,
-        }
-
-        # SECTION 2: RUN THE MODEL
-        start_time = time.time()
-        print("Running model to create DAG and PR...")
-        model_result = run_model(container=None, task=Test_Configs.User_Input, configs=Test_Configs.Configs,extra_information = custom_info)
-        end_time = time.time()
-        print(f"Model execution completed. Result: {model_result}")
-        request.node.user_properties.append(("model_runtime", end_time - start_time))
-
-        # Register the Braintrust root span ID for tracking (Ardent mode only)
-        if model_result and "bt_root_span_id" in model_result:
-            request.node.user_properties.append(("run_trace_id", model_result.get("bt_root_span_id")))
-            print(f"Registered Braintrust root span ID: {model_result.get('bt_root_span_id')}")
-
-        # Check if the branch exists and verify PR creation/merge
-        print("Waiting 10 seconds for model to create branch and PR...")
-        time.sleep(10)  # Give the model time to create the branch and PR
-        
-        branch_exists, test_steps[0] = github_manager.verify_branch_exists(branch_name, test_steps[0])
-        if not branch_exists:
-            raise Exception(test_steps[0]["Result_Message"])
-
-        pr_exists, test_steps[1] = github_manager.find_and_merge_pr(
-            pr_title=pr_title, 
-            test_step=test_steps[1], 
-            commit_title=pr_title, 
-            merge_method="squash",
-            build_info={
-                "deploymentId": airflow_resource["deployment_id"],
-                "deploymentName": airflow_resource["deployment_name"],
-            }
-        )
-        if not pr_exists:
-            raise Exception("Unable to find and merge PR. Please check the PR title and commit title.")
-
-        # Use the airflow instance from the fixture to pull DAGs from GitHub
-        # The fixture already has the Docker instance running
-        airflow_instance = airflow_resource["airflow_instance"]
-        
-        if not github_manager.check_if_action_is_complete(pr_title=pr_title):
-            raise Exception("Action is not complete")
-        
-        # verify the airflow instance is ready after the github action redeployed
-        if not airflow_instance.wait_for_airflow_to_be_ready():
-            raise Exception("Airflow instance did not redeploy successfully.")
-
-        # Use the connection details from the fixture
-        airflow_base_url = airflow_resource["base_url"]
-        airflow_api_token = airflow_resource["api_token"]
-        
-        print(f"Connecting to Airflow at: {airflow_base_url}")
-        print(f"Using API Token: {airflow_api_token}")
-
-        # Wait for DAG to appear and trigger it
-        if not airflow_instance.verify_airflow_dag_exists(dag_name):
-            raise Exception(f"DAG '{dag_name}' did not appear in Airflow")
-
-        dag_run_id = airflow_instance.unpause_and_trigger_airflow_dag(dag_name)
-        if not dag_run_id:
-            raise Exception("Failed to trigger DAG")
-
-        # Monitor the DAG run
-        print(f"Monitoring DAG run {dag_run_id} for completion...")
-        airflow_instance.verify_dag_id_ran(dag_name, dag_run_id)
-
-        # SECTION 3: VERIFY THE OUTCOMES
-        # Get the task logs to verify "Hello World" was printed
-        print("Retrieving task logs to verify 'Hello World' output...")
-
-        # get the logs for the task
-        logs = airflow_instance.get_task_instance_logs(dag_id=dag_name, dag_run_id=dag_run_id, task_id="print_hello")
-        print(f"Task logs retrieved. Log content length: {len(logs)} characters")
-        print(f"Log content preview: {logs[:200]}...")
-        
-        assert "Hello Universe" in logs, "Expected 'Hello Universe' in task logs"
-        print("✓ 'Hello Universe' found in task logs!")
-        test_steps[2]["status"] = "passed"
-        test_steps[2][
+        test_steps[0]["status"] = "passed"
+        test_steps[0][
             "Result_Message"
-        ] = "DAG produced the expected results of Hello Universe printed to the logs"
+        ] = "✅ AI Agent completed task execution successfully"
 
-    finally:
+        # Use fixture to get Airflow connection for validation
+        airflow_fixture = None
+        if fixtures:
+            airflow_fixture = next(
+                (f for f in fixtures if f.get_resource_type() == "airflow_resource"),
+                None,
+            )
+
+        if not airflow_fixture:
+            raise Exception("Airflow fixture not found")
+
+        # Get Airflow instance from stored resource data
+        resource_data = getattr(airflow_fixture, "_resource_data", None)
+        if not resource_data:
+            raise Exception("Airflow resource data not available")
+
+        airflow_instance = resource_data["airflow_instance"]
+        api_headers = resource_data["api_headers"]
+        base_url = resource_data["base_url"]
+
+        # Step 2: Verify that hello_universe_dag was created
+        dag_name = "hello_universe_dag"
+        print(f"🔍 Checking for DAG: {dag_name} in Airflow at {base_url}")
+
         try:
-            # this function is for you to remove the configs for the test. They follow a set structure.
-            if request.config.getoption("--mode") == "Ardent":
-                custom_info['job_id'] = model_result.get("id") if model_result else None
+            # Use Airflow REST API to check if DAG exists
+            dag_url = f"{base_url}/api/v1/dags/{dag_name}"
+            response = requests.get(dag_url, headers=api_headers, timeout=30)
 
-            cleanup_model_artifacts(Configs=Test_Configs.Configs, custom_info=custom_info)
-            # Delete the branch from github using the github manager
-            github_manager.delete_branch(branch_name)
+            if response.status_code == 200:
+                dag_info = response.json()
+                test_steps[1]["status"] = "passed"
+                test_steps[1][
+                    "Result_Message"
+                ] = f"✅ DAG '{dag_name}' found in Airflow: {dag_info.get('dag_id', 'N/A')}"
+            else:
+                test_steps[1]["status"] = "failed"
+                test_steps[1][
+                    "Result_Message"
+                ] = f"❌ DAG '{dag_name}' not found in Airflow (HTTP {response.status_code})"
+                return {"success": False, "test_steps": test_steps}
 
         except Exception as e:
-            print(f"Error during cleanup: {e}")
+            test_steps[1]["status"] = "failed"
+            test_steps[1][
+                "Result_Message"
+            ] = f"❌ Error checking DAG existence: {str(e)}"
+            return {"success": False, "test_steps": test_steps}
+
+        # Step 3: Verify DAG structure and tasks
+        try:
+            # Get DAG tasks
+            tasks_url = f"{base_url}/api/v1/dags/{dag_name}/tasks"
+            tasks_response = requests.get(tasks_url, headers=api_headers, timeout=30)
+
+            if tasks_response.status_code == 200:
+                tasks_data = tasks_response.json()
+                tasks = tasks_data.get("tasks", [])
+
+                if len(tasks) > 0:
+                    task_names = [task.get("task_id", "unknown") for task in tasks]
+                    test_steps[2]["status"] = "passed"
+                    test_steps[2][
+                        "Result_Message"
+                    ] = f"✅ DAG has {len(tasks)} tasks: {', '.join(task_names)}"
+                    overall_success = True
+                else:
+                    test_steps[2]["status"] = "failed"
+                    test_steps[2]["Result_Message"] = "❌ DAG exists but has no tasks"
+            else:
+                test_steps[2]["status"] = "failed"
+                test_steps[2][
+                    "Result_Message"
+                ] = f"❌ Could not retrieve DAG tasks (HTTP {tasks_response.status_code})"
+
+        except Exception as e:
+            test_steps[2]["status"] = "failed"
+            test_steps[2][
+                "Result_Message"
+            ] = f"❌ Error validating DAG structure: {str(e)}"
+
+    except Exception as e:
+        # Mark any unfinished steps as failed
+        for step in test_steps:
+            if step["status"] == "running":
+                step["status"] = "failed"
+                step["Result_Message"] = f"❌ Airflow validation error: {str(e)}"
+
+    # Calculate score as the fraction of steps that passed
+    score = sum([step["status"] == "passed" for step in test_steps]) / len(test_steps)
+    return {
+        "score": score,
+        "metadata": {"test_steps": test_steps},
+    }

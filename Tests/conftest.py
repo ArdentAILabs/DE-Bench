@@ -97,21 +97,7 @@ def pytest_configure(config):
     with sqlite3.connect(".tmp/resources.db") as conn:
         conn.execute("CREATE TABLE IF NOT EXISTS resources (id INTEGER PRIMARY KEY AUTOINCREMENT, resource_id TEXT, type TEXT, creation_time REAL, worker_pid INTEGER, creation_duration REAL, description TEXT, status TEXT, custom_info TEXT)")
 
-    #with open(".tmp/resources.json", "w") as f:
-    #    json.dump([], f, indent=2)
-
-
-    # set up the airflow docker container
-
     initialize_model()
-
-    # initialize local airflow instance
-    #airflow_local = Airflow_Local()
-
-    #print("Initializing Airflow")
-    # start the airflow docker container
-    #airflow_local.Start_Airflow()
-
 
 def pytest_addoption(parser):
     parser.addoption("--mode", action="store", default="Ardent", help="Mode to run the test in")
@@ -158,26 +144,10 @@ def pytest_sessionfinish(session, exitstatus):
     if os.path.exists(".tmp"):
         print("TMP directory exists")
 
-
-        # input("Waiting here")
-
         session_spindown()
-
-        #input("Waiting here")
 
         if os.path.exists(".tmp"):
             shutil.rmtree(".tmp/")
-
-
-
-        #now we want to check for information in there? on resources?
-
-
-    #airflow_local = Airflow_Local()
-
-    #airflow_local.Stop_Airflow()
-
-    #airflow_local.Cleanup_Airflow_Directories()
 
     # Only the main process should aggregate and display results
     if os.environ.get("PYTEST_XDIST_WORKER") is None:

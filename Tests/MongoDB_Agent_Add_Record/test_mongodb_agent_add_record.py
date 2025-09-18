@@ -1,17 +1,12 @@
-# Import from the Model directory
+# Braintrust-only MongoDB test - no pytest dependencies
 from model.Run_Model import run_model
-from model.Configure_Model import set_up_model_configs
-from model.Configure_Model import cleanup_model_artifacts
+from model.Configure_Model import set_up_model_configs, cleanup_model_artifacts
 import os
 import importlib
-import pytest
-from pymongo.errors import CollectionInvalid
 import time
-
-
-# Import from the Functions directory
-from Environment.Docker.DockerSetup import load_docker
+from typing import List, Dict, Any
 from Configs.MongoConfig import syncMongoClient
+from Fixtures.base_fixture import DEBenchFixture
 
 
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -22,110 +17,126 @@ module_path = f"Tests.{parent_dir_name}.Test_Configs"
 Test_Configs = importlib.import_module(module_path)
 
 
-@pytest.mark.mongodb
-@pytest.mark.code_writing
-@pytest.mark.database
-@pytest.mark.parametrize("mongo_resource", [{
-    "resource_id": "test_mongo_resource",
-    "databases": [
-        {
-            "name": "test_database",
-            "collections": [
-                {
-                    "name": "test_collection",
-                    "data": []
-                }
-            ]
-        }
-    ]
-}], indirect=True)
-def test_mongodb_agent_add_record(request, mongo_resource, supabase_account_resource):
-    input_dir = os.path.dirname(os.path.abspath(__file__))
+def get_fixtures() -> List[DEBenchFixture]:
+    """
+    Provides custom DEBenchFixture instances for Braintrust evaluation.
+    This is the main entry point for the Braintrust system.
+    """
+    from Fixtures.MongoDB.mongo_resources import MongoDBFixture
 
-    request.node.user_properties.append(("user_query", Test_Configs.User_Input))
+    # Initialize MongoDB fixture with custom configuration
+    custom_mongo_config = {
+        "resource_id": "mongodb_agent_add_record_test",
+        "databases": [
+            {
+                "name": "agent_test_database",
+                "collections": [
+                    {
+                        "name": "agent_test_collection",
+                        "data": [
+                            {"name": "Alice", "age": 25, "role": "tester"},
+                            {"name": "Bob", "age": 30, "role": "developer"},
+                        ],
+                    },
+                    {"name": "backup_collection", "data": []},
+                ],
+            }
+        ],
+    }
 
+    mongo_fixture = MongoDBFixture(custom_config=custom_mongo_config)
+    return [mongo_fixture]
+
+
+def create_model_inputs(
+    base_model_inputs: Dict[str, Any], fixtures: List[DEBenchFixture]
+) -> Dict[str, Any]:
+    """
+    Create test-specific config using the set-up fixtures.
+    This function has access to all fixture data after setup.
+    """
+    from extract_test_configs import create_config_from_fixtures
+
+    # Use the helper to automatically create config from all fixtures
+    return {
+        **base_model_inputs,
+        "model_configs": create_config_from_fixtures(fixtures),
+    }
+
+
+def validate_test(model_result, fixtures=None):
+    """
+    Validates that the AI agent successfully added a record to MongoDB.
+
+    This function creates test steps, performs validation, and returns detailed results
+    for the Braintrust evaluation system.
+
+    Args:
+        model_result: The result from the AI model execution
+        fixtures: List of DEBenchFixture instances used in the test
+
+    Returns:
+        dict: Contains 'success' boolean and 'test_steps' list with validation details
+    """
+    # Create test steps for this validation
     test_steps = [
         {
-            "name": "Record Creation",
-            "description": "Adding a new record to MongoDB",
-            "status": "did not reach",
-            "Result_Message": "",
+            "name": "MongoDB Record Addition",
+            "description": "Verify that AI agent added 'John Doe' record to MongoDB",
+            "status": "running",
+            "Result_Message": "Checking if 'John Doe' record was added to agent_test_collection...",
         }
     ]
 
-    request.node.user_properties.append(("test_steps", test_steps))
-
-    # SECTION 1: SETUP THE TEST
-    config_results = None
-    custom_info = {"mode": request.config.getoption("--mode")}
-
-
-    if request.config.getoption("--mode") == "Ardent":
-        custom_info["publicKey"] = supabase_account_resource["publicKey"]
-        custom_info["secretKey"] = supabase_account_resource["secretKey"]
-
+    success = False
 
     try:
-        # we can add an option to do local runs with this container
-        # container = load_docker(input_directory=input_dir)
+        # Use fixture to get database connection for validation
+        mongo_fixture = None
+        if fixtures:
+            mongo_fixture = next(
+                (f for f in fixtures if f.get_resource_type() == "mongo_resource"), None
+            )
 
-        # MongoDB setup is now handled by the fixture
-        
-        # Set up model configs using the configuration from Test_Configs
-        config_results = set_up_model_configs(Configs=Test_Configs.Configs,custom_info=custom_info)
+        if mongo_fixture:
+            # Use fixture's helper method for consistent connection
+            db = mongo_fixture.get_database("agent_test_database")
+        else:
+            # Fallback to direct connection if no fixtures provided
+            db = syncMongoClient["agent_test_database"]
 
-        custom_info = {
-            **custom_info,
-            **config_results,
-        }
-        print("This is the custom info")
-        print(custom_info)
-
-        # SECTION 2: RUN THE MODEL
-        # Run the model which should add the record
-        start_time = time.time()
-        model_result = run_model(
-            container=None, task=Test_Configs.User_Input, configs=Test_Configs.Configs,extra_information = custom_info
-        )
-        end_time = time.time()
-        request.node.user_properties.append(("model_runtime", end_time - start_time))
-
-        # Register the Braintrust root span ID for tracking (Ardent mode only)
-        if model_result and "bt_root_span_id" in model_result:
-            request.node.user_properties.append(("run_trace_id", model_result.get("bt_root_span_id")))
-            print(f"Registered Braintrust root span ID: {model_result.get('bt_root_span_id')}")
-
-        # SECTION 3: VERIFY THE OUTCOMES
-        # we then check the record was added
-        db = syncMongoClient["test_database"]
-        collection = db["test_collection"]
+        collection = db["agent_test_collection"]
         record = collection.find_one({"name": "John Doe", "age": 30})
 
         if record is not None:
-            test_steps[0]["status"] = "passed"
-            test_steps[0]["Result_Message"] = "Record was successfully added to MongoDB"
-            assert record["name"] == "John Doe", "Name in record does not match"
-            assert record["age"] == 30, "Age in record does not match"
+            # Verify the record contents match expectations
+            if record["name"] == "John Doe" and record["age"] == 30:
+                test_steps[0]["status"] = "passed"
+                test_steps[0]["Result_Message"] = (
+                    "✅ AI agent successfully added John Doe record with correct values: "
+                    f"name='{record['name']}', age={record['age']}"
+                )
+                success = True
+            else:
+                test_steps[0]["status"] = "failed"
+                test_steps[0]["Result_Message"] = (
+                    f"❌ Record found but values incorrect. Expected: name='John Doe', age=30. "
+                    f"Found: name='{record.get('name')}', age={record.get('age')}"
+                )
         else:
             test_steps[0]["status"] = "failed"
-            test_steps[0]["Result_Message"] = "Record was not found in MongoDB"
-            raise AssertionError("Record was not found in MongoDB")
-        
-
-    finally:
-        try:
-            # MongoDB cleanup is now handled by the fixture
-
-            if request.config.getoption("--mode") == "Ardent":
-                custom_info['job_id'] = model_result.get("id") if model_result else None
-
-
-            # Remove model configs
-
-            cleanup_model_artifacts(
-                Configs=Test_Configs.Configs, 
-                custom_info=custom_info
+            test_steps[0]["Result_Message"] = (
+                "❌ John Doe record was not found in agent_test_collection. "
+                "AI agent may not have executed the MongoDB insertion correctly."
             )
 
-        except Exception as e:
-            pass  # Cleanup error handled silently
+    except Exception as e:
+        test_steps[0]["status"] = "failed"
+        test_steps[0]["Result_Message"] = f"❌ Database validation error: {str(e)}"
+
+    # Calculate score as the fraction of steps that passed
+    score = sum([step["status"] == "passed" for step in test_steps]) / len(test_steps)
+    return {
+        "score": score,
+        "metadata": {"test_steps": test_steps},
+    }

@@ -18,16 +18,4 @@ The new user details are:
 Please add this user to the USERS table in Snowflake and verify it was added successfully.
 """
 
-Configs = {
-    "services": {
-        "snowflake": {
-            "account": os.getenv("SNOWFLAKE_ACCOUNT"),
-            "user": os.getenv("SNOWFLAKE_USER"),
-            "password": os.getenv("SNOWFLAKE_PASSWORD"),
-            "warehouse": os.getenv("SNOWFLAKE_WAREHOUSE"),
-            "role": os.getenv("SNOWFLAKE_ROLE", "SYSADMIN"),
-            "database": "TEST_DB",  # Will be overridden by fixture
-            "schema": "TEST_SCHEMA"  # Will be overridden by fixture
-        }
-    }
-}
+# Configuration will be generated dynamically by create_config function

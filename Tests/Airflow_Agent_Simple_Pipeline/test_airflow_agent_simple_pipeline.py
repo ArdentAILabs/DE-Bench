@@ -1,14 +1,14 @@
-import importlib
+# Braintrust-only Airflow test - no pytest dependencies
+from model.Run_Model import run_model
+from model.Configure_Model import set_up_model_configs, cleanup_model_artifacts
 import os
-import pytest
-import re
+import importlib
 import time
 import uuid
+from typing import List, Dict, Any
+from Fixtures.base_fixture import DEBenchFixture
 
-from model.Configure_Model import cleanup_model_artifacts
-from model.Configure_Model import set_up_model_configs
-from model.Run_Model import run_model
-
+# Dynamic config loading
 current_dir = os.path.dirname(os.path.abspath(__file__))
 parent_dir_name = os.path.basename(current_dir)
 module_path = f"Tests.{parent_dir_name}.Test_Configs"
@@ -19,173 +19,412 @@ test_timestamp = int(time.time())
 test_uuid = uuid.uuid4().hex[:8]
 
 
-@pytest.mark.pipeline
-@pytest.mark.two  # Difficulty 2 - involves DAG creation, PR management, and validation
-@pytest.mark.parametrize("airflow_resource", [{
-    "resource_id": f"simple_pipeline_test_{test_timestamp}_{test_uuid}",
-}], indirect=True)
-@pytest.mark.parametrize("github_resource", [{
-    "resource_id": f"test_airflow_simple_pipeline_test_{test_timestamp}_{test_uuid}",
-}], indirect=True)
-def test_airflow_agent_simple_pipeline(request, airflow_resource, github_resource, supabase_account_resource):
-    input_dir = os.path.dirname(os.path.abspath(__file__))
-    github_manager = github_resource["github_manager"]
-    Test_Configs.User_Input = github_manager.add_merge_step_to_user_input(Test_Configs.User_Input)
-    dag_name = "hello_world_dag"
+def get_fixtures() -> List[DEBenchFixture]:
+    """
+    Provides custom DEBenchFixture instances for Braintrust evaluation.
+    This Airflow test validates that AI can create a simple Hello World DAG pipeline.
+    """
+    from Fixtures.Airflow.airflow_fixture import AirflowFixture
+    from Fixtures.GitHub.github_fixture import GitHubFixture
+
+    # Initialize Airflow fixture with test-specific configuration
+    custom_airflow_config = {
+        "resource_id": f"simple_pipeline_test_{test_timestamp}_{test_uuid}",
+    }
+
+    # Initialize GitHub fixture for PR and branch management
+    custom_github_config = {
+        "resource_id": f"test_airflow_simple_pipeline_test_{test_timestamp}_{test_uuid}",
+    }
+
+    airflow_fixture = AirflowFixture(custom_config=custom_airflow_config)
+    github_fixture = GitHubFixture(custom_config=custom_github_config)
+
+    return [airflow_fixture, github_fixture]
+
+
+def create_model_inputs(
+    base_model_inputs: Dict[str, Any], fixtures: List[DEBenchFixture]
+) -> Dict[str, Any]:
+    """
+    Create test-specific config using the set-up fixtures.
+    This function has access to all fixture data after setup and dynamically
+    updates the task description with GitHub branch and PR information.
+    """
+    import os
+    from extract_test_configs import create_config_from_fixtures
+
+    # Get GitHub fixture to access manager for dynamic branch/PR creation
+    github_fixture = next(
+        (f for f in fixtures if f.get_resource_type() == "github_resource"), None
+    )
+
+    if not github_fixture:
+        raise Exception(
+            "GitHub fixture not found - required for branch and PR management"
+        )
+
+    # Get the GitHub manager from the fixture
+    github_resource_data = getattr(github_fixture, "_resource_data", None)
+    if not github_resource_data:
+        raise Exception("GitHub resource data not available")
+
+    github_manager = github_resource_data.get("github_manager")
+    if not github_manager:
+        raise Exception("GitHub manager not available")
+
+    # Generate dynamic branch and PR names
     pr_title = f"Add Hello World DAG {test_timestamp}_{test_uuid}"
     branch_name = f"feature/hello_world_dag-{test_timestamp}_{test_uuid}"
-    Test_Configs.User_Input = Test_Configs.User_Input.replace("BRANCH_NAME", branch_name)
-    Test_Configs.User_Input = Test_Configs.User_Input.replace("PR_NAME", pr_title)
-    request.node.user_properties.append(("user_query", Test_Configs.User_Input))
+
+    # Start with the original user input from Test_Configs
+    task_description = Test_Configs.User_Input
+
+    # Add merge step to user input
+    task_description = github_manager.add_merge_step_to_user_input(task_description)
+
+    # Replace placeholders with dynamic values
+    task_description = task_description.replace("BRANCH_NAME", branch_name)
+    task_description = task_description.replace("PR_NAME", pr_title)
+
+    # Set up GitHub secrets for Astro access
     github_manager.check_and_update_gh_secrets(
         secrets={
             "ASTRO_ACCESS_TOKEN": os.environ["ASTRO_ACCESS_TOKEN"],
         }
     )
-    
-    # Use the airflow_resource fixture - the Docker instance is already running
-    print("=== Starting Simple Airflow Pipeline Test ===")
-    print(f"Using Airflow instance from fixture: {airflow_resource['resource_id']}")
-    print(f"Using GitHub instance from fixture: {github_resource['resource_id']}")
-    print(f"Airflow base URL: {airflow_resource['base_url']}")
-    print(f"Test directory: {input_dir}")
 
+    print(f"🔧 Generated dynamic branch name: {branch_name}")
+    print(f"🔧 Generated dynamic PR title: {pr_title}")
+
+    # Use the helper to automatically create config from all fixtures
+    return {
+        **base_model_inputs,
+        "model_configs": create_config_from_fixtures(fixtures),
+        "task_description": task_description,
+    }
+
+
+def validate_test(model_result, fixtures=None):
+    """
+    Validates that the AI agent successfully created a simple Hello World DAG.
+
+    Expected behavior:
+    - DAG should be created with name "hello_world_dag"
+    - DAG should run successfully and print "Hello World" to logs
+    - GitHub branch and PR should be created and merged
+
+    Args:
+        model_result: The result from the AI model execution
+        fixtures: List of DEBenchFixture instances used in the test
+
+    Returns:
+        dict: Contains 'score' float and 'metadata' dict with validation details
+    """
+    # Create comprehensive test steps for validation
     test_steps = [
         {
-            "name": "Checking Git Branch Existence",
-            "description": "Checking if the git branch exists with the right name",
-            "status": "did not reach",
-            "Result_Message": "",
+            "name": "Agent Task Execution",
+            "description": "AI Agent executes task to create Hello World DAG",
+            "status": "running",
+            "Result_Message": "Checking if AI agent executed the Airflow DAG creation task...",
         },
         {
-            "name": "Checking PR Creation",
-            "description": "Checking if the PR was created with the right name",
-            "status": "did not reach",
-            "Result_Message": "",
+            "name": "Git Branch Creation",
+            "description": "Verify that git branch was created with the correct name",
+            "status": "running",
+            "Result_Message": "Checking if git branch exists...",
         },
         {
-            "name": "Checking Dag Results",
-            "description": "Checking if the DAG produces the expected results",
-            "status": "did not reach",
-            "Result_Message": "",
+            "name": "PR Creation and Merge",
+            "description": "Verify that PR was created and merged successfully",
+            "status": "running",
+            "Result_Message": "Checking if PR was created and merged...",
+        },
+        {
+            "name": "GitHub Action Completion",
+            "description": "Verify that GitHub action completed successfully",
+            "status": "running",
+            "Result_Message": "Waiting for GitHub action to complete...",
+        },
+        {
+            "name": "Airflow Redeployment",
+            "description": "Verify that Airflow redeployed after GitHub action",
+            "status": "running",
+            "Result_Message": "Checking if Airflow redeployed successfully...",
+        },
+        {
+            "name": "DAG Creation Validation",
+            "description": "Verify that hello_world_dag was created in Airflow",
+            "status": "running",
+            "Result_Message": "Validating that Hello World DAG exists in Airflow...",
+        },
+        {
+            "name": "DAG Execution and Monitoring",
+            "description": "Trigger the DAG and verify it runs successfully",
+            "status": "running",
+            "Result_Message": "Triggering DAG and monitoring execution...",
+        },
+        {
+            "name": "Hello World Output Validation",
+            "description": "Verify that DAG prints 'Hello World' to task logs",
+            "status": "running",
+            "Result_Message": "Checking task logs for 'Hello World' output...",
         },
     ]
 
-    request.node.user_properties.append(("test_steps", test_steps))
-
-    # SECTION 1: SETUP THE TEST
-    config_results = None  # Initialize before try block
-    custom_info = {"mode": request.config.getoption("--mode")}
     try:
-        # The dags folder is already set up by the fixture
-        print("GitHub repository setup completed by fixture")
+        # Step 1: Check that the agent task executed
+        if not model_result or model_result.get("status") == "failed":
+            test_steps[0]["status"] = "failed"
+            test_steps[0][
+                "Result_Message"
+            ] = "❌ AI Agent task execution failed or returned no result"
+            return {"score": 0.0, "metadata": {"test_steps": test_steps}}
 
-        # set the airflow folder with the correct configs
-        # this function is for you to take the configs for the test and set them up however you want. They follow a set structure
-        Test_Configs.Configs["services"]["airflow"]["host"] = airflow_resource["base_url"]
-        Test_Configs.Configs["services"]["airflow"]["username"] = airflow_resource["username"]
-        Test_Configs.Configs["services"]["airflow"]["password"] = airflow_resource["password"]
-        Test_Configs.Configs["services"]["airflow"]["api_token"] = airflow_resource["api_token"]
-        if request.config.getoption("--mode") == "Ardent":
-            custom_info["publicKey"] = supabase_account_resource["publicKey"]
-            custom_info["secretKey"] = supabase_account_resource["secretKey"]
-
-        config_results = set_up_model_configs(Configs=Test_Configs.Configs,custom_info=custom_info)
-
-        custom_info = {
-            **custom_info,
-            **config_results,
-        }
-
-        # SECTION 2: RUN THE MODEL
-        start_time = time.time()
-        print("Running model to create DAG and PR...")
-        model_result = run_model(container=None, task=Test_Configs.User_Input, configs=Test_Configs.Configs,extra_information = custom_info)
-        end_time = time.time()
-        print(f"Model execution completed. Result: {model_result}")
-        request.node.user_properties.append(("model_runtime", end_time - start_time))
-
-        # Register the Braintrust root span ID for tracking (Ardent mode only)
-        if model_result and "bt_root_span_id" in model_result:
-            request.node.user_properties.append(("run_trace_id", model_result.get("bt_root_span_id")))
-            print(f"Registered Braintrust root span ID: {model_result.get('bt_root_span_id')}")
-
-        # Check if the branch exists and verify PR creation/merge
-        print("Waiting 10 seconds for model to create branch and PR...")
-        time.sleep(10)  # Give the model time to create the branch and PR
-        
-        branch_exists, test_steps[0] = github_manager.verify_branch_exists(branch_name, test_steps[0])
-        if not branch_exists:
-            raise Exception(test_steps[0]["Result_Message"])
-
-        pr_exists, test_steps[1] = github_manager.find_and_merge_pr(
-            pr_title=pr_title, 
-            test_step=test_steps[1], 
-            commit_title=pr_title, 
-            merge_method="squash",
-            build_info={
-                "deploymentId": airflow_resource["deployment_id"],
-                "deploymentName": airflow_resource["deployment_name"],
-            }
-        )
-        if not pr_exists:
-            raise Exception("Unable to find and merge PR. Please check the PR title and commit title.")
-
-        # Use the airflow instance from the fixture to pull DAGs from GitHub
-        # The fixture already has the Docker instance running
-        airflow_instance = airflow_resource["airflow_instance"]
-        
-        if not github_manager.check_if_action_is_complete(pr_title=pr_title):
-            raise Exception("Action is not complete")
-        
-        # verify the airflow instance is ready after the github action redeployed
-        if not airflow_instance.wait_for_airflow_to_be_ready():
-            raise Exception("Airflow instance did not redeploy successfully.")
-
-        # Use the connection details from the fixture
-        airflow_base_url = airflow_resource["base_url"]
-        airflow_api_token = airflow_resource["api_token"]
-        
-        print(f"Connecting to Airflow at: {airflow_base_url}")
-        print(f"Using API Token: {airflow_api_token}")
-
-        # Wait for DAG to appear and trigger it
-        # Wait for DAG to appear and trigger it
-        if not airflow_instance.verify_airflow_dag_exists(dag_name):
-            raise Exception(f"DAG '{dag_name}' did not appear in Airflow")
-
-        dag_run_id = airflow_instance.unpause_and_trigger_airflow_dag(dag_name)
-        if not dag_run_id:
-            raise Exception("Failed to trigger DAG")
-
-        # Monitor the DAG run
-        print(f"Monitoring DAG run {dag_run_id} for completion...")
-        airflow_instance.verify_dag_id_ran(dag_name, dag_run_id)
-
-        # SECTION 3: VERIFY THE OUTCOMES
-        # Get the task logs to verify "Hello World" was printed
-        print("Retrieving task logs to verify 'Hello World' output...")
-
-        # get the logs for the task
-        logs = airflow_instance.get_task_instance_logs(dag_id=dag_name, dag_run_id=dag_run_id, task_id="print_hello")
-        print(f"Task logs retrieved. Log content length: {len(logs)} characters")
-        print(f"Log content preview: {logs[:200]}...")
-
-        assert "Hello World" in logs, "Expected 'Hello World' in task logs"
-        print("✓ 'Hello World' found in task logs!")
-        test_steps[2]["status"] = "passed"
-        test_steps[2][
+        test_steps[0]["status"] = "passed"
+        test_steps[0][
             "Result_Message"
-        ] = "DAG produced the expected results of Hello World printed to the logs"
+        ] = "✅ AI Agent completed task execution successfully"
 
-    finally:
+        # Get fixtures for Airflow and GitHub
+        airflow_fixture = None
+        github_fixture = None
+
+        if fixtures:
+            airflow_fixture = next(
+                (f for f in fixtures if f.get_resource_type() == "airflow_resource"),
+                None,
+            )
+            github_fixture = next(
+                (f for f in fixtures if f.get_resource_type() == "github_resource"),
+                None,
+            )
+
+        if not airflow_fixture:
+            raise Exception("Airflow fixture not found")
+        if not github_fixture:
+            raise Exception("GitHub fixture not found")
+
+        # Get Airflow instance from stored resource data (needed early for GitHub steps)
+        airflow_resource_data = getattr(airflow_fixture, "_resource_data", None)
+        if not airflow_resource_data:
+            raise Exception("Airflow resource data not available")
+
+        airflow_instance = airflow_resource_data["airflow_instance"]
+        api_headers = airflow_resource_data["api_headers"]
+        base_url = airflow_resource_data["base_url"]
+
+        # Get GitHub manager for validation
+        github_resource_data = getattr(github_fixture, "_resource_data", None)
+        if not github_resource_data:
+            raise Exception("GitHub resource data not available")
+
+        github_manager = github_resource_data.get("github_manager")
+        if not github_manager:
+            raise Exception("GitHub manager not available")
+
+        # Generate the same branch and PR names used in create_model_inputs
+        pr_title = f"Add Hello World DAG {test_timestamp}_{test_uuid}"
+        branch_name = f"feature/hello_world_dag-{test_timestamp}_{test_uuid}"
+
+        # Step 2: Check if git branch was created
+        print(f"🔍 Checking for branch: {branch_name}")
         try:
-            # this function is for you to remove the configs for the test. They follow a set structure.
-            if request.config.getoption("--mode") == "Ardent":
-                custom_info['job_id'] = model_result.get("id") if model_result else None
-            cleanup_model_artifacts(Configs=Test_Configs.Configs, custom_info=custom_info)
-            # Delete the branch from github using the github manager
-            github_manager.delete_branch(branch_name)
+            # Wait a bit for the model to create branch and PR
+            import time
+
+            time.sleep(10)
+
+            branch_exists, test_steps[1] = github_manager.verify_branch_exists(
+                branch_name, test_steps[1]
+            )
+            if not branch_exists:
+                test_steps[1]["status"] = "failed"
+                return {"score": 0.0, "metadata": {"test_steps": test_steps}}
+
+            test_steps[1]["status"] = "passed"
+            test_steps[1][
+                "Result_Message"
+            ] = f"✅ Git branch '{branch_name}' created successfully"
 
         except Exception as e:
-            print(f"Error during cleanup: {e}")
+            test_steps[1]["status"] = "failed"
+            test_steps[1]["Result_Message"] = f"❌ Error checking git branch: {str(e)}"
+            return {"score": 0.0, "metadata": {"test_steps": test_steps}}
+
+        # Step 3: Check if PR was created and merge it
+        print(f"🔍 Checking for PR: {pr_title}")
+        try:
+            pr_exists, test_steps[2] = github_manager.find_and_merge_pr(
+                pr_title=pr_title,
+                test_step=test_steps[2],
+                commit_title=pr_title,
+                merge_method="squash",
+                build_info={
+                    "deploymentId": airflow_resource_data["deployment_id"],
+                    "deploymentName": airflow_resource_data["deployment_name"],
+                },
+            )
+
+            if not pr_exists:
+                test_steps[2]["status"] = "failed"
+                test_steps[2]["Result_Message"] = "❌ Unable to find and merge PR"
+                return {"score": 0.0, "metadata": {"test_steps": test_steps}}
+
+            test_steps[2]["status"] = "passed"
+            test_steps[2][
+                "Result_Message"
+            ] = f"✅ PR '{pr_title}' created and merged successfully"
+
+        except Exception as e:
+            test_steps[2]["status"] = "failed"
+            test_steps[2][
+                "Result_Message"
+            ] = f"❌ Error with PR creation/merge: {str(e)}"
+            return {"score": 0.0, "metadata": {"test_steps": test_steps}}
+
+        # Step 4: Check if GitHub action completed
+        print(f"🔍 Waiting for GitHub action to complete...")
+        try:
+            if not github_manager.check_if_action_is_complete(pr_title=pr_title):
+                test_steps[3]["status"] = "failed"
+                test_steps[3][
+                    "Result_Message"
+                ] = "❌ GitHub action did not complete successfully"
+                return {"score": 0.0, "metadata": {"test_steps": test_steps}}
+
+            test_steps[3]["status"] = "passed"
+            test_steps[3]["Result_Message"] = "✅ GitHub action completed successfully"
+
+        except Exception as e:
+            test_steps[3]["status"] = "failed"
+            test_steps[3][
+                "Result_Message"
+            ] = f"❌ Error checking GitHub action: {str(e)}"
+            return {"score": 0.0, "metadata": {"test_steps": test_steps}}
+
+        # Step 5: Verify Airflow redeployment
+        print(f"🔍 Verifying Airflow redeployment...")
+        try:
+            if not airflow_instance.wait_for_airflow_to_be_ready():
+                test_steps[4]["status"] = "failed"
+                test_steps[4][
+                    "Result_Message"
+                ] = "❌ Airflow instance did not redeploy successfully"
+                return {"score": 0.0, "metadata": {"test_steps": test_steps}}
+
+            test_steps[4]["status"] = "passed"
+            test_steps[4][
+                "Result_Message"
+            ] = "✅ Airflow redeployed successfully after GitHub action"
+
+        except Exception as e:
+            test_steps[4]["status"] = "failed"
+            test_steps[4][
+                "Result_Message"
+            ] = f"❌ Error verifying Airflow redeployment: {str(e)}"
+            return {"score": 0.0, "metadata": {"test_steps": test_steps}}
+
+        # Step 6: Verify that hello_world_dag was created
+        dag_name = "hello_world_dag"
+        print(f"🔍 Checking for DAG: {dag_name} in Airflow at {base_url}")
+
+        try:
+            # Use airflow_instance method to check if DAG exists
+            if airflow_instance.verify_airflow_dag_exists(dag_name):
+                test_steps[5]["status"] = "passed"
+                test_steps[5][
+                    "Result_Message"
+                ] = f"✅ DAG '{dag_name}' found in Airflow"
+            else:
+                test_steps[5]["status"] = "failed"
+                test_steps[5][
+                    "Result_Message"
+                ] = f"❌ DAG '{dag_name}' not found in Airflow"
+                return {"score": 0.0, "metadata": {"test_steps": test_steps}}
+
+        except Exception as e:
+            test_steps[5]["status"] = "failed"
+            test_steps[5][
+                "Result_Message"
+            ] = f"❌ Error checking DAG existence: {str(e)}"
+            return {"score": 0.0, "metadata": {"test_steps": test_steps}}
+
+        # Step 7: Trigger DAG and wait for successful execution
+        try:
+            print(f"🔍 Triggering DAG: {dag_name}")
+
+            # Trigger the DAG
+            dag_run_id = airflow_instance.unpause_and_trigger_airflow_dag(dag_name)
+
+            if not dag_run_id:
+                test_steps[6]["status"] = "failed"
+                test_steps[6]["Result_Message"] = "❌ Failed to trigger DAG"
+                return {"score": 0.0, "metadata": {"test_steps": test_steps}}
+
+            print(f"🔍 Monitoring DAG run {dag_run_id} for completion...")
+
+            # Monitor the DAG run until completion
+            airflow_instance.verify_dag_id_ran(dag_name, dag_run_id)
+
+            test_steps[6]["status"] = "passed"
+            test_steps[6][
+                "Result_Message"
+            ] = f"✅ DAG '{dag_name}' executed successfully (run_id: {dag_run_id})"
+
+            # Step 8: Verify Hello World output in task logs
+            print("🔍 Retrieving task logs to verify 'Hello World' output...")
+            try:
+                logs = airflow_instance.get_task_instance_logs(
+                    dag_id=dag_name, dag_run_id=dag_run_id, task_id="print_hello"
+                )
+                print(
+                    f"📝 Task logs retrieved. Log content length: {len(logs)} characters"
+                )
+                print(f"📝 Log content preview: {logs[:200]}...")
+
+                if "Hello World" in logs:
+                    test_steps[7]["status"] = "passed"
+                    test_steps[7][
+                        "Result_Message"
+                    ] = "✅ 'Hello World' found in task logs - DAG executed correctly"
+                else:
+                    test_steps[7]["status"] = "failed"
+                    test_steps[7][
+                        "Result_Message"
+                    ] = "❌ 'Hello World' not found in task logs"
+
+            except Exception as e:
+                test_steps[7]["status"] = "failed"
+                test_steps[7][
+                    "Result_Message"
+                ] = f"❌ Error retrieving task logs: {str(e)}"
+
+        except Exception as e:
+            test_steps[6]["status"] = "failed"
+            test_steps[6][
+                "Result_Message"
+            ] = f"❌ Error triggering/monitoring DAG: {str(e)}"
+            return {"score": 0.0, "metadata": {"test_steps": test_steps}}
+
+    except Exception as e:
+        # Mark any unfinished steps as failed
+        for step in test_steps:
+            if step["status"] == "running":
+                step["status"] = "failed"
+                step["Result_Message"] = f"❌ Validation error: {str(e)}"
+
+    # Calculate score as the fraction of steps that passed
+    passed_steps = sum([step["status"] == "passed" for step in test_steps])
+    total_steps = len(test_steps)
+    score = passed_steps / total_steps
+
+    print(
+        f"🎯 Validation completed: {passed_steps}/{total_steps} steps passed (Score: {score:.2f})"
+    )
+
+    return {
+        "score": score,
+        "metadata": {"test_steps": test_steps},
+    }
