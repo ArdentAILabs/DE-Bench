@@ -425,6 +425,7 @@ Invalid tests are automatically excluded from execution.
 2. **Missing connection parameters**: Store `_connection_params` during setup
 3. **Configuration key mismatches**: Ensure fixture config keys match `Configure_Model.py` expectations
 4. **Resource cleanup issues**: Implement proper `teardown_resource()` methods
+5. **Airflow GitHub branch names**: Airflow test names for the github_resource fixture should start with `test_airflow_`. This is naming convention is used to trigger redeploying the Astronomer cloud deployment.
 
 ### Debugging
 
