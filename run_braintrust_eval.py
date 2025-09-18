@@ -378,7 +378,7 @@ def run_multi_test_evaluation(
         # Run one experiment per mode
         for mode in modes:
             print(f"\n🧪 Running Braintrust experiment for {mode} mode...")
-            experiment_name = construct_experiment_name(mode, git_info)
+            experiment_name = construct_experiment_name(mode)
 
             # Create samples for this mode from all tests
             mode_samples = []
@@ -446,7 +446,6 @@ def run_multi_test_evaluation(
                     "mode": mode,
                     "test_types": test_names,
                     "timestamp": str(time.time()),
-                    "git_info": git_info,
                 },
                 # TODO: Make this configurable
                 max_concurrency=20,
