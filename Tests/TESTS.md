@@ -135,11 +135,11 @@ All fixtures inherit from `DEBenchFixture` and must implement:
 
 ```python
 class DEBenchFixture(ABC, Generic[ConfigType, ResourceType, ValidationArgsType]):
-    def setup_resource(self, resource_config: Optional[ConfigType] = None) -> ResourceType:
+    def test_setup(self, resource_config: Optional[ConfigType] = None) -> ResourceType:
         """Set up the resource (databases, services, etc.)"""
         pass
     
-    def teardown_resource(self, resource_data: ResourceType) -> None:
+    def test_teardown(self, resource_data: ResourceType) -> None:
         """Clean up the resource"""
         pass
     
@@ -184,7 +184,7 @@ def create_config_section(self) -> Dict[str, Any]:
     """
     resource_data = getattr(self, "_resource_data", None)
     if not resource_data:
-        raise Exception("Resource data not available - ensure setup_resource was called")
+        raise Exception("Resource data not available - ensure test_setup was called")
     
     return {
         "postgresql": {
@@ -246,7 +246,7 @@ except Exception as e:
 Store connection parameters during fixture setup for consistency:
 
 ```python
-def setup_resource(self, resource_config):
+def test_setup(self, resource_config):
     # Store connection params for later use
     self._connection_params = {
         "host": os.getenv("DATABASE_HOST"),
@@ -424,7 +424,7 @@ Invalid tests are automatically excluded from execution.
 1. **Path resolution errors**: Use absolute paths in fixtures
 2. **Missing connection parameters**: Store `_connection_params` during setup
 3. **Configuration key mismatches**: Ensure fixture config keys match `Configure_Model.py` expectations
-4. **Resource cleanup issues**: Implement proper `teardown_resource()` methods
+4. **Resource cleanup issues**: Implement proper `test_teardown()` methods
 5. **Airflow GitHub branch names**: Airflow test names for the github_resource fixture should start with `test_airflow_`. This is naming convention is used to trigger redeploying the Astronomer cloud deployment.
 
 ### Debugging

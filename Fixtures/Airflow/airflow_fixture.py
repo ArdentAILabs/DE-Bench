@@ -143,8 +143,8 @@ class AirflowFixture(
         # since they're managed by the Astronomer platform
         print("✅ Airflow session cleanup complete")
 
-    @traced(name="AirflowFixture.setup_resource")
-    def setup_resource(
+    @traced(name="AirflowFixture.test_setup")
+    def test_setup(
         self, resource_config: Optional[AirflowResourceConfig] = None
     ) -> AirflowResourceData:
         """
@@ -286,8 +286,8 @@ class AirflowFixture(
                 shutil.rmtree(test_dir)
             raise
 
-    @traced(name="AirflowFixture.teardown_resource")
-    def teardown_resource(self, resource_data: AirflowResourceData) -> None:
+    @traced(name="AirflowFixture.test_teardown")
+    def test_teardown(self, resource_data: AirflowResourceData) -> None:
         """Clean up individual Airflow resource"""
         resource_id = resource_data["resource_id"]
         deployment_name = resource_data["deployment_name"]
@@ -338,7 +338,7 @@ class AirflowFixture(
         resource_data = getattr(self, "_resource_data", None)
         if not resource_data:
             raise Exception(
-                "Airflow resource data not available - ensure setup_resource was called"
+                "Airflow resource data not available - ensure test_setup was called"
             )
 
         print(f"resource_data: {resource_data}")

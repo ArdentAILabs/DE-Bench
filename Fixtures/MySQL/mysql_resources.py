@@ -65,7 +65,7 @@ class MySQLFixture(
 
         return mysql.connector.connect(**connection_params)
 
-    def setup_resource(
+    def test_setup(
         self, resource_config: Optional[MySQLResourceConfig] = None
     ) -> MySQLResourceData:
         """
@@ -247,7 +247,7 @@ class MySQLFixture(
         print(f"MySQL resource {resource_id} created successfully")
         return resource_data
 
-    def teardown_resource(self, resource_data: MySQLResourceData) -> None:
+    def test_teardown(self, resource_data: MySQLResourceData) -> None:
         """Clean up MySQL resource"""
         resource_id = resource_data.get("resource_id", "unknown")
         print(f"Cleaning up MySQL resource {resource_id}")
@@ -325,7 +325,7 @@ class MySQLFixture(
         resource_data = getattr(self, "_resource_data", None)
         if not resource_data:
             raise Exception(
-                "MySQL resource data not available - ensure setup_resource was called"
+                "MySQL resource data not available - ensure test_setup was called"
             )
 
         # Extract database names from created resources
@@ -359,7 +359,7 @@ def mysql_resource(request):
     build_template = request.param
 
     # Use the fixture class
-    resource_data = mysql_fixture.setup_resource(build_template)
+    resource_data = mysql_fixture.test_setup(build_template)
 
     # Add test-specific metadata
     resource_data.update(
@@ -377,4 +377,4 @@ def mysql_resource(request):
     yield resource_data
 
     # Use the fixture class for teardown
-    mysql_fixture.teardown_resource(resource_data)
+    mysql_fixture.test_teardown(resource_data)

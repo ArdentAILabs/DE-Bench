@@ -89,7 +89,7 @@ class SnowflakeFixture(
             autocommit=True,
         )
 
-    def setup_resource(
+    def test_setup(
         self, resource_config: Optional[SnowflakeResourceConfig] = None
     ) -> SnowflakeResourceData:
         """Set up Snowflake database and schema with optional SQL file loading"""
@@ -338,7 +338,7 @@ class SnowflakeFixture(
         except Exception as e:
             print(f"⚠️ Error during Snowflake cleanup: {e}")
 
-    def teardown_resource(self, resource_data: SnowflakeResourceData) -> None:
+    def test_teardown(self, resource_data: SnowflakeResourceData) -> None:
         """Clean up Snowflake resources"""
         resource_id = resource_data["resource_id"]
         connection = resource_data["connection"]
@@ -386,7 +386,7 @@ class SnowflakeFixture(
         resource_data = getattr(self, "_resource_data", None)
         if not resource_data:
             raise Exception(
-                "Snowflake resource data not available - ensure setup_resource was called"
+                "Snowflake resource data not available - ensure test_setup was called"
             )
 
         return {
