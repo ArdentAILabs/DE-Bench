@@ -276,10 +276,11 @@ def parse_arguments() -> argparse.Namespace:
         epilog="""
 Examples:
   python run_braintrust_eval.py Ardent                    # Run all tests in Ardent mode
-  python run_braintrust_eval.py Ardent Claude_Code        # Run all tests in both modes
+  python run_braintrust_eval.py Ardent Claude_Code OpenAI_Codex  # Run all tests in all modes
   python run_braintrust_eval.py --filter "MongoDB.*"     # Run only MongoDB tests
   python run_braintrust_eval.py --filter ".*Hello.*"     # Run only Hello World tests
   python run_braintrust_eval.py --filter "MongoDB.*" "MySQL.*" Ardent  # MongoDB & MySQL in Ardent mode
+  python run_braintrust_eval.py --filter "MongoDB_Agent_Add_Record" OpenAI_Codex  # Single test with Codex
         """,
     )
 
@@ -287,7 +288,7 @@ Examples:
         "modes",
         nargs="*",
         default=["Ardent"],
-        help="Execution modes to run (e.g., Ardent, Claude_Code). Default: ['Ardent']",
+        help="Execution modes to run (e.g., Ardent, Claude_Code, OpenAI_Codex). Default: ['Ardent']",
     )
 
     parser.add_argument(
