@@ -123,17 +123,15 @@ class MongoDBFixture(
     def test_teardown(self, resource_data: MongoResourceData) -> None:
         """Clean up MongoDB resource"""
         resource_id = resource_data.get("resource_id", "unknown")
-        print(f"Cleaning up MongoDB resource {resource_id}")
 
-        try:
-            # Clean up created resources in reverse order
-            created_resources = resource_data.get("created_resources", [])
-            for resource in reversed(created_resources):
-                db = syncMongoClient[resource["db"]]
-                db.drop_collection(resource["collection"])
-            print(f"MongoDB resource {resource_id} cleaned up successfully")
-        except Exception as e:
-            print(f"Error cleaning up MongoDB resource: {e}")
+        # Clean up created resources in reverse order
+        created_resources = resource_data.get("created_resources", [])
+        for resource in reversed(created_resources):
+            db = syncMongoClient[resource["db"]]
+            print(
+                f"   🗑️ Dropping collection {resource['collection']} from database {resource['db']}"
+            )
+            db.drop_collection(resource["collection"])
 
     @classmethod
     def get_resource_type(cls) -> str:

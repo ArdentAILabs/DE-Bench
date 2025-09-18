@@ -75,7 +75,7 @@ class DEBenchFixture(ABC, Generic[ConfigT, ResourceT, SessionT]):
         return resource_data
 
     @abstractmethod
-    def test_teardown(self) -> None:
+    def test_teardown(self, resource_data: ResourceT) -> None:
         """
         Clean up and destroy the resource.
 
@@ -89,17 +89,14 @@ class DEBenchFixture(ABC, Generic[ConfigT, ResourceT, SessionT]):
         Clean up and destroy the resource.
         """
 
-        @traced(
-            name=f"{self.get_resource_type()}.test_teardown",
-            metadata={"resource_data": self._resource_data},
-        )
-        def inner_test_teardown() -> None:
+        @traced(name=f"{self.get_resource_type()}.test_teardown")
+        def inner_test_teardown(resource_data: ResourceT) -> None:
             """
             Inner teardown resource method.
             """
-            return self.test_teardown()
+            return self.test_teardown(resource_data)
 
-        inner_test_teardown()
+        inner_test_teardown(self._resource_data)
 
     @classmethod
     @abstractmethod

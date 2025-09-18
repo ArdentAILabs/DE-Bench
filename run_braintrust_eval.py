@@ -8,7 +8,7 @@ import re
 from typing import Dict, List, Any, Optional
 import braintrust
 from dotenv import load_dotenv
-from model.BraintrustEval import run_de_bench_task
+from model.BraintrustEval import run_de_bench_task, _teardown_test_fixtures
 from extract_test_configs import (
     extract_test_configuration,
     get_test_validator,
@@ -432,9 +432,7 @@ def run_multi_test_evaluation(
                     )
                     return False
                 finally:
-                    # Reverse list of fixtures and run clean up in order
-                    for fixture in reversed(fixtures):
-                        fixture.test_teardown()
+                    _teardown_test_fixtures(test_name, fixtures)
 
             print(
                 f"🔍 Running Braintrust.Eval for {mode} mode with {len(mode_samples)} samples"

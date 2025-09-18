@@ -1,39 +1,40 @@
 import os
 import braintrust
 from model.Run_Model import run_model
+import traceback
 from extract_test_configs import (
     extract_test_configuration,
     setup_test_resources,
-    cleanup_test_resources,
+    cleanup_supabase_account_resource,
 )
 from model.Configure_Model import set_up_model_configs, cleanup_model_artifacts
 
 
-def _cleanup_test_resources_for_task(
-    test_name, resources_or_fixtures, use_fixtures=False
-):
+def _teardown_test_fixtures(test_name, fixtures):
     """Helper function to clean up test resources for a specific task."""
     try:
-        if resources_or_fixtures:
-            print(f"🧹 Cleaning up test resources for {test_name}...")
+        if fixtures:
+            print(
+                f"🧹 Tearing down {len(fixtures)} fixtures for {test_name} (fixtures: {', '.join([f'"{f.get_resource_type()}"' for f in fixtures])})"
+            )
 
-            if use_fixtures:
-                # Use the fixture instances directly for cleanup
-                from extract_test_configs import cleanup_test_resources_from_fixtures
+            for fixture in reversed(fixtures):
+                try:
+                    fixture._test_teardown()
+                except Exception as e:
+                    print(
+                        f"⚠️ Error tearing down fixture: {fixture.get_resource_type()}: {e}\n{traceback.format_exc()}"
+                    )
+                    continue
 
-                # We need the resource data for cleanup, get it from the actual task output
-                cleanup_test_resources_from_fixtures(resources_or_fixtures, {})
-            else:
-                # Get custom fixtures from the test configuration
-                test_data = extract_test_configuration(test_name)
-                custom_fixtures = test_data.get("resource_configs", {}).get(
-                    "custom_fixtures"
-                )
+                print(f"...✅ Tore down fixture: {fixture.get_resource_type()}")
 
-                cleanup_test_resources(resources_or_fixtures, custom_fixtures)
-            print(f"✅ Test resources cleaned up for {test_name}")
+        # Always clean up Supabase account separately (legacy resource)
+        if "supabase_account_resource" in resources:
+            cleanup_supabase_account_resource(resources["supabase_account_resource"])
+
     except Exception as e:
-        print(f"⚠️ Error cleaning up test resources for {test_name}: {e}")
+        print(f"⚠️ Error tearing down fixtures for {test_name}: {e}")
 
 
 def full_model_run(
@@ -68,32 +69,32 @@ def full_model_run(
 
     elif mode == "Claude_Code":
         print(f"🔧 Setting up Kubernetes for Claude Code for {test_name}...")
-        
+
         # Set up Kubernetes infrastructure for Claude Code
         config_results = set_up_model_configs(
             Configs=model_configs,
             custom_info=custom_info,
         )
-        
+
         # Add the Kubernetes objects to custom_info for the model
         if config_results:
             custom_info.update(config_results)
-        
+
         print(f"✅ Kubernetes setup completed for {test_name}")
 
     elif mode == "OpenAI_Codex":
         print(f"🔧 Setting up Kubernetes for OpenAI Codex for {test_name}...")
-        
+
         # Set up Kubernetes infrastructure for OpenAI Codex
         config_results = set_up_model_configs(
             Configs=model_configs,
             custom_info=custom_info,
         )
-        
+
         # Add the Kubernetes objects to custom_info for the model
         if config_results:
             custom_info.update(config_results)
-        
+
         print(f"✅ Kubernetes setup completed for {test_name}")
 
     # 4. Execute the model
@@ -145,18 +146,18 @@ def run_de_bench_task(test_input):
     Convert DE-Bench test to Braintrust task function with per-test resource management.
     Each task execution is now self-contained with its own setup/teardown.
     """
-    # Extract test configuration from input
-    task_description = test_input["task"]
-    mode = test_input.get("mode", "Ardent")
-    test_name = test_input.get("test_name", "Unknown")
-    session_data = test_input.get("session_data", {})
-
-    print(f"🚀 Starting self-contained test execution: {test_name}")
-
-    test_resources = {}
-    fixture_instances = []
-
     try:
+        # Extract test configuration from input
+        task_description = test_input["task"]
+        mode = test_input.get("mode", "Ardent")
+        test_name = test_input.get("test_name", "Unknown")
+        session_data = test_input.get("session_data", {})
+
+        print(f"🚀 Starting self-contained test execution: {test_name}")
+
+        test_resources = {}
+        fixture_instances = []
+
         # 1. Extract test configuration and set up per-test resources
         print(f"📋 Setting up resources for {test_name}...")
         test_data = extract_test_configuration(test_name)
@@ -201,16 +202,13 @@ def run_de_bench_task(test_input):
         # 3 & 4. Set up model configs and run model
         result = full_model_run(**final_full_model_run_args)
 
-        # Note: Cleanup doesn't happen here, it happens in the validator because we need to access the fixture instances
+        # Note: Tear down doesn't happen here, it happens in the validator because we need to access the fixture instances
         return result
 
     except Exception as e:
         print(f"❌ Error in test execution for {test_name}: {e}")
-        # Clean up resources on error (use fixture instances if available)
+        # Tear down test fixtures on error
         if fixture_instances:
-            _cleanup_test_resources_for_task(
-                test_name, fixture_instances, use_fixtures=True
-            )
-        else:
-            _cleanup_test_resources_for_task(test_name, test_resources)
+            _teardown_test_fixtures(test_name, fixture_instances)
+
         raise

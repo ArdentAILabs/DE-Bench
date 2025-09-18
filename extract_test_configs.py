@@ -292,32 +292,6 @@ def setup_test_resources_from_fixtures(
     return resources, fixtures
 
 
-def cleanup_test_resources_from_fixtures(
-    fixtures: List[Any], resources: Dict[str, Any]
-) -> None:
-    """
-    Clean up test resources using the provided list of DEBenchFixture instances.
-
-    Args:
-        fixtures: List of DEBenchFixture instances that were used to set up resources
-        resources: Dictionary mapping resource_type -> resource_data
-    """
-    from Fixtures.base_fixture import DEBenchFixture
-
-    for fixture in fixtures:
-        if not isinstance(fixture, DEBenchFixture):
-            continue
-
-        resource_type = fixture.get_resource_type()
-
-        if resource_type in resources:
-            try:
-                fixture._test_teardown(resources[resource_type])
-                print(f"✅ Cleaned up {resource_type} using provided fixture")
-            except Exception as e:
-                print(f"❌ Failed to clean up {resource_type}: {e}")
-
-
 @traced(name="setup_supabase_account_resource")
 def setup_supabase_account_resource(mode: str = "Ardent") -> SupabaseAccountResource:
     """Set up Supabase account resource"""
@@ -443,20 +417,6 @@ def cleanup_supabase_account_resource(
 
     except Exception as e:
         print(f"Error cleaning up Supabase account resource: {e}")
-
-
-def cleanup_test_resources(
-    resources: Dict[str, Any], custom_fixtures: List[Any] = None
-) -> None:
-    """Cleanup for test resources using DEBenchFixture instances and Supabase account"""
-
-    # Clean up fixtures if provided
-    if custom_fixtures:
-        cleanup_test_resources_from_fixtures(custom_fixtures, resources)
-
-    # Always clean up Supabase account separately (legacy resource)
-    if "supabase_account_resource" in resources:
-        cleanup_supabase_account_resource(resources["supabase_account_resource"])
 
 
 def get_test_validator(test_name: str) -> callable:
