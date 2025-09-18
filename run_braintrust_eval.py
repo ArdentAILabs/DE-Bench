@@ -305,6 +305,12 @@ Examples:
         help="Enable verbose output with additional debugging information",
     )
 
+    parser.add_argument(
+        "--skip-model-run",
+        action="store_true",
+        help="Skip model run for all tests, useful for debugging",
+    )
+
     return parser.parse_args()
 
 
@@ -312,6 +318,7 @@ def run_multi_test_evaluation(
     modes: List[str] = ["Ardent"],
     test_names: Optional[List[str]] = None,
     verbose: bool = False,
+    skip_model_run: bool = False,
 ) -> Dict[str, Any]:
     """Run multiple tests as Braintrust evaluation for specified modes"""
     global active_session_fixtures, active_session_data
@@ -389,6 +396,7 @@ def run_multi_test_evaluation(
                         "mode": mode,
                         "test_name": config["test_name"],
                         "session_data": active_session_data,  # Pass session data for per-task resource setup
+                        "skip_model_run": skip_model_run,
                     },
                     "metadata": {**config["case"]["metadata"], "mode": mode},
                 }
@@ -446,6 +454,8 @@ def run_multi_test_evaluation(
                     "mode": mode,
                     "test_types": test_names,
                     "timestamp": str(time.time()),
+                    "num_tests_included": len(mode_samples),
+                    "num_tests_excluded": len(test_names) - len(mode_samples),
                 },
                 # TODO: Make this configurable
                 max_concurrency=20,
@@ -496,7 +506,10 @@ if __name__ == "__main__":
 
         # Run evaluation on filtered tests
         results = run_multi_test_evaluation(
-            modes=args.modes, test_names=filtered_tests, verbose=args.verbose
+            modes=args.modes,
+            test_names=filtered_tests,
+            verbose=args.verbose,
+            skip_model_run=args.skip_model_run,
         )
 
         if results:

@@ -34,7 +34,9 @@ def _teardown_test_fixtures(test_name, fixtures):
             cleanup_supabase_account_resource(resources["supabase_account_resource"])
 
     except Exception as e:
-        print(f"⚠️ Error tearing down fixtures for {test_name}: {e}")
+        print(
+            f"⚠️ Error tearing down fixtures for {test_name}: {e}, {traceback.format_exc()}"
+        )
 
 
 def full_model_run(
@@ -44,6 +46,7 @@ def full_model_run(
     fixture_instances,
     model_configs,
     task_description,
+    **kwargs,
 ):
     """
     Step 3 and 4: Set up model configurations if needed and execute the model.
@@ -98,14 +101,20 @@ def full_model_run(
         print(f"✅ Kubernetes setup completed for {test_name}")
 
     # 4. Execute the model
-    print(f"🤖 Running model for {test_name}...")
-    model_result = run_model(
-        container=None,
-        task=task_description,
-        configs=model_configs,
-        extra_information=custom_info,
-    )
-    print(f"✅ Model execution completed for {test_name}")
+    if kwargs.get("skip_model_run"):
+        print(
+            f"⚠️ Skipping model run for {test_name} because 'skip_model_run' was set and evaluated to True"
+        )
+        model_result = None
+    else:
+        print(f"🤖 Running model for {test_name}...")
+        model_result = run_model(
+            container=None,
+            task=task_description,
+            configs=model_configs,
+            extra_information=custom_info,
+        )
+        print(f"✅ Model execution completed for {test_name}")
 
     # Clean up model artifacts first (but keep test resources for validation)
     if config_results:
@@ -174,6 +183,7 @@ def run_de_bench_task(test_input):
             "test_resources": test_resources,
             "fixture_instances": fixture_instances,
             "task_description": task_description,
+            "skip_model_run": test_input.get("skip_model_run", False),
         }
 
         # 3. Modify inputs if needed
