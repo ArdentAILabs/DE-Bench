@@ -245,7 +245,7 @@ def fetch_git_info() -> Dict[str, Any]:
         }
 
 
-def construct_experiment_name(mode: str, git_info: Dict[str, Any]) -> str:
+def construct_experiment_name(mode: str) -> str:
     """
     Construct a meaningful experiment name using git information and mode.
 
@@ -259,13 +259,13 @@ def construct_experiment_name(mode: str, git_info: Dict[str, Any]) -> str:
     Returns:
         Experiment name string
     """
-
-    # Try to use git branch for more meaningful names
-    branch = git_info.get("branch")
-    branch = branch if branch else "unknown-branch"
-
-    # Clean branch name (remove special characters, limit length)
-    return f"{branch}__{mode.lower()}"
+    # If ardent, we worry about git info
+    if mode == "Ardent":
+        # Fetch git info for experiment naming
+        git_info = fetch_git_info()
+        return f"Ardent/{git_info.get('branch')}"
+    else:
+        return f"{mode.lower()}"
 
 
 def parse_arguments() -> argparse.Namespace:
@@ -378,10 +378,7 @@ def run_multi_test_evaluation(
         # Run one experiment per mode
         for mode in modes:
             print(f"\n🧪 Running Braintrust experiment for {mode} mode...")
-
-            # Fetch git info for experiment naming
-            git_info = fetch_git_info()
-            experiment_name = construct_experiment_name(mode, git_info)
+            experiment_name = construct_experiment_name(mode)
 
             # Create samples for this mode from all tests
             mode_samples = []
@@ -449,7 +446,6 @@ def run_multi_test_evaluation(
                     "mode": mode,
                     "test_types": test_names,
                     "timestamp": str(time.time()),
-                    "git_info": git_info,
                 },
                 # TODO: Make this configurable
                 max_concurrency=20,
