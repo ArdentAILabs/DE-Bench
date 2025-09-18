@@ -22,27 +22,4 @@ Create an Airflow DAG that:
 6. Name the PR 'PR_NAME_AGENT_DATABASE_DEDUPLICATION'
 """
 
-# Configuration for database and services
-Configs = {
-    "services": {
-        "airflow": {
-            "github_token": os.getenv("AIRFLOW_GITHUB_TOKEN"),
-            "repo": os.getenv("AIRFLOW_REPO"),
-            "dag_path": os.getenv("AIRFLOW_DAG_PATH"),
-            "requirements_path": os.getenv("AIRFLOW_REQUIREMENTS_PATH"),
-            "host": os.getenv("AIRFLOW_HOST", "http://localhost:8080"),
-            "username": os.getenv("AIRFLOW_USERNAME", "airflow"),
-            "password": os.getenv("AIRFLOW_PASSWORD", "airflow"),
-            "api_token": os.getenv("AIRFLOW_API_TOKEN"),
-        },
-        "postgreSQL": {
-            "hostname": os.getenv("POSTGRES_HOSTNAME"),
-            "port": os.getenv("POSTGRES_PORT"),
-            "username": os.getenv("POSTGRES_USERNAME"),
-            "password": os.getenv("POSTGRES_PASSWORD"),
-            "databases": [
-                {"name": "user_data"}
-            ],  # Will be updated with actual database name from fixture
-        },
-    }
-}
+# Configuration will be generated dynamically by create_model_inputs function

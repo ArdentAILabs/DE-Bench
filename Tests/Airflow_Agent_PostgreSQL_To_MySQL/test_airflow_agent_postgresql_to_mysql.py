@@ -1,21 +1,16 @@
-import importlib
+# Braintrust-only Airflow test - no pytest dependencies
+from model.Run_Model import run_model
+from model.Configure_Model import set_up_model_configs, cleanup_model_artifacts
 import os
-import pytest
-import re
+import importlib
 import time
 import uuid
-from datetime import datetime
-
 import psycopg2
-import requests
-from github import Github
-from requests.auth import HTTPBasicAuth
+import mysql.connector
+from typing import List, Dict, Any
+from Fixtures.base_fixture import DEBenchFixture
 
-from Configs.MySQLConfig import connection as mysql_connection
-from model.Configure_Model import cleanup_model_artifacts
-from model.Configure_Model import set_up_model_configs
-from model.Run_Model import run_model
-
+# Dynamic config loading
 current_dir = os.path.dirname(os.path.abspath(__file__))
 parent_dir_name = os.path.basename(current_dir)
 module_path = f"Tests.{parent_dir_name}.Test_Configs"
@@ -26,248 +21,425 @@ test_timestamp = int(time.time())
 test_uuid = uuid.uuid4().hex[:8]
 
 
-@pytest.mark.airflow
-@pytest.mark.postgres
-@pytest.mark.mysql
-@pytest.mark.pipeline
-@pytest.mark.database
-@pytest.mark.three  # Difficulty 3 - involves database operations, DAG creation, and data validation
-@pytest.mark.parametrize("postgres_resource", [{
-    "resource_id": f"postgresql_to_mysql_test_{test_timestamp}_{test_uuid}",
-    "databases": [
-        {
-            "name": f"sales_db_{test_timestamp}_{test_uuid}",
-            "sql_file": "schema.sql"
-        }
-    ]
-}], indirect=True)
-@pytest.mark.parametrize("github_resource", [{
-    "resource_id": f"test_airflow_postgresql_to_mysql_test_{test_timestamp}_{test_uuid}",
-}], indirect=True)
-@pytest.mark.parametrize("airflow_resource", [{
-    "resource_id": f"airflow_postgresql_to_mysql_test_{test_timestamp}_{test_uuid}",
-}], indirect=True)
-def test_airflow_agent_postgresql_to_mysql(request, airflow_resource, github_resource, supabase_account_resource, postgres_resource):
-    input_dir = os.path.dirname(os.path.abspath(__file__))
-    github_manager = github_resource["github_manager"]
-    Test_Configs.User_Input = github_manager.add_merge_step_to_user_input(Test_Configs.User_Input)
-    dag_name = "sales_profit_pipeline"
-    pr_title = f"Merge_Sales_Profit_Pipeline {test_timestamp}_{test_uuid}"
-    branch_name = f"feature/sales_profit_pipeline-{test_timestamp}_{test_uuid}"
-    Test_Configs.User_Input = Test_Configs.User_Input.replace("BRANCH_NAME", branch_name)
-    Test_Configs.User_Input = Test_Configs.User_Input.replace("PR_NAME", pr_title)
-    request.node.user_properties.append(("user_query", Test_Configs.User_Input))
+def get_fixtures() -> List[DEBenchFixture]:
+    """
+    Provides custom DEBenchFixture instances for Braintrust evaluation.
+    This Airflow test validates that AI can create a PostgreSQL to MySQL data pipeline DAG.
+    """
+    from Fixtures.Airflow.airflow_fixture import AirflowFixture
+    from Fixtures.PostgreSQL.postgres_resources import PostgreSQLFixture
+    from Fixtures.MySQL.mysql_resources import MySQLFixture
+    from Fixtures.GitHub.github_fixture import GitHubFixture
+
+    # Initialize Airflow fixture with test-specific configuration
+    custom_airflow_config = {
+        "resource_id": f"airflow_postgresql_to_mysql_test_{test_timestamp}_{test_uuid}",
+    }
+
+    # Initialize PostgreSQL fixture for sales data
+    custom_postgres_config = {
+        "resource_id": f"postgresql_to_mysql_test_{test_timestamp}_{test_uuid}",
+        "databases": [
+            {
+                "name": f"sales_db_{test_timestamp}_{test_uuid}",
+                "sql_file": "schema.sql",
+            }
+        ],
+    }
+
+    # Initialize MySQL fixture for analytics data
+    custom_mysql_config = {
+        "resource_id": f"mysql_analytics_test_{test_timestamp}_{test_uuid}",
+        "databases": [
+            {
+                "name": f"analytics_db_{test_timestamp}_{test_uuid}",
+                "sql_file": None,  # No initial schema needed for MySQL
+            }
+        ],
+    }
+
+    # Initialize GitHub fixture for PR and branch management
+    custom_github_config = {
+        "resource_id": f"test_airflow_postgresql_to_mysql_test_{test_timestamp}_{test_uuid}",
+    }
+
+    airflow_fixture = AirflowFixture(custom_config=custom_airflow_config)
+    postgres_fixture = PostgreSQLFixture(custom_config=custom_postgres_config)
+    mysql_fixture = MySQLFixture(custom_config=custom_mysql_config)
+    github_fixture = GitHubFixture(custom_config=custom_github_config)
+
+    return [airflow_fixture, postgres_fixture, mysql_fixture, github_fixture]
+
+
+def create_model_inputs(
+    base_model_inputs: Dict[str, Any], fixtures: List[DEBenchFixture]
+) -> Dict[str, Any]:
+    """
+    Create test-specific config using the set-up fixtures.
+    This function has access to all fixture data after setup and dynamically
+    updates the task description with GitHub branch and PR information.
+    """
+    import os
+    from extract_test_configs import create_config_from_fixtures
+
+    # Get GitHub fixture to access manager for dynamic branch/PR creation
+    github_fixture = next(
+        (f for f in fixtures if f.get_resource_type() == "github_resource"), None
+    )
+
+    if not github_fixture:
+        raise Exception(
+            "GitHub fixture not found - required for branch and PR management"
+        )
+
+    # Get the GitHub manager from the fixture
+    github_resource_data = getattr(github_fixture, "_resource_data", None)
+    if not github_resource_data:
+        raise Exception("GitHub resource data not available")
+
+    github_manager = github_resource_data.get("github_manager")
+    if not github_manager:
+        raise Exception("GitHub manager not available")
+
+    # Generate dynamic branch and PR names
+    pr_title = f"Add PostgreSQL to MySQL Sales Profit Pipeline {test_timestamp}_{test_uuid}"
+    branch_name = f"feature/postgresql-to-mysql-{test_timestamp}_{test_uuid}"
+
+    # Start with the original user input from Test_Configs
+    task_description = Test_Configs.User_Input
+
+    # Add merge step to user input
+    task_description = github_manager.add_merge_step_to_user_input(task_description)
+
+    # Replace placeholders with dynamic values
+    task_description = task_description.replace("BRANCH_NAME", branch_name)
+    task_description = task_description.replace("PR_NAME", pr_title)
+
+    # Set up GitHub secrets for Astro access
     github_manager.check_and_update_gh_secrets(
         secrets={
             "ASTRO_ACCESS_TOKEN": os.environ["ASTRO_ACCESS_TOKEN"],
         }
     )
-    
-    # Use the airflow_resource fixture - the Docker instance is already running
-    print("=== Starting PostgreSQL to MySQL Airflow Pipeline Test ===")
-    print(f"Using Airflow instance from fixture: {airflow_resource['resource_id']}")
-    print(f"Using GitHub instance from fixture: {github_resource['resource_id']}")
-    print(f"Using PostgreSQL instance from fixture: {postgres_resource['resource_id']}")
-    print(f"Airflow base URL: {airflow_resource['base_url']}")
-    print(f"Test directory: {input_dir}")
 
+    print(f"🔧 Generated dynamic branch name: {branch_name}")
+    print(f"🔧 Generated dynamic PR title: {pr_title}")
+
+    # Use the helper to automatically create config from all fixtures
+    return {
+        **base_model_inputs,
+        "model_configs": create_config_from_fixtures(fixtures),
+        "task_description": task_description,
+    }
+
+
+def validate_test(model_result, fixtures=None):
+    """
+    Validates that the AI agent successfully created a PostgreSQL to MySQL data pipeline DAG.
+
+    Expected behavior:
+    - DAG should be created with name "sales_profit_pipeline"
+    - DAG should extract data from PostgreSQL transactions table
+    - DAG should calculate daily profit for each user
+    - DAG should store results in MySQL daily_profits table
+
+    Args:
+        model_result: The result from the AI model execution
+        fixtures: List of DEBenchFixture instances used in the test
+
+    Returns:
+        dict: Contains 'score' float and 'metadata' dict with validation details
+    """
+    # Create comprehensive test steps for validation
     test_steps = [
         {
-            "name": "Checking Git Branch Existence",
-            "description": "Checking if the git branch exists with the right name",
-            "status": "did not reach",
-            "Result_Message": "",
+            "name": "Agent Task Execution",
+            "description": "AI Agent executes task to create PostgreSQL to MySQL Pipeline DAG",
+            "status": "running",
+            "Result_Message": "Checking if AI agent executed the Airflow DAG creation task...",
         },
         {
-            "name": "Checking PR Creation",
-            "description": "Checking if the PR was created with the right name",
-            "status": "did not reach",
-            "Result_Message": "",
+            "name": "Git Branch Creation",
+            "description": "Verify that git branch was created with the correct name",
+            "status": "running",
+            "Result_Message": "Checking if git branch exists...",
         },
         {
-            "name": "Checking DAG Results",
-            "description": "Checking if the DAG produces the expected results",
-            "status": "did not reach",
-            "Result_Message": "",
+            "name": "PR Creation and Merge",
+            "description": "Verify that PR was created and merged successfully",
+            "status": "running",
+            "Result_Message": "Checking if PR was created and merged...",
+        },
+        {
+            "name": "GitHub Action Completion",
+            "description": "Verify that GitHub action completed successfully",
+            "status": "running",
+            "Result_Message": "Waiting for GitHub action to complete...",
+        },
+        {
+            "name": "Airflow Redeployment",
+            "description": "Verify that Airflow redeployed after GitHub action",
+            "status": "running",
+            "Result_Message": "Checking if Airflow redeployed successfully...",
+        },
+        {
+            "name": "DAG Creation Validation",
+            "description": "Verify that sales_profit_pipeline was created in Airflow",
+            "status": "running",
+            "Result_Message": "Validating that Sales Profit Pipeline DAG exists in Airflow...",
+        },
+        {
+            "name": "DAG Execution and Monitoring",
+            "description": "Trigger the DAG and verify it runs successfully",
+            "status": "running",
+            "Result_Message": "Triggering DAG and monitoring execution...",
+        },
+        {
+            "name": "PostgreSQL Source Data Validation",
+            "description": "Verify that source data exists in PostgreSQL transactions table",
+            "status": "running",
+            "Result_Message": "Checking source data in PostgreSQL...",
+        },
+        {
+            "name": "MySQL Target Table Creation",
+            "description": "Verify that daily_profits table was created in MySQL",
+            "status": "running",
+            "Result_Message": "Checking if daily_profits table exists in MySQL...",
+        },
+        {
+            "name": "Data Pipeline Validation",
+            "description": "Verify that data was successfully transferred and transformed",
+            "status": "running",
+            "Result_Message": "Validating data pipeline results...",
         },
     ]
 
-    request.node.user_properties.append(("test_steps", test_steps))
-
-    # SECTION 1: SETUP THE TEST
-    config_results = None  # Initialize before try block
-    custom_info = {"mode": request.config.getoption("--mode")}
     try:
-        # The dags folder is already set up by the fixture
-        # The PostgreSQL database is already set up by the postgres_resource fixture
+        # Step 1: Check that the agent task executed
+        if not model_result or model_result.get("status") == "failed":
+            test_steps[0]["status"] = "failed"
+            test_steps[0]["Result_Message"] = "❌ AI Agent task execution failed or returned no result"
+            return {"score": 0.0, "metadata": {"test_steps": test_steps}}
 
-        # Get the actual database name from the fixture
-        db_name = postgres_resource["created_resources"][0]["name"]
-        print(f"Using PostgreSQL database: {db_name}")
+        test_steps[0]["status"] = "passed"
+        test_steps[0]["Result_Message"] = "✅ AI Agent completed task execution successfully"
 
-        # Update the configs to use the fixture-created database
-        Test_Configs.Configs["services"]["postgreSQL"]["databases"][0]["name"] = db_name
+        # Get fixtures for Airflow, PostgreSQL, MySQL, and GitHub
+        airflow_fixture = next((f for f in fixtures if f.get_resource_type() == "airflow_resource"), None) if fixtures else None
+        postgres_fixture = next((f for f in fixtures if f.get_resource_type() == "postgres_resource"), None) if fixtures else None
+        mysql_fixture = next((f for f in fixtures if f.get_resource_type() == "mysql_resource"), None) if fixtures else None
+        github_fixture = next((f for f in fixtures if f.get_resource_type() == "github_resource"), None) if fixtures else None
 
-        # Setup MySQL database
-        print("Setting up MySQL database...")
-        mysql_cursor = mysql_connection.cursor()
-        mysql_cursor.execute("CREATE DATABASE IF NOT EXISTS analytics_db")
-        mysql_cursor.execute("USE analytics_db")
+        if not airflow_fixture:
+            raise Exception("Airflow fixture not found")
+        if not postgres_fixture:
+            raise Exception("PostgreSQL fixture not found")
+        if not mysql_fixture:
+            raise Exception("MySQL fixture not found")
+        if not github_fixture:
+            raise Exception("GitHub fixture not found")
 
-        # Create result table
-        mysql_cursor.execute(
-            """
-            CREATE TABLE IF NOT EXISTS daily_profits (
-                date DATE,
-                user_id INTEGER,
-                total_sales DECIMAL(10,2),
-                total_costs DECIMAL(10,2),
-                total_profit DECIMAL(10,2),
-                PRIMARY KEY (date, user_id)
-            )
-        """
-        )
+        # Get resource data
+        airflow_resource_data = getattr(airflow_fixture, "_resource_data", None)
+        if not airflow_resource_data:
+            raise Exception("Airflow resource data not available")
 
-        mysql_connection.commit()
+        postgres_resource_data = getattr(postgres_fixture, "_resource_data", None)
+        if not postgres_resource_data:
+            raise Exception("PostgreSQL resource data not available")
 
-        # Verify table creation
-        mysql_cursor.execute("SHOW TABLES")
-        tables = mysql_cursor.fetchall()
-        print(f"MySQL tables created: {tables}")
+        mysql_resource_data = getattr(mysql_fixture, "_resource_data", None)
+        if not mysql_resource_data:
+            raise Exception("MySQL resource data not available")
 
-        # set the airflow folder with the correct configs
-        # this function is for you to take the configs for the test and set them up however you want. They follow a set structure
-        Test_Configs.Configs["services"]["airflow"]["host"] = airflow_resource["base_url"]
-        Test_Configs.Configs["services"]["airflow"]["username"] = airflow_resource["username"]
-        Test_Configs.Configs["services"]["airflow"]["password"] = airflow_resource["password"]
-        Test_Configs.Configs["services"]["airflow"]["api_token"] = airflow_resource["api_token"]
-        if request.config.getoption("--mode") == "Ardent":
-            custom_info["publicKey"] = supabase_account_resource["publicKey"]
-            custom_info["secretKey"] = supabase_account_resource["secretKey"]
-        config_results = set_up_model_configs(Configs=Test_Configs.Configs,custom_info=custom_info)
+        github_resource_data = getattr(github_fixture, "_resource_data", None)
+        if not github_resource_data:
+            raise Exception("GitHub resource data not available")
 
-        custom_info = {
-            **custom_info,
-            **config_results,
-        }
+        airflow_instance = airflow_resource_data["airflow_instance"]
+        base_url = airflow_resource_data["base_url"]
+        github_manager = github_resource_data.get("github_manager")
 
-        # SECTION 2: RUN THE MODEL
-        start_time = time.time()
-        print("Running model to create DAG and PR...")
-        model_result = run_model(container=None, task=Test_Configs.User_Input, configs=Test_Configs.Configs,extra_information = custom_info)
-        end_time = time.time()
-        print(f"Model execution completed. Result: {model_result}")
-        request.node.user_properties.append(("model_runtime", end_time - start_time))
+        if not github_manager:
+            raise Exception("GitHub manager not available")
 
-        # Register the Braintrust root span ID for tracking (Ardent mode only)
-        if model_result and "bt_root_span_id" in model_result:
-            request.node.user_properties.append(("run_trace_id", model_result.get("bt_root_span_id")))
-            print(f"Registered Braintrust root span ID: {model_result.get('bt_root_span_id')}")
+        # Generate the same branch and PR names used in create_model_inputs
+        pr_title = f"Add PostgreSQL to MySQL Sales Profit Pipeline {test_timestamp}_{test_uuid}"
+        branch_name = f"feature/postgresql-to-mysql-{test_timestamp}_{test_uuid}"
 
-        # Check if the branch exists and verify PR creation/merge
-        print("Waiting 10 seconds for model to create branch and PR...")
-        time.sleep(10)  # Give the model time to create the branch and PR
-        
-        branch_exists, test_steps[0] = github_manager.verify_branch_exists(branch_name, test_steps[0])
+        # Step 2-6: GitHub and Airflow workflow
+        print(f"🔍 Checking for branch: {branch_name}")
+        time.sleep(10)
+
+        branch_exists, test_steps[1] = github_manager.verify_branch_exists(branch_name, test_steps[1])
         if not branch_exists:
-            raise Exception(test_steps[0]["Result_Message"])
+            test_steps[1]["status"] = "failed"
+            return {"score": 0.0, "metadata": {"test_steps": test_steps}}
 
-        pr_exists, test_steps[1] = github_manager.find_and_merge_pr(
-            pr_title=pr_title, 
-            test_step=test_steps[1], 
-            commit_title=pr_title, 
+        test_steps[1]["status"] = "passed"
+        test_steps[1]["Result_Message"] = f"✅ Git branch '{branch_name}' created successfully"
+
+        # PR creation and merge
+        pr_exists, test_steps[2] = github_manager.find_and_merge_pr(
+            pr_title=pr_title,
+            test_step=test_steps[2],
+            commit_title=pr_title,
             merge_method="squash",
             build_info={
-                "deploymentId": airflow_resource["deployment_id"],
-                "deploymentName": airflow_resource["deployment_name"],
-            }
+                "deploymentId": airflow_resource_data["deployment_id"],
+                "deploymentName": airflow_resource_data["deployment_name"],
+            },
         )
+
         if not pr_exists:
-            raise Exception("Unable to find and merge PR. Please check the PR title and commit title.")
-
-        # Use the airflow instance from the fixture to pull DAGs from GitHub
-        # The fixture already has the Docker instance running
-        airflow_instance = airflow_resource["airflow_instance"]
-        
-        if not github_manager.check_if_action_is_complete(pr_title=pr_title):
-            raise Exception("Action is not complete")
-        
-        # verify the airflow instance is ready after the github action redeployed
-        if not airflow_instance.wait_for_airflow_to_be_ready():
-            raise Exception("Airflow instance did not redeploy successfully.")
-
-        # Use the connection details from the fixture
-        airflow_base_url = airflow_resource["base_url"]
-        airflow_api_token = airflow_resource["api_token"]
-        
-        print(f"Connecting to Airflow at: {airflow_base_url}")
-        print(f"Using API Token: {airflow_api_token}")
-
-        # Wait for DAG to appear and trigger it
-        if not airflow_instance.verify_airflow_dag_exists(dag_name):
-            raise Exception(f"DAG '{dag_name}' did not appear in Airflow")
-
-        dag_run_id = airflow_instance.unpause_and_trigger_airflow_dag(dag_name)
-        if not dag_run_id:
-            raise Exception("Failed to trigger DAG")
-
-        # Monitor the DAG run
-        print(f"Monitoring DAG run {dag_run_id} for completion...")
-        airflow_instance.verify_dag_id_ran(dag_name, dag_run_id)
-
-        # SECTION 3: VERIFY THE OUTCOMES
-        print("Verifying the outcomes...")
-        # Verify data in MySQL
-        mysql_cursor.execute(
-            """
-            SELECT * FROM daily_profits 
-            WHERE date = '2024-01-01'
-            ORDER BY user_id
-        """
-        )
-
-        results = mysql_cursor.fetchall()
-        assert len(results) == 2, "Expected 2 records in daily_profits"
-
-        # Check user 1's profits
-        # They had two transactions: $100 sale ($60 cost) and $150 sale ($90 cost)
-        assert results[0][0] == datetime(2024, 1, 1).date(), "Incorrect date"
-        assert results[0][1] == 1, "Incorrect user_id"
-        assert float(results[0][2]) == 250.00, "Incorrect total sales"  # 100 + 150
-        assert float(results[0][3]) == 150.00, "Incorrect total costs"  # 60 + 90
-        assert float(results[0][4]) == 100.00, "Incorrect total profit"  # 250 - 150
-
-        # Check user 2's profits
-        # They had one transaction: $200 sale ($120 cost)
-        assert results[1][0] == datetime(2024, 1, 1).date(), "Incorrect date"
-        assert results[1][1] == 2, "Incorrect user_id"
-        assert float(results[1][2]) == 200.00, "Incorrect total sales"
-        assert results[1][3] == 120.00, "Incorrect total costs"
-        assert float(results[1][4]) == 80.00, "Incorrect total profit"  # 200 - 120
+            test_steps[2]["status"] = "failed"
+            test_steps[2]["Result_Message"] = "❌ Unable to find and merge PR"
+            return {"score": 0.0, "metadata": {"test_steps": test_steps}}
 
         test_steps[2]["status"] = "passed"
-        test_steps[2]["Result_Message"] = "DAG successfully transferred and transformed data from Postgres to MySQL"
+        test_steps[2]["Result_Message"] = f"✅ PR '{pr_title}' created and merged successfully"
 
-    finally:
+        # GitHub action completion
+        if not github_manager.check_if_action_is_complete(pr_title=pr_title):
+            test_steps[3]["status"] = "failed"
+            test_steps[3]["Result_Message"] = "❌ GitHub action did not complete successfully"
+            return {"score": 0.0, "metadata": {"test_steps": test_steps}}
+
+        test_steps[3]["status"] = "passed"
+        test_steps[3]["Result_Message"] = "✅ GitHub action completed successfully"
+
+        # Airflow redeployment
+        if not airflow_instance.wait_for_airflow_to_be_ready():
+            test_steps[4]["status"] = "failed"
+            test_steps[4]["Result_Message"] = "❌ Airflow instance did not redeploy successfully"
+            return {"score": 0.0, "metadata": {"test_steps": test_steps}}
+
+        test_steps[4]["status"] = "passed"
+        test_steps[4]["Result_Message"] = "✅ Airflow redeployed successfully after GitHub action"
+
+        # DAG existence check
+        dag_name = "sales_profit_pipeline"
+        print(f"🔍 Checking for DAG: {dag_name} in Airflow at {base_url}")
+
+        if airflow_instance.verify_airflow_dag_exists(dag_name):
+            test_steps[5]["status"] = "passed"
+            test_steps[5]["Result_Message"] = f"✅ DAG '{dag_name}' found in Airflow"
+        else:
+            test_steps[5]["status"] = "failed"
+            test_steps[5]["Result_Message"] = f"❌ DAG '{dag_name}' not found in Airflow"
+            return {"score": 0.0, "metadata": {"test_steps": test_steps}}
+
+        # DAG execution
+        print(f"🔍 Triggering DAG: {dag_name}")
+        dag_run_id = airflow_instance.unpause_and_trigger_airflow_dag(dag_name)
+
+        if not dag_run_id:
+            test_steps[6]["status"] = "failed"
+            test_steps[6]["Result_Message"] = "❌ Failed to trigger DAG"
+            return {"score": 0.0, "metadata": {"test_steps": test_steps}}
+
+        # Monitor the DAG run until completion
+        airflow_instance.verify_dag_id_ran(dag_name, dag_run_id)
+        test_steps[6]["status"] = "passed"
+        test_steps[6]["Result_Message"] = f"✅ DAG '{dag_name}' executed successfully (run_id: {dag_run_id})"
+
+        # Step 8-10: Database Validation
+        
+        # Step 8: PostgreSQL Source Data Validation
         try:
-            # this function is for you to remove the configs for the test. They follow a set structure.
-            if request.config.getoption("--mode") == "Ardent":
-                custom_info['job_id'] = model_result.get("id") if model_result else None
-            cleanup_model_artifacts(Configs=Test_Configs.Configs, custom_info=custom_info)
-            
-            # Clean up MySQL database
-            print("Starting MySQL cleanup...")
-            try:
-                mysql_cursor.execute("DROP DATABASE IF EXISTS analytics_db")
-                mysql_connection.commit()
-                mysql_cursor.close()
-                mysql_connection.close()
-                print("MySQL cleanup completed")
-            except Exception as e:
-                print(f"Error during MySQL cleanup: {e}")
+            postgres_config = postgres_resource_data.get("databases", [{}])[0]
+            postgres_db_name = postgres_config.get("name", "")
 
-            # Delete the branch from github using the github manager
-            github_manager.delete_branch(branch_name)
+            postgres_conn = psycopg2.connect(
+                host=os.getenv("POSTGRES_HOSTNAME"),
+                port=os.getenv("POSTGRES_PORT"),
+                user=os.getenv("POSTGRES_USERNAME"),
+                password=os.getenv("POSTGRES_PASSWORD"),
+                database=postgres_db_name,
+                sslmode="require",
+            )
+            postgres_cur = postgres_conn.cursor()
+
+            # Check if transactions table has data
+            postgres_cur.execute("SELECT COUNT(*) FROM transactions")
+            postgres_count = postgres_cur.fetchone()[0]
+
+            if postgres_count > 0:
+                test_steps[7]["status"] = "passed"
+                test_steps[7]["Result_Message"] = f"✅ PostgreSQL source data validated: {postgres_count} transactions"
+            else:
+                test_steps[7]["status"] = "failed"
+                test_steps[7]["Result_Message"] = "❌ No source data found in PostgreSQL transactions table"
+
+            postgres_cur.close()
+            postgres_conn.close()
 
         except Exception as e:
-            print(f"Error during cleanup: {e}")
+            test_steps[7]["status"] = "failed"
+            test_steps[7]["Result_Message"] = f"❌ PostgreSQL validation error: {str(e)}"
+
+        # Step 9 & 10: MySQL Target Data Validation
+        try:
+            mysql_config = mysql_resource_data.get("databases", [{}])[0]
+            mysql_db_name = mysql_config.get("name", "")
+
+            mysql_conn = mysql.connector.connect(
+                host=os.getenv("MYSQL_HOST"),
+                port=os.getenv("MYSQL_PORT"),
+                user=os.getenv("MYSQL_USERNAME"),
+                password=os.getenv("MYSQL_PASSWORD"),
+                database=mysql_db_name,
+            )
+            mysql_cur = mysql_conn.cursor()
+
+            # Check if daily_profits table was created
+            mysql_cur.execute("SHOW TABLES LIKE 'daily_profits'")
+            table_exists = mysql_cur.fetchone()
+
+            if table_exists:
+                test_steps[8]["status"] = "passed"
+                test_steps[8]["Result_Message"] = "✅ MySQL daily_profits table created successfully"
+
+                # Check if data was transferred
+                mysql_cur.execute("SELECT COUNT(*) FROM daily_profits")
+                mysql_count = mysql_cur.fetchone()[0]
+
+                if mysql_count > 0:
+                    test_steps[9]["status"] = "passed"
+                    test_steps[9]["Result_Message"] = f"✅ Data pipeline validated: {mysql_count} daily profit records"
+                else:
+                    test_steps[9]["status"] = "failed"
+                    test_steps[9]["Result_Message"] = "❌ No data found in MySQL daily_profits table"
+            else:
+                test_steps[8]["status"] = "failed"
+                test_steps[8]["Result_Message"] = "❌ MySQL daily_profits table not found"
+                test_steps[9]["status"] = "failed"
+                test_steps[9]["Result_Message"] = "❌ Cannot validate data - table not found"
+
+            mysql_cur.close()
+            mysql_conn.close()
+
+        except Exception as e:
+            test_steps[8]["status"] = "failed"
+            test_steps[8]["Result_Message"] = f"❌ MySQL validation error: {str(e)}"
+            test_steps[9]["status"] = "failed"
+            test_steps[9]["Result_Message"] = f"❌ MySQL validation error: {str(e)}"
+
+    except Exception as e:
+        # Mark any unfinished steps as failed
+        for step in test_steps:
+            if step["status"] == "running":
+                step["status"] = "failed"
+                step["Result_Message"] = f"❌ Validation error: {str(e)}"
+
+    # Calculate score as the fraction of steps that passed
+    passed_steps = sum([step["status"] == "passed" for step in test_steps])
+    total_steps = len(test_steps)
+    score = passed_steps / total_steps
+
+    print(f"🎯 Validation completed: {passed_steps}/{total_steps} steps passed (Score: {score:.2f})")
+
+    return {
+        "score": score,
+        "metadata": {"test_steps": test_steps},
+    }

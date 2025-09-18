@@ -22,23 +22,4 @@ You need to:
 The agent should demonstrate the ability to work with an unfamiliar API and make intelligent decisions about data modeling and pipeline design.
 """
 
-Configs = {
-    "services": {
-        "airflow": {
-            "github_token": os.getenv("AIRFLOW_GITHUB_TOKEN"),
-            "repo": os.getenv("AIRFLOW_REPO"),
-            "dag_path": os.getenv("AIRFLOW_DAG_PATH"),
-            "requirements_path": os.getenv("AIRFLOW_REQUIREMENTS_PATH"),
-            "host": os.getenv("AIRFLOW_HOST", "http://localhost:8080"),
-            "username": os.getenv("AIRFLOW_USERNAME", "airflow"),
-            "password": os.getenv("AIRFLOW_PASSWORD", "airflow"),
-        },
-        "postgreSQL": {
-            "hostname": os.getenv("POSTGRES_HOSTNAME"),
-            "port": os.getenv("POSTGRES_PORT"),
-            "username": os.getenv("POSTGRES_USERNAME"),
-            "password": os.getenv("POSTGRES_PASSWORD"),
-            "databases": [{"name": "earthquake_data"}],
-        }
-    }
-}
+# Configuration will be generated dynamically by create_model_inputs function

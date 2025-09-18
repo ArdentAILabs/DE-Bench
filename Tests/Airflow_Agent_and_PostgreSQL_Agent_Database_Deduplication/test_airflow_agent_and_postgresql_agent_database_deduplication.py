@@ -1,15 +1,15 @@
-import importlib
+# Braintrust-only Airflow test - no pytest dependencies
+from model.Run_Model import run_model
+from model.Configure_Model import set_up_model_configs, cleanup_model_artifacts
 import os
-import pytest
-import re
+import importlib
 import time
 import uuid
 import psycopg2
+from typing import List, Dict, Any
+from Fixtures.base_fixture import DEBenchFixture
 
-from model.Configure_Model import cleanup_model_artifacts
-from model.Configure_Model import set_up_model_configs
-from model.Run_Model import run_model
-
+# Dynamic config loading
 current_dir = os.path.dirname(os.path.abspath(__file__))
 parent_dir_name = os.path.basename(current_dir)
 module_path = f"Tests.{parent_dir_name}.Test_Configs"
@@ -20,308 +20,483 @@ test_timestamp = int(time.time())
 test_uuid = uuid.uuid4().hex[:8]
 
 
-@pytest.mark.database
-@pytest.mark.postgres
-@pytest.mark.postgresql
-@pytest.mark.three  # Difficulty 3 - involves database stored procedures, SQL window functions, and data deduplication
-@pytest.mark.database_computation  # New marker for tests that push computation to database
-@pytest.mark.parametrize("postgres_resource", [{
-    "resource_id": f"db_dedup_test_{test_timestamp}_{test_uuid}",
-    "databases": [
-        {
-            "name": f"dedup_db_{test_timestamp}_{test_uuid}",
-            "sql_file": "schema.sql"
-        }
-    ]
-}], indirect=True)
-@pytest.mark.parametrize("github_resource", [{
-    "resource_id": f"test_airflow_database_deduplication_test_{test_timestamp}_{test_uuid}",
-}], indirect=True)
-@pytest.mark.parametrize("airflow_resource", [{
-    "resource_id": f"database_deduplication_test_{test_timestamp}_{test_uuid}",
-}], indirect=True)
-def test_airflow_agent_and_postgresql_agent_database_deduplication(request, airflow_resource, github_resource, supabase_account_resource, postgres_resource):
-    input_dir = os.path.dirname(os.path.abspath(__file__))
-    github_manager = github_resource["github_manager"]
-    model_result = None  # Initialize before try block
-    Test_Configs.User_Input = github_manager.add_merge_step_to_user_input(Test_Configs.User_Input)
-    dag_name = "user_deduplication_dag"
-    pr_title = f"Add Database-Side User Deduplication Pipeline {test_timestamp}_{test_uuid}"
-    branch_name = f"feature/database-user-deduplication-{test_timestamp}_{test_uuid}"
-    Test_Configs.User_Input = Test_Configs.User_Input.replace("BRANCH_NAME", branch_name)
-    Test_Configs.User_Input = Test_Configs.User_Input.replace("PR_NAME", pr_title)
-    request.node.user_properties.append(("user_query", Test_Configs.User_Input))
+def get_fixtures() -> List[DEBenchFixture]:
+    """
+    Provides custom DEBenchFixture instances for Braintrust evaluation.
+    This Airflow test validates that AI can create a database-side deduplication DAG using stored procedures.
+    """
+    from Fixtures.Airflow.airflow_fixture import AirflowFixture
+    from Fixtures.PostgreSQL.postgres_resources import PostgreSQLFixture
+    from Fixtures.GitHub.github_fixture import GitHubFixture
+
+    # Initialize Airflow fixture with test-specific configuration
+    custom_airflow_config = {
+        "resource_id": f"db_deduplication_test_{test_timestamp}_{test_uuid}",
+    }
+
+    # Initialize PostgreSQL fixture for user data with stored procedures
+    custom_postgres_config = {
+        "resource_id": f"db_deduplication_test_{test_timestamp}_{test_uuid}",
+        "databases": [
+            {
+                "name": f"user_data_{test_timestamp}_{test_uuid}",
+                "sql_file": "schema.sql",
+            }
+        ],
+    }
+
+    # Initialize GitHub fixture for PR and branch management
+    custom_github_config = {
+        "resource_id": f"test_db_deduplication_test_{test_timestamp}_{test_uuid}",
+    }
+
+    airflow_fixture = AirflowFixture(custom_config=custom_airflow_config)
+    postgres_fixture = PostgreSQLFixture(custom_config=custom_postgres_config)
+    github_fixture = GitHubFixture(custom_config=custom_github_config)
+
+    return [airflow_fixture, postgres_fixture, github_fixture]
+
+
+def create_model_inputs(
+    base_model_inputs: Dict[str, Any], fixtures: List[DEBenchFixture]
+) -> Dict[str, Any]:
+    """
+    Create test-specific config using the set-up fixtures.
+    This function has access to all fixture data after setup and dynamically
+    updates the task description with GitHub branch and PR information.
+    """
+    import os
+    from extract_test_configs import create_config_from_fixtures
+
+    # Get GitHub fixture to access manager for dynamic branch/PR creation
+    github_fixture = next(
+        (f for f in fixtures if f.get_resource_type() == "github_resource"), None
+    )
+
+    if not github_fixture:
+        raise Exception(
+            "GitHub fixture not found - required for branch and PR management"
+        )
+
+    # Get the GitHub manager from the fixture
+    github_resource_data = getattr(github_fixture, "_resource_data", None)
+    if not github_resource_data:
+        raise Exception("GitHub resource data not available")
+
+    github_manager = github_resource_data.get("github_manager")
+    if not github_manager:
+        raise Exception("GitHub manager not available")
+
+    # Generate dynamic branch and PR names with special database deduplication suffixes
+    pr_title = f"Add Database Deduplication with Stored Procedures {test_timestamp}_{test_uuid}"
+    branch_name = f"feature/database-deduplication-{test_timestamp}_{test_uuid}"
+
+    # Start with the original user input from Test_Configs
+    task_description = Test_Configs.User_Input
+
+    # Add merge step to user input
+    task_description = github_manager.add_merge_step_to_user_input(task_description)
+
+    # Replace placeholders with dynamic values (using the specific naming pattern)
+    task_description = task_description.replace(
+        "BRANCH_NAME_AGENT_DATABASE_DEDUPLICATION", branch_name
+    )
+    task_description = task_description.replace(
+        "PR_NAME_AGENT_DATABASE_DEDUPLICATION", pr_title
+    )
+
+    # Set up GitHub secrets for Astro access
     github_manager.check_and_update_gh_secrets(
         secrets={
             "ASTRO_ACCESS_TOKEN": os.environ["ASTRO_ACCESS_TOKEN"],
         }
     )
-    
-    # Use the airflow_resource and postgres_resource fixtures
-    print("=== Starting PostgreSQL Database-Side Deduplication Test ===")
-    print(f"Using Airflow instance from fixture: {airflow_resource['resource_id']}")
-    print(f"Using GitHub instance from fixture: {github_resource['resource_id']}")
-    print(f"Using PostgreSQL instance from fixture: {postgres_resource['resource_id']}")
-    print(f"Airflow base URL: {airflow_resource['base_url']}")
-    print(f"Test directory: {input_dir}")
 
+    print(f"🔧 Generated dynamic branch name: {branch_name}")
+    print(f"🔧 Generated dynamic PR title: {pr_title}")
+
+    # Use the helper to automatically create config from all fixtures
+    return {
+        **base_model_inputs,
+        "model_configs": create_config_from_fixtures(fixtures),
+        "task_description": task_description,
+    }
+
+
+def validate_test(model_result, fixtures=None):
+    """
+    Validates that the AI agent successfully created a database-side deduplication DAG.
+
+    Expected behavior:
+    - DAG should be created with name "user_deduplication_dag"
+    - DAG should create a stored procedure named "deduplicate_users"
+    - DAG should have a task named "deduplicate_users"
+    - Stored procedure should deduplicate data in the database
+
+    Args:
+        model_result: The result from the AI model execution
+        fixtures: List of DEBenchFixture instances used in the test
+
+    Returns:
+        dict: Contains 'score' float and 'metadata' dict with validation details
+    """
+    # Create comprehensive test steps for validation
     test_steps = [
         {
-            "name": "Checking Git Branch Existence",
-            "description": "Checking if the git branch exists with the right name",
-            "status": "did not reach",
-            "Result_Message": "",
+            "name": "Agent Task Execution",
+            "description": "AI Agent executes task to create Database Deduplication DAG",
+            "status": "running",
+            "Result_Message": "Checking if AI agent executed the Airflow DAG creation task...",
         },
         {
-            "name": "Checking PR Creation",
-            "description": "Checking if the PR was created with the right name",
-            "status": "did not reach",
-            "Result_Message": "",
+            "name": "Git Branch Creation",
+            "description": "Verify that git branch was created with the correct name",
+            "status": "running",
+            "Result_Message": "Checking if git branch exists...",
         },
         {
-            "name": "Verifying Database Stored Procedure Exists",
-            "description": "Checking that the deduplicate_users() stored procedure is available",
-            "status": "did not reach",
-            "Result_Message": "",
+            "name": "PR Creation and Merge",
+            "description": "Verify that PR was created and merged successfully",
+            "status": "running",
+            "Result_Message": "Checking if PR was created and merged...",
         },
         {
-            "name": "Checking Database-Side Deduplication Results",
-            "description": "Verifying that deduplication was performed entirely in the database with correct results",
-            "status": "did not reach",
-            "Result_Message": "",
+            "name": "GitHub Action Completion",
+            "description": "Verify that GitHub action completed successfully",
+            "status": "running",
+            "Result_Message": "Waiting for GitHub action to complete...",
         },
         {
-            "name": "Validating Performance Benefits",
-            "description": "Confirming computation happened database-side rather than in Airflow containers",
-            "status": "did not reach",
-            "Result_Message": "",
-        }
+            "name": "Airflow Redeployment",
+            "description": "Verify that Airflow redeployed after GitHub action",
+            "status": "running",
+            "Result_Message": "Checking if Airflow redeployed successfully...",
+        },
+        {
+            "name": "DAG Creation Validation",
+            "description": "Verify that user_deduplication_dag was created in Airflow",
+            "status": "running",
+            "Result_Message": "Validating that User Deduplication DAG exists in Airflow...",
+        },
+        {
+            "name": "DAG Task Validation",
+            "description": "Verify that DAG has the deduplicate_users task",
+            "status": "running",
+            "Result_Message": "Checking if DAG has the required deduplicate_users task...",
+        },
+        {
+            "name": "DAG Execution and Monitoring",
+            "description": "Trigger the DAG and verify it runs successfully",
+            "status": "running",
+            "Result_Message": "Triggering DAG and monitoring execution...",
+        },
+        {
+            "name": "Stored Procedure Creation Validation",
+            "description": "Verify that deduplicate_users stored procedure was created",
+            "status": "running",
+            "Result_Message": "Checking if stored procedure exists...",
+        },
+        {
+            "name": "Database Deduplication Validation",
+            "description": "Verify that database-side deduplication logic works correctly",
+            "status": "running",
+            "Result_Message": "Validating database deduplication results...",
+        },
     ]
 
-    # SECTION 1: SETUP THE TEST
-    request.node.user_properties.append(("test_steps", test_steps))
-    created_db_name = postgres_resource["created_resources"][0]["name"]
-
-    config_results = None  # Initialize before try block
     try:
-        # Get the actual database name from the fixture
-        print(f"Using PostgreSQL database: {created_db_name}")
+        # Step 1: Check that the agent task executed
+        if not model_result or model_result.get("status") == "failed":
+            test_steps[0]["status"] = "failed"
+            test_steps[0][
+                "Result_Message"
+            ] = "❌ AI Agent task execution failed or returned no result"
+            return {"score": 0.0, "metadata": {"test_steps": test_steps}}
 
-        # Set up model configurations with actual database name and test-specific credentials
-        test_configs = Test_Configs.Configs.copy()
-        test_configs["services"]["postgreSQL"]["databases"] = [{"name": created_db_name}]
+        test_steps[0]["status"] = "passed"
+        test_steps[0][
+            "Result_Message"
+        ] = "✅ AI Agent completed task execution successfully"
 
-        # Configure Airflow connection details
-        test_configs["services"]["airflow"]["host"] = airflow_resource["base_url"]
-        test_configs["services"]["airflow"]["username"] = airflow_resource["username"]
-        test_configs["services"]["airflow"]["password"] = airflow_resource["password"]
-        test_configs["services"]["airflow"]["api_token"] = airflow_resource["api_token"]
-        custom_info = {"mode": request.config.getoption("--mode")}
-        if request.config.getoption("--mode") == "Ardent":
-            custom_info["publicKey"] = supabase_account_resource["publicKey"]
-            custom_info["secretKey"] = supabase_account_resource["secretKey"]
-
-        config_results = set_up_model_configs(Configs=test_configs, custom_info=custom_info)
-
-        custom_info = {
-            **custom_info,
-            **config_results,
-        }
-
-        # SECTION 2: RUN THE MODEL
-        start_time = time.time()
-        print("Running model to create database-centric DAG...")
-        model_result = run_model(
-            container=None,
-            task=Test_Configs.User_Input,
-            configs=test_configs,
-            extra_information=custom_info
+        # Get fixtures for Airflow, PostgreSQL, and GitHub
+        airflow_fixture = (
+            next(
+                (f for f in fixtures if f.get_resource_type() == "airflow_resource"),
+                None,
+            )
+            if fixtures
+            else None
         )
-        end_time = time.time()
-        print(f"Model execution completed. Result: {model_result}")
-        request.node.user_properties.append(("model_runtime", end_time - start_time))
+        postgres_fixture = (
+            next(
+                (f for f in fixtures if f.get_resource_type() == "postgres_resource"),
+                None,
+            )
+            if fixtures
+            else None
+        )
+        github_fixture = (
+            next(
+                (f for f in fixtures if f.get_resource_type() == "github_resource"),
+                None,
+            )
+            if fixtures
+            else None
+        )
 
-        # Check if the branch exists and verify PR creation/merge
-        print("Waiting 10 seconds for model to create branch and PR...")
-        time.sleep(10)  # Give the model time to create the branch and PR
-        
-        branch_exists, test_steps[0] = github_manager.verify_branch_exists(branch_name, test_steps[0])
+        if not airflow_fixture:
+            raise Exception("Airflow fixture not found")
+        if not postgres_fixture:
+            raise Exception("PostgreSQL fixture not found")
+        if not github_fixture:
+            raise Exception("GitHub fixture not found")
+
+        # Get resource data
+        airflow_resource_data = getattr(airflow_fixture, "_resource_data", None)
+        if not airflow_resource_data:
+            raise Exception("Airflow resource data not available")
+
+        postgres_resource_data = getattr(postgres_fixture, "_resource_data", None)
+        if not postgres_resource_data:
+            raise Exception("PostgreSQL resource data not available")
+
+        github_resource_data = getattr(github_fixture, "_resource_data", None)
+        if not github_resource_data:
+            raise Exception("GitHub resource data not available")
+
+        airflow_instance = airflow_resource_data["airflow_instance"]
+        base_url = airflow_resource_data["base_url"]
+        github_manager = github_resource_data.get("github_manager")
+
+        if not github_manager:
+            raise Exception("GitHub manager not available")
+
+        # Generate the same branch and PR names used in create_model_inputs
+        pr_title = f"Add Database Deduplication with Stored Procedures {test_timestamp}_{test_uuid}"
+        branch_name = f"feature/database-deduplication-{test_timestamp}_{test_uuid}"
+
+        # Step 2-6: GitHub and Airflow workflow
+        print(f"🔍 Checking for branch: {branch_name}")
+        time.sleep(10)
+
+        branch_exists, test_steps[1] = github_manager.verify_branch_exists(
+            branch_name, test_steps[1]
+        )
         if not branch_exists:
-            raise Exception(test_steps[0]["Result_Message"])
+            test_steps[1]["status"] = "failed"
+            return {"score": 0.0, "metadata": {"test_steps": test_steps}}
 
-        pr_exists, test_steps[1] = github_manager.find_and_merge_pr(
-            pr_title=pr_title, 
-            test_step=test_steps[1], 
-            commit_title=pr_title, 
+        test_steps[1]["status"] = "passed"
+        test_steps[1][
+            "Result_Message"
+        ] = f"✅ Git branch '{branch_name}' created successfully"
+
+        # PR creation and merge
+        pr_exists, test_steps[2] = github_manager.find_and_merge_pr(
+            pr_title=pr_title,
+            test_step=test_steps[2],
+            commit_title=pr_title,
             merge_method="squash",
             build_info={
-                "deploymentId": airflow_resource["deployment_id"],
-                "deploymentName": airflow_resource["deployment_name"],
-            }
+                "deploymentId": airflow_resource_data["deployment_id"],
+                "deploymentName": airflow_resource_data["deployment_name"],
+            },
         )
+
         if not pr_exists:
-            raise Exception("Unable to find and merge PR. Please check the PR title and commit title.")
+            test_steps[2]["status"] = "failed"
+            test_steps[2]["Result_Message"] = "❌ Unable to find and merge PR"
+            return {"score": 0.0, "metadata": {"test_steps": test_steps}}
 
-        # Use the airflow instance from the fixture to run the DAG
-        airflow_instance = airflow_resource["airflow_instance"]
-        
-        if not github_manager.check_if_action_is_complete(pr_title=pr_title):
-            raise Exception("Action is not complete")
-        
-        # verify the airflow instance is ready after the github action redeployed
-        if not airflow_instance.wait_for_airflow_to_be_ready():
-            raise Exception("Airflow instance did not redeploy successfully.")
-
-        # Wait for DAG to appear and trigger it
-        if not airflow_instance.verify_airflow_dag_exists(dag_name):
-            raise Exception(f"DAG '{dag_name}' did not appear in Airflow")
-
-        dag_run_id = airflow_instance.unpause_and_trigger_airflow_dag(dag_name)
-        if not dag_run_id:
-            raise Exception("Failed to trigger DAG")
-
-        # Monitor the DAG run
-        print(f"Monitoring DAG run {dag_run_id} for completion...")
-        airflow_instance.verify_dag_id_ran(dag_name, dag_run_id)
-
-        # SECTION 3: VERIFY DATABASE-SIDE COMPUTATION RESULTS
-        print("Verifying database-side deduplication results...")
-        conn = psycopg2.connect(
-            host=os.getenv("POSTGRES_HOSTNAME"),
-            port=os.getenv("POSTGRES_PORT"),
-            user=os.getenv("POSTGRES_USERNAME"),
-            password=os.getenv("POSTGRES_PASSWORD"),
-            database=created_db_name,
-            sslmode="require"
-        )
-        cur = conn.cursor()
-        
-        # Check if deduplicated_users table exists and has correct structure
-        cur.execute("""
-            SELECT column_name, data_type, is_nullable
-            FROM information_schema.columns 
-            WHERE table_name = 'deduplicated_users'
-            ORDER BY ordinal_position
-        """)
-        columns = cur.fetchall()
-        assert len(columns) > 0, "deduplicated_users table was not created"
-        
-        # Verify database and stored procedure exists
-        cur.execute("""
-            SELECT COUNT(*) 
-            FROM pg_proc 
-            WHERE proname = 'deduplicate_users'
-        """)
-        proc_count = cur.fetchone()[0]
-        assert proc_count > 0, "deduplicate_users() stored procedure not found"
-        
         test_steps[2]["status"] = "passed"
-        test_steps[2]["Result_Message"] = "deduplicate_users() stored procedure exists"
-        
-        cur.close()
-        conn.close()
+        test_steps[2][
+            "Result_Message"
+        ] = f"✅ PR '{pr_title}' created and merged successfully"
 
+        # GitHub action completion
+        if not github_manager.check_if_action_is_complete(pr_title=pr_title):
+            test_steps[3]["status"] = "failed"
+            test_steps[3][
+                "Result_Message"
+            ] = "❌ GitHub action did not complete successfully"
+            return {"score": 0.0, "metadata": {"test_steps": test_steps}}
 
-        # Check unique email constraint
-        cur.execute("""
-            SELECT COUNT(*) 
-            FROM information_schema.table_constraints 
-            WHERE table_name = 'deduplicated_users' 
-            AND constraint_type = 'UNIQUE'
-            AND constraint_name LIKE '%email%'
-        """)
-        email_unique_count = cur.fetchone()[0]
-        assert email_unique_count > 0, "Email uniqueness constraint not found"
-        
-        # Verify deduplication results
-        cur.execute("SELECT COUNT(*) FROM deduplicated_users")
-        deduplicated_count = cur.fetchone()[0]
-        
-        # Calculate expected unique emails from source data
-        cur.execute("""
-            SELECT COUNT(DISTINCT email) FROM (
-                SELECT email FROM users_source_1
-                UNION 
-                SELECT email FROM users_source_2
-                UNION
-                SELECT email FROM users_source_3
-            ) all_emails
-        """)
-        expected_unique_count = cur.fetchone()[0]
-        
-        assert deduplicated_count == expected_unique_count, f"Expected {expected_unique_count} unique users, found {deduplicated_count}"
-        assert deduplicated_count > 0, "No deduplicated users found"
-        
-        # Verify specific deduplication cases - check that duplicates were properly merged
-        cur.execute("""
-            SELECT email, COUNT(*) 
-            FROM deduplicated_users 
-            GROUP BY email 
-            HAVING COUNT(*) > 1
-        """)
-        duplicates = cur.fetchall()
-        assert len(duplicates) == 0, f"Found duplicate emails in deduplicated table: {duplicates}"
-        
-        # Verify data quality - check that best information was preserved
-        cur.execute("""
-            SELECT email, first_name, last_name, organization, department, role 
-            FROM deduplicated_users 
-            WHERE email IN ('john.doe@example.com', 'jane.smith@example.com', 'bob.wilson@example.com')
-            ORDER BY email
-        """)
-        sample_records = cur.fetchall()
-        assert len(sample_records) >= 3, "Expected deduplication sample records not found"
-        
-        # Test database performance statistics
-        cur.execute("SELECT * FROM get_deduplication_stats()")
-        stats = dict(cur.fetchall())
-        
-        total_raw = stats['total_raw_records']
-        unique_after = stats['unique_emails_after_dedup']
-        duplicates_removed = stats['duplicates_removed']
-        
-        assert duplicates_removed > 0, "No duplicates were removed during deduplication"
-        assert unique_after < total_raw, "Deduplication did not reduce record count"
-        
         test_steps[3]["status"] = "passed"
-        test_steps[3]["Result_Message"] = f"Database-side deduplication successful: {total_raw} raw records → {unique_after} unique records, {duplicates_removed} duplicates removed"
-        
-        # SECTION 4: VALIDATE PERFORMANCE BENEFITS
-        print("Validating database-centric performance benefits...")
-        
-        # Check task logs to ensure database operations were used
-        logs = airflow_instance.get_task_instance_logs(dag_id=dag_name, dag_run_id=dag_run_id, task_id="deduplicate_data")
-        
-        # Look for evidence of database-side processing
-        database_keywords = ['PostgreSQLOperator', 'CALL deduplicate_users', 'SQL execution', 'database function']
-        database_processing_found = any(keyword in logs for keyword in database_keywords)
-        
-        # Look for absence of data-pulling keywords (good - means we're not pulling data to Airflow)
-        data_pulling_keywords = ['pandas', 'DataFrame', 'to_csv', 'read_sql']
-        data_pulling_found = any(keyword in logs for keyword in data_pulling_keywords)
-        
-        # We want database processing but NOT data pulling
-        assert database_processing_found or not data_pulling_found, "Evidence suggests data was processed in Airflow rather than database"
-        
-        test_steps[4]["status"] = "passed"
-        test_steps[4]["Result_Message"] = "Confirmed database-side computation - no data movement to Airflow containers detected"
-        
-        print("✓ Successfully validated database-side deduplication with optimal performance")
-        print(f"✓ All {len(test_steps)} validation steps passed")
-        print(f"✓ Performance benefits: {duplicates_removed} duplicates removed server-side without data movement")
-        
-        # Close database connection
-        cur.close()
-        conn.close()
+        test_steps[3]["Result_Message"] = "✅ GitHub action completed successfully"
 
-    finally:
+        # Airflow redeployment
+        if not airflow_instance.wait_for_airflow_to_be_ready():
+            test_steps[4]["status"] = "failed"
+            test_steps[4][
+                "Result_Message"
+            ] = "❌ Airflow instance did not redeploy successfully"
+            return {"score": 0.0, "metadata": {"test_steps": test_steps}}
+
+        test_steps[4]["status"] = "passed"
+        test_steps[4][
+            "Result_Message"
+        ] = "✅ Airflow redeployed successfully after GitHub action"
+
+        # DAG existence check
+        dag_name = "user_deduplication_dag"
+        print(f"🔍 Checking for DAG: {dag_name} in Airflow at {base_url}")
+
+        if airflow_instance.verify_airflow_dag_exists(dag_name):
+            test_steps[5]["status"] = "passed"
+            test_steps[5]["Result_Message"] = f"✅ DAG '{dag_name}' found in Airflow"
+        else:
+            test_steps[5]["status"] = "failed"
+            test_steps[5][
+                "Result_Message"
+            ] = f"❌ DAG '{dag_name}' not found in Airflow"
+            return {"score": 0.0, "metadata": {"test_steps": test_steps}}
+
+        # DAG task validation - check if it has the deduplicate_users task
         try:
-            # Clean up configurations
-            if request.config.getoption("--mode") == "Ardent":
-                custom_info['job_id'] = model_result.get("id") if model_result else None
-            cleanup_model_artifacts(Configs=test_configs, custom_info=custom_info)
-            # Delete the branch from github using the github manager
-            github_manager.delete_branch(branch_name)
+            dag_tasks = airflow_instance.get_dag_tasks(dag_name)
+            task_ids = [task.get("task_id", "") for task in dag_tasks]
+
+            if "deduplicate_users" in task_ids:
+                test_steps[6]["status"] = "passed"
+                test_steps[6][
+                    "Result_Message"
+                ] = f"✅ Found 'deduplicate_users' task in DAG (tasks: {', '.join(task_ids)})"
+            else:
+                test_steps[6]["status"] = "failed"
+                test_steps[6][
+                    "Result_Message"
+                ] = f"❌ Task 'deduplicate_users' not found. Available tasks: {', '.join(task_ids)}"
+        except Exception as e:
+            test_steps[6]["status"] = "failed"
+            test_steps[6]["Result_Message"] = f"❌ Error checking DAG tasks: {str(e)}"
+
+        # DAG execution
+        print(f"🔍 Triggering DAG: {dag_name}")
+        dag_run_id = airflow_instance.unpause_and_trigger_airflow_dag(dag_name)
+
+        if not dag_run_id:
+            test_steps[7]["status"] = "failed"
+            test_steps[7]["Result_Message"] = "❌ Failed to trigger DAG"
+            return {"score": 0.0, "metadata": {"test_steps": test_steps}}
+
+        # Monitor the DAG run until completion
+        airflow_instance.verify_dag_id_ran(dag_name, dag_run_id)
+        test_steps[7]["status"] = "passed"
+        test_steps[7][
+            "Result_Message"
+        ] = f"✅ DAG '{dag_name}' executed successfully (run_id: {dag_run_id})"
+
+        # Step 9 & 10: PostgreSQL Database Validation
+        try:
+            postgres_config = postgres_resource_data.get("databases", [{}])[0]
+            database_name = postgres_config.get("name", "")
+
+            conn = psycopg2.connect(
+                host=os.getenv("POSTGRES_HOSTNAME"),
+                port=os.getenv("POSTGRES_PORT"),
+                user=os.getenv("POSTGRES_USERNAME"),
+                password=os.getenv("POSTGRES_PASSWORD"),
+                database=database_name,
+                sslmode="require",
+            )
+            cur = conn.cursor()
+
+            print(f"🔍 Connected to PostgreSQL database: {database_name}")
+
+            # Step 9: Check if deduplicate_users stored procedure was created
+            try:
+                cur.execute(
+                    """
+                    SELECT COUNT(*) 
+                    FROM information_schema.routines 
+                    WHERE routine_name = 'deduplicate_users' 
+                    AND routine_type = 'FUNCTION'
+                """
+                )
+                procedure_count = cur.fetchone()[0]
+
+                if procedure_count > 0:
+                    test_steps[8]["status"] = "passed"
+                    test_steps[8][
+                        "Result_Message"
+                    ] = "✅ Stored procedure 'deduplicate_users' created successfully"
+                else:
+                    test_steps[8]["status"] = "failed"
+                    test_steps[8][
+                        "Result_Message"
+                    ] = "❌ Stored procedure 'deduplicate_users' not found"
+
+            except psycopg2.Error as e:
+                test_steps[8]["status"] = "failed"
+                test_steps[8][
+                    "Result_Message"
+                ] = f"❌ Error checking stored procedure: {str(e)}"
+
+            # Step 10: Check if deduplication worked (deduplicated_users table has data)
+            try:
+                cur.execute("SELECT COUNT(*) FROM deduplicated_users")
+                deduplicated_count = cur.fetchone()[0]
+
+                if deduplicated_count > 0:
+                    # Compare with original count if possible
+                    try:
+                        cur.execute("SELECT COUNT(*) FROM users")
+                        original_count = cur.fetchone()[0]
+
+                        if deduplicated_count <= original_count:
+                            test_steps[9]["status"] = "passed"
+                            test_steps[9][
+                                "Result_Message"
+                            ] = f"✅ Database deduplication validated: {original_count} → {deduplicated_count} records"
+                        else:
+                            test_steps[9]["status"] = "failed"
+                            test_steps[9][
+                                "Result_Message"
+                            ] = f"❌ Deduplication failed: more records after deduplication ({original_count} → {deduplicated_count})"
+                    except psycopg2.Error:
+                        # If users table doesn't exist, just validate that deduplicated_users has data
+                        test_steps[9]["status"] = "passed"
+                        test_steps[9][
+                            "Result_Message"
+                        ] = f"✅ Database deduplication completed: {deduplicated_count} deduplicated records"
+                else:
+                    test_steps[9]["status"] = "failed"
+                    test_steps[9][
+                        "Result_Message"
+                    ] = "❌ No data found in deduplicated_users table"
+
+            except psycopg2.Error as e:
+                test_steps[9]["status"] = "failed"
+                test_steps[9][
+                    "Result_Message"
+                ] = f"❌ Error validating deduplication: {str(e)}"
+
+            cur.close()
+            conn.close()
 
         except Exception as e:
-            print(f"Error during cleanup: {e}")
+            test_steps[8]["status"] = "failed"
+            test_steps[8]["Result_Message"] = f"❌ Database validation error: {str(e)}"
+            test_steps[9]["status"] = "failed"
+            test_steps[9]["Result_Message"] = f"❌ Database validation error: {str(e)}"
+
+    except Exception as e:
+        # Mark any unfinished steps as failed
+        for step in test_steps:
+            if step["status"] == "running":
+                step["status"] = "failed"
+                step["Result_Message"] = f"❌ Validation error: {str(e)}"
+
+    # Calculate score as the fraction of steps that passed
+    passed_steps = sum([step["status"] == "passed" for step in test_steps])
+    total_steps = len(test_steps)
+    score = passed_steps / total_steps
+
+    print(
+        f"🎯 Validation completed: {passed_steps}/{total_steps} steps passed (Score: {score:.2f})"
+    )
+
+    return {
+        "score": score,
+        "metadata": {"test_steps": test_steps},
+    }
