@@ -88,7 +88,7 @@ class PostgreSQLFixture(
             sslmode="require",
         )
 
-    def setup_resource(
+    def test_setup(
         self, resource_config: Optional[PostgreSQLResourceConfig] = None
     ) -> PostgreSQLResourceData:
         """Set up PostgreSQL databases with optional SQL schema loading"""
@@ -310,7 +310,7 @@ class PostgreSQLFixture(
                 cursor.execute(f"DROP DATABASE IF EXISTS {db_name}")
                 print(f"🗑️ Dropped database {db_name}")
 
-    def teardown_resource(self, resource_data: PostgreSQLResourceData) -> None:
+    def test_teardown(self, resource_data: PostgreSQLResourceData) -> None:
         """Clean up PostgreSQL databases"""
         resource_id = resource_data["resource_id"]
         created_resources = resource_data["created_resources"]
@@ -364,7 +364,7 @@ class PostgreSQLFixture(
         resource_data = getattr(self, "_resource_data", None)
         if not resource_data:
             raise Exception(
-                "PostgreSQL resource data not available - ensure setup_resource was called"
+                "PostgreSQL resource data not available - ensure test_setup was called"
             )
 
         # Extract connection details and created databases

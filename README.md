@@ -328,7 +328,7 @@ mysql.connector.errors.DatabaseError: Can't connect to MySQL server
 
 ### **Resource Setup Failures**
 ```
-Exception: MongoDB resource data not available - ensure setup_resource was called
+Exception: MongoDB resource data not available - ensure test_setup was called
 ```
 **Solution:** Fixture setup failed. Check environment variables for the specific service and ensure credentials are correct.
 

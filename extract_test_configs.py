@@ -277,11 +277,11 @@ def setup_test_resources_from_fixtures(
             # Check if fixture was initialized with custom config
             if hasattr(fixture, "custom_config") and fixture.custom_config is not None:
                 # Fixture has custom config, let it use that
-                resource_data = fixture._setup_resource()
+                resource_data = fixture._test_setup()
                 print(f"✅ Set up {resource_type} using fixture's custom config")
             else:
                 # Use provided config or default
-                resource_data = fixture._setup_resource(config)
+                resource_data = fixture._test_setup(config)
                 print(f"✅ Set up {resource_type} using provided fixture")
 
             # Store resource data in the fixture AND the resources dict
@@ -312,7 +312,7 @@ def cleanup_test_resources_from_fixtures(
 
         if resource_type in resources:
             try:
-                fixture._teardown_resource(resources[resource_type])
+                fixture._test_teardown(resources[resource_type])
                 print(f"✅ Cleaned up {resource_type} using provided fixture")
             except Exception as e:
                 print(f"❌ Failed to clean up {resource_type}: {e}")

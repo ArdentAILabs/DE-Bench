@@ -416,11 +416,9 @@ def run_multi_test_evaluation(
                 fixtures_data = (
                     output.get("fixtures", {}) if isinstance(output, dict) else {}
                 )
+                fixtures = fixtures_data if isinstance(fixtures_data, list) else []
 
                 try:
-                    # fixtures_data now contains the actual fixture instances, not data to convert
-                    fixtures = fixtures_data if isinstance(fixtures_data, list) else []
-
                     validator = get_test_validator(test_name)
                     result = validator(model_result, expected, fixtures=fixtures)
 
@@ -434,21 +432,9 @@ def run_multi_test_evaluation(
                     )
                     return False
                 finally:
-                    # Clean up test resources after validation
-                    if isinstance(output, dict) and "fixtures" in output:
-                        from model.BraintrustEval import (
-                            _cleanup_test_resources_for_task,
-                        )
-
-                        # Use fixture instances for cleanup if available, otherwise fall back to test_resources
-                        if output.get("fixtures"):
-                            _cleanup_test_resources_for_task(
-                                test_name, output["fixtures"], use_fixtures=True
-                            )
-                        elif output.get("test_resources"):
-                            _cleanup_test_resources_for_task(
-                                test_name, output["test_resources"]
-                            )
+                    # Reverse list of fixtures and run clean up in order
+                    for fixture in reversed(fixtures):
+                        fixture.test_teardown()
 
             print(
                 f"🔍 Running Braintrust.Eval for {mode} mode with {len(mode_samples)} samples"

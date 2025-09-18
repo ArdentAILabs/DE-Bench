@@ -14,8 +14,8 @@ class DEBenchFixture(ABC, Generic[ConfigT, ResourceT, SessionT]):
     Abstract base class for all DE-Bench fixtures.
 
     This ensures a consistent interface across all resource types:
-    - setup_resource: Creates and initializes the resource
-    - teardown_resource: Cleans up and destroys the resource
+    - test_setup: Creates and initializes the resource
+    - test_teardown: Cleans up and destroys the resource
     - get_resource_type: Returns a string identifier for the resource type
 
     Fixtures can optionally be initialized with custom configuration.
@@ -36,14 +36,14 @@ class DEBenchFixture(ABC, Generic[ConfigT, ResourceT, SessionT]):
 
         Args:
             custom_config: Optional configuration to use instead of default config.
-                          If provided, this will be used by setup_resource().
+                          If provided, this will be used by test_setup().
             session_data: Optional session data from session_setup(), passed down from runner.
         """
         self.custom_config = custom_config
         self.session_data = session_data
 
     @abstractmethod
-    def setup_resource(self, resource_config: Optional[ConfigT] = None) -> ResourceT:
+    def test_setup(self, resource_config: Optional[ConfigT] = None) -> ResourceT:
         """
         Set up and initialize the resource based on configuration.
 
@@ -56,47 +56,50 @@ class DEBenchFixture(ABC, Generic[ConfigT, ResourceT, SessionT]):
         """
         pass
 
-    def _setup_resource(self, resource_config: Optional[ConfigT] = None) -> ResourceT:
+    def _test_setup(self, resource_config: Optional[ConfigT] = None) -> ResourceT:
         """
         Set up and initialize the resource based on configuration.
         """
 
-        @traced(name=f"{self.get_resource_type()}.setup_resource")
-        def inner_setup_resource(
+        @traced(name=f"{self.get_resource_type()}.test_setup")
+        def inner_test_setup(
             resource_config: Optional[ConfigT] = None,
         ) -> ResourceT:
             """
             Inner setup resource method.
             """
-            return self.setup_resource(resource_config)
+            return self.test_setup(resource_config)
 
-        resource_data = inner_setup_resource(resource_config)
+        resource_data = inner_test_setup(resource_config)
         self._resource_data = resource_data
         return resource_data
 
     @abstractmethod
-    def teardown_resource(self, resource_data: ResourceT) -> None:
+    def test_teardown(self) -> None:
         """
         Clean up and destroy the resource.
 
         Args:
-            resource_data: Resource data returned from setup_resource
+            resource_data: Resource data returned from test_setup
         """
         pass
 
-    def _teardown_resource(self, resource_data: ResourceT) -> None:
+    def _test_teardown(self) -> None:
         """
         Clean up and destroy the resource.
         """
 
-        @traced(name=f"{self.get_resource_type()}.teardown_resource")
-        def inner_teardown_resource(resource_data: ResourceT) -> None:
+        @traced(
+            name=f"{self.get_resource_type()}.test_teardown",
+            metadata={"resource_data": self._resource_data},
+        )
+        def inner_test_teardown() -> None:
             """
             Inner teardown resource method.
             """
-            return self.teardown_resource(resource_data)
+            return self.test_teardown()
 
-        inner_teardown_resource(resource_data)
+        inner_test_teardown()
 
     @classmethod
     @abstractmethod

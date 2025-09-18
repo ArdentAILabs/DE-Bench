@@ -48,7 +48,7 @@ class MongoDBFixture(
         """Get a specific MongoDB database. Useful for validation and testing."""
         return syncMongoClient[database_name]
 
-    def setup_resource(
+    def test_setup(
         self, resource_config: Optional[MongoResourceConfig] = None
     ) -> MongoResourceData:
         """
@@ -120,7 +120,7 @@ class MongoDBFixture(
         print(f"MongoDB resource {resource_id} created successfully")
         return resource_data
 
-    def teardown_resource(self, resource_data: MongoResourceData) -> None:
+    def test_teardown(self, resource_data: MongoResourceData) -> None:
         """Clean up MongoDB resource"""
         resource_id = resource_data.get("resource_id", "unknown")
         print(f"Cleaning up MongoDB resource {resource_id}")
@@ -164,7 +164,7 @@ class MongoDBFixture(
         resource_data = getattr(self, "_resource_data", None)
         if not resource_data:
             raise Exception(
-                "MongoDB resource data not available - ensure setup_resource was called"
+                "MongoDB resource data not available - ensure test_setup was called"
             )
 
         # Extract database and collection information from created resources
@@ -203,7 +203,7 @@ def mongo_resource(request):
     build_template = request.param
 
     # Use the fixture class
-    resource_data = mongo_fixture.setup_resource(build_template)
+    resource_data = mongo_fixture.test_setup(build_template)
 
     # Add test-specific metadata
     resource_data.update(
@@ -221,4 +221,4 @@ def mongo_resource(request):
     yield resource_data
 
     # Use the fixture class for teardown
-    mongo_fixture.teardown_resource(resource_data)
+    mongo_fixture.test_teardown(resource_data)

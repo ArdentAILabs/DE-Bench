@@ -58,7 +58,7 @@ class GitHubFixture(
         """No session teardown needed for GitHub"""
         pass
 
-    def setup_resource(
+    def test_setup(
         self, resource_config: Optional[GitHubResourceConfig] = None
     ) -> GitHubResourceData:
         """Set up GitHub manager and initialize repository state"""
@@ -140,7 +140,7 @@ class GitHubFixture(
         print(f"✅ GitHub resource {resource_id} ready! ({creation_duration:.2f}s)")
         return resource_data
 
-    def teardown_resource(self, resource_data: GitHubResourceData) -> None:
+    def test_teardown(self, resource_data: GitHubResourceData) -> None:
         """Clean up GitHub resources"""
         resource_id = resource_data["resource_id"]
         github_manager = resource_data["github_manager"]
@@ -212,7 +212,7 @@ class GitHubFixture(
         resource_data = getattr(self, "_resource_data", None)
         if not resource_data:
             raise Exception(
-                "GitHub resource data not available - ensure setup_resource was called"
+                "GitHub resource data not available - ensure test_setup was called"
             )
 
         # Extract connection details from resource data
