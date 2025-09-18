@@ -67,14 +67,34 @@ def full_model_run(
         print(f"✅ Model configs set up for {test_name}")
 
     elif mode == "Claude_Code":
-        # Add Claude_Code-specific setup
-        if "kubernetes_object" in test_resources:
-            custom_info.update(
-                {
-                    "kubernetes_object": test_resources["kubernetes_object"],
-                    "pod_name": test_resources["pod_name"],
-                }
-            )
+        print(f"🔧 Setting up Kubernetes for Claude Code for {test_name}...")
+        
+        # Set up Kubernetes infrastructure for Claude Code
+        config_results = set_up_model_configs(
+            Configs=model_configs,
+            custom_info=custom_info,
+        )
+        
+        # Add the Kubernetes objects to custom_info for the model
+        if config_results:
+            custom_info.update(config_results)
+        
+        print(f"✅ Kubernetes setup completed for {test_name}")
+
+    elif mode == "OpenAI_Codex":
+        print(f"🔧 Setting up Kubernetes for OpenAI Codex for {test_name}...")
+        
+        # Set up Kubernetes infrastructure for OpenAI Codex
+        config_results = set_up_model_configs(
+            Configs=model_configs,
+            custom_info=custom_info,
+        )
+        
+        # Add the Kubernetes objects to custom_info for the model
+        if config_results:
+            custom_info.update(config_results)
+        
+        print(f"✅ Kubernetes setup completed for {test_name}")
 
     # 4. Execute the model
     print(f"🤖 Running model for {test_name}...")
@@ -87,17 +107,28 @@ def full_model_run(
     print(f"✅ Model execution completed for {test_name}")
 
     # Clean up model artifacts first (but keep test resources for validation)
-    if (
-        config_results
-        and mode == "Ardent"
-        and "supabase_account_resource" in test_resources
-    ):
-        print(f"🧹 Cleaning up model artifacts for {test_name}...")
-        cleanup_model_artifacts(
-            Configs=model_configs,
-            custom_info=custom_info,
-        )
-        print(f"✅ Model artifacts cleaned up for {test_name}")
+    if config_results:
+        if mode == "Ardent" and "supabase_account_resource" in test_resources:
+            print(f"🧹 Cleaning up model artifacts for {test_name}...")
+            cleanup_model_artifacts(
+                Configs=model_configs,
+                custom_info=custom_info,
+            )
+            print(f"✅ Model artifacts cleaned up for {test_name}")
+        elif mode == "Claude_Code":
+            print(f"🧹 Cleaning up Kubernetes resources for {test_name}...")
+            cleanup_model_artifacts(
+                Configs=model_configs,
+                custom_info=custom_info,
+            )
+            print(f"✅ Kubernetes resources cleaned up for {test_name}")
+        elif mode == "OpenAI_Codex":
+            print(f"🧹 Cleaning up Kubernetes resources for {test_name}...")
+            cleanup_model_artifacts(
+                Configs=model_configs,
+                custom_info=custom_info,
+            )
+            print(f"✅ Kubernetes resources cleaned up for {test_name}")
 
     return {
         "result": model_result,

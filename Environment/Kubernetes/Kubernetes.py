@@ -74,9 +74,10 @@ class Kubernetes:
         return api_instance
 
     def create_job_in_namespace_with_volume_mount(
-        self, api_instance, shareName, jobID
+        self, api_instance, shareName, jobID, mode
     ):
-        job_manifest = f"""
+        if mode == "Claude_Code":
+            job_manifest = f"""
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -102,6 +103,41 @@ spec:
           value: "{os.getenv('AWS_REGION_CLAUDE', 'us-east-1')}"
         - name: CLAUDE_CODE_USE_BEDROCK
           value: "1"
+        - name: IS_SANDBOX
+          value: "1"
+        volumeMounts:
+        - name: azure-file-share
+          mountPath: /app
+      volumes:
+      - name: azure-file-share
+        azureFile:
+          secretName: azure-secret
+          shareName: {shareName}
+          readOnly: false
+      restartPolicy: Never
+  backoffLimit: 4
+"""
+        elif mode == "OpenAI_Codex":
+            job_manifest = f"""
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {jobID}
+  labels:
+    user-id: "{self.test_id}"
+spec:
+  activeDeadlineSeconds: 43200
+  template:
+    metadata:
+      labels:
+        user-id: "{self.test_id}"
+    spec:
+      containers:
+      - name: custom-container
+        image: {os.getenv("AKS_IMAGE_NAME")}
+        env:
+        - name: OPENAI_API_KEY
+          value: "{os.getenv('OPENAI_API_KEY', '')}"
         - name: IS_SANDBOX
           value: "1"
         volumeMounts:

@@ -72,4 +72,31 @@ def run_model(container, task, configs, extra_information={}):
         }
         print(result)
 
+    if mode == "OpenAI_Codex":
+        # OpenAI Codex via Kubernetes (synchronous)
+        print("Using OpenAI Codex")
+
+        # Prepare identifiers and resources (fully local, no backend IDs)
+
+        job_k8s = extra_information.get("kubernetes_object")
+        pod_name = extra_information.get("pod_name")
+
+        # Run OpenAI Codex with actual task and configs
+        # Escape quotes in task and configs for shell command
+        escaped_task = task.replace('"', '\\"').replace("'", "\\'")
+        escaped_configs = str(configs).replace('"', '\\"').replace("'", "\\'")
+
+        codex_prompt = f"Task: {escaped_task}\\n\\nAvailable configurations: {escaped_configs}\\n\\nPlease complete this task using the provided configurations."
+        codex_command = f'codex exec --dangerously-bypass-approvals-and-sandbox --skip-git-repo-check "{codex_prompt}"'
+        print("This is the codex command")
+        print(codex_command)
+        codex_output = job_k8s.run_terminal_command_in_pod(pod_name, codex_command)
+
+        result = {
+            "status": "pass",
+            "pod_name": pod_name,
+            "codex_output": codex_output,
+        }
+        print(result)
+
     return result

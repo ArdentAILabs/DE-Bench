@@ -142,7 +142,7 @@ AWS_DEFAULT_REGION_CLAUDE="us-east-1"
 # Claude Code Configuration
 IS_SANDBOX=1
 
-# OpenAI Configuration (for OpenAI_Codex mode - Coming Soon)
+# OpenAI Configuration (for OpenAI_Codex mode)
 OPENAI_API_KEY="YOUR_OPENAI_API_KEY"
 AZURE_OPENAI_API_KEY="YOUR_AZURE_OPENAI_API_KEY"
 AZURE_OPENAI_ENDPOINT="YOUR_AZURE_OPENAI_ENDPOINT"
@@ -214,10 +214,17 @@ python run_braintrust_eval.py --filter "Airflow_Agent.*" Ardent
 
 # Run multiple test patterns
 python run_braintrust_eval.py --filter "MongoDB.*" "MySQL.*" Ardent
+
+# Run with different AI modes
+python run_braintrust_eval.py --filter "MongoDB_Agent_Add_Record" Claude_Code
+python run_braintrust_eval.py --filter "MongoDB_Agent_Add_Record" OpenAI_Codex
+
 ```
 
 ### Available Modes:
 - **Ardent** (Default) - Uses Ardent AI's backend service
+- **Claude_Code** - Uses Claude Code via AWS Bedrock in Kubernetes containers
+- **OpenAI_Codex** - Uses OpenAI Codex via OpenAI API in Kubernetes containers
 
 ### Filter Examples:
 ```bash
@@ -231,6 +238,7 @@ python run_braintrust_eval.py --filter "Airflow_Agent.*" Ardent
 python run_braintrust_eval.py --filter "PostgreSQL.*" Ardent
 python run_braintrust_eval.py --filter "Snowflake.*" Ardent
 python run_braintrust_eval.py --filter "MongoDB.*" Ardent
+
 ```
 
 ### 5. Service Configuration
@@ -266,6 +274,10 @@ Snowflake:
 - **MySQL**: Check credentials regularly (AWS RDS defaults rotate weekly)
 - **PostgreSQL**: Must have the default `postgres` database available
 - **Tigerbeetle**: Must be set up with VOPR for testing (if used)
+
+**AI Mode Requirements**:
+- **Claude_Code**: Requires AWS Bedrock access and Azure Kubernetes Service setup
+- **OpenAI_Codex**: Requires valid OpenAI API key and Azure Kubernetes Service setup
 
 ## 🔍 **Test Discovery & Debugging**
 
