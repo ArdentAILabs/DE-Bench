@@ -1,0 +1,479 @@
+#!/usr/bin/env python3
+"""
+Script to manage Astronomer de_bench_test_runner deployments.
+This script can list existing de_bench_test_runner deployments and create additional ones
+with proper sequential numbering.
+"""
+
+import subprocess
+import json
+import re
+import sys
+import argparse
+import os
+import time
+import random
+from typing import List, Dict, Optional
+
+# Add parent directory to path to import utils
+script_dir = os.path.dirname(os.path.abspath(__file__))
+parent_dir = os.path.dirname(script_dir)
+sys.path.insert(0, parent_dir)
+
+# Import parallel utilities
+from utils import map_func
+
+
+class AstroDeploymentManager:
+    # Pattern for test runner deployment names
+    TEST_RUNNER_PATTERN = "de_bench_test_runner"
+    TEST_RUNNER_REGEX = re.compile(rf"^{TEST_RUNNER_PATTERN}_(\d+)$")
+
+    def __init__(self, workspace_id: str = "cmcnpmwr80l9601lyycmaep42"):
+        self.workspace_id = workspace_id
+        self.default_config = {
+            "runtime_version": "13.1.0",
+            "development_mode": "enable",
+            "cloud_provider": "aws",
+            "region": "us-east-1",
+            "description": "This deployment is used for airflow tests and is hibernated when not in use.",
+            "scheduler_size": "small",
+        }
+
+    def run_astro_command(
+        self, command: List[str], exit_on_error: bool = True
+    ) -> subprocess.CompletedProcess:
+        """Run an astro CLI command and return the result."""
+        try:
+            result = subprocess.run(command, capture_output=True, text=True, check=True)
+            return result
+        except subprocess.CalledProcessError as e:
+            if exit_on_error:
+                print(f"Error running command: {' '.join(command)}")
+                print(f"Error output: {e.stderr}")
+                sys.exit(1)
+            else:
+                # Return the failed result for handling by caller
+                return e
+
+    def list_deployments(self) -> List[Dict]:
+        """List all deployments in the workspace."""
+        command = ["astro", "deployment", "list", "--workspace-id", self.workspace_id]
+        result = self.run_astro_command(command)
+
+        # Parse the output to extract deployment information
+        deployments = []
+        lines = result.stdout.strip().split("\n")
+
+        # Skip header lines and find data rows
+        data_started = False
+        for line in lines:
+            if "---" in line or "NAME" in line:
+                data_started = True
+                continue
+
+            if data_started and line.strip():
+                # Split by whitespace, handling multiple spaces
+                parts = [part for part in line.split() if part]
+                if len(parts) >= 6:  # Ensure we have enough columns
+                    deployment = {
+                        "name": parts[0],
+                        "namespace": parts[1],
+                        "cluster": parts[2],
+                        "cloud_provider": parts[3],
+                        "region": parts[4],
+                        "deployment_id": parts[5],
+                    }
+                    deployments.append(deployment)
+
+        return deployments
+
+    def get_test_runner_deployments(self) -> List[Dict]:
+        """Get all deployments that match the de_bench_test_runner_X pattern."""
+        all_deployments = self.list_deployments()
+
+        test_runners = []
+        for deployment in all_deployments:
+            match = self.TEST_RUNNER_REGEX.match(deployment["name"])
+            if match:
+                deployment["runner_number"] = int(match.group(1))
+                test_runners.append(deployment)
+
+        # Sort by runner number
+        test_runners.sort(key=lambda x: x["runner_number"])
+        return test_runners
+
+    def get_next_runner_number(self) -> int:
+        """Get the next available de_bench_test_runner number, filling gaps first."""
+        test_runners = self.get_test_runner_deployments()
+        if not test_runners:
+            return 1
+
+        # Get all existing runner numbers and sort them
+        existing_numbers = sorted([tr["runner_number"] for tr in test_runners])
+
+        # Find the first gap in the sequence
+        for i in range(1, max(existing_numbers) + 1):
+            if i not in existing_numbers:
+                return i
+
+        # No gaps found, return the next number after the highest
+        return max(existing_numbers) + 1
+
+    def create_test_runner_deployment(
+        self,
+        runner_number: int,
+        config: Optional[Dict] = None,
+        max_retries: int = 5,
+        max_wait: float = 10.0,
+    ) -> bool:
+        """Create a new de_bench_test_runner deployment with retry logic and exponential backoff."""
+        if config is None:
+            config = self.default_config.copy()
+
+        deployment_name = f"{self.TEST_RUNNER_PATTERN}_{runner_number}"
+
+        command = [
+            "astro",
+            "deployment",
+            "create",
+            "--workspace-id",
+            self.workspace_id,
+            "--name",
+            deployment_name,
+            "--runtime-version",
+            config["runtime_version"],
+            "--development-mode",
+            config["development_mode"],
+            "--cloud-provider",
+            config["cloud_provider"],
+            "--region",
+            config["region"],
+            "-d",
+            config["description"],
+            "--scheduler-size",
+            config["scheduler_size"],
+        ]
+
+        print(f"Creating deployment: {deployment_name}")
+
+        for attempt in range(max_retries):
+            result = self.run_astro_command(command, exit_on_error=False)
+
+            # Check if the result is an exception (failed command)
+            if isinstance(result, subprocess.CalledProcessError):
+                error_msg = (
+                    result.stderr.strip()
+                    if result.stderr
+                    else f"Command failed with exit code {result.returncode}"
+                )
+
+                if attempt < max_retries - 1:  # Not the last attempt
+                    # Calculate wait time with exponential backoff + jitter
+                    base_wait = min(2**attempt, max_wait)
+                    jitter = random.uniform(0, 0.1 * base_wait)  # 10% jitter
+                    wait_time = min(base_wait + jitter, max_wait)
+
+                    print(
+                        f"⚠️  Attempt {attempt + 1}/{max_retries} failed for {deployment_name}: {error_msg}"
+                    )
+                    print(f"🔄 Retrying in {wait_time:.1f}s...")
+                    time.sleep(wait_time)
+                else:
+                    print(
+                        f"❌ Failed to create {deployment_name} after {max_retries} attempts: {error_msg}"
+                    )
+                    return False
+            else:
+                print(
+                    f"✅ Successfully created {deployment_name}"
+                    + (f" (attempt {attempt + 1})" if attempt > 0 else "")
+                )
+                if result.stdout:
+                    print(f"Output: {result.stdout}")
+                return True
+
+        return False
+
+    def get_next_available_numbers(self, count: int) -> List[int]:
+        """Get the next N available runner numbers, filling gaps first."""
+        test_runners = self.get_test_runner_deployments()
+        existing_numbers = set([tr["runner_number"] for tr in test_runners])
+
+        available_numbers = []
+        current = 1
+
+        while len(available_numbers) < count:
+            if current not in existing_numbers:
+                available_numbers.append(current)
+            current += 1
+
+        return available_numbers
+
+    def create_multiple_test_runners(self, count: int) -> List[str]:
+        """Create multiple de_bench_test_runner deployments in parallel, filling gaps first."""
+        runner_numbers = self.get_next_available_numbers(count)
+
+        print(
+            f"Creating {count} new {self.TEST_RUNNER_PATTERN} deployments in parallel"
+        )
+        print(f"Numbers to create: {', '.join(map(str, runner_numbers))}")
+
+        # Create wrapper function for parallel processing
+        def create_single_runner(runner_number: int) -> Dict:
+            """Create a single test runner and return result info."""
+            success = self.create_test_runner_deployment(runner_number)
+            return {
+                "runner_number": runner_number,
+                "name": f"{self.TEST_RUNNER_PATTERN}_{runner_number}",
+                "success": success,
+            }
+
+        # Process all creations in parallel
+        results = map_func(create_single_runner, runner_numbers)
+
+        # Extract successful deployments
+        created_deployments = []
+        for result in results:
+            if result["success"]:
+                created_deployments.append(result["name"])
+            else:
+                print(
+                    f"⚠️  Failed to create {result['name']}, continuing with remaining deployments..."
+                )
+
+        return created_deployments
+
+    def display_test_runners(self):
+        """Display all existing de_bench_test_runner deployments."""
+        test_runners = self.get_test_runner_deployments()
+
+        if not test_runners:
+            print(f"No {self.TEST_RUNNER_PATTERN} deployments found.")
+            return
+
+        print(f"\nFound {len(test_runners)} {self.TEST_RUNNER_PATTERN} deployment(s):")
+        print("=" * 80)
+        print(f"{'NAME':<30} {'DEPLOYMENT ID':<30} {'REGION':<15} {'STATUS'}")
+        print("-" * 80)
+
+        for tr in test_runners:
+            print(
+                f"{tr['name']:<30} {tr['deployment_id']:<30} {tr['region']:<15} Active"
+            )
+
+    def delete_deployment(
+        self, deployment_id: str, deployment_name: str
+    ) -> tuple[bool, str]:
+        """Delete a deployment by ID. Returns (success, error_message)."""
+        command = [
+            "astro",
+            "deployment",
+            "delete",
+            deployment_id,
+            "--force",  # Skip confirmation in CLI
+        ]
+
+        print(f"Deleting deployment: {deployment_name} ({deployment_id})")
+        result = self.run_astro_command(command, exit_on_error=False)
+
+        # Check if the result is an exception (failed command)
+        if isinstance(result, subprocess.CalledProcessError):
+            error_msg = (
+                result.stderr.strip()
+                if result.stderr
+                else f"Command failed with exit code {result.returncode}"
+            )
+            print(f"❌ Failed to delete {deployment_name}: {error_msg}")
+            return False, error_msg
+        else:
+            print(f"✅ Successfully deleted {deployment_name}")
+            return True, ""
+
+    def delete_all_test_runners(self) -> tuple[List[str], List[Dict]]:
+        """Delete all de_bench_test_runner deployments with confirmation. Returns (successful_deletions, failed_deletions)."""
+        test_runners = self.get_test_runner_deployments()
+
+        if not test_runners:
+            print(f"No {self.TEST_RUNNER_PATTERN} deployments found to delete.")
+            return [], []
+
+        print(
+            f"\n⚠️  Found {len(test_runners)} {self.TEST_RUNNER_PATTERN} deployment(s) to delete:"
+        )
+        print("=" * 80)
+        for tr in test_runners:
+            print(f"  - {tr['name']} ({tr['deployment_id']})")
+
+        print("\n🚨 WARNING: This action cannot be undone!")
+        confirm1 = input(
+            f"Are you sure you want to delete ALL {self.TEST_RUNNER_PATTERN} deployments? (type 'yes' to confirm): "
+        )
+
+        if confirm1.lower() != "yes":
+            print("❌ Deletion cancelled.")
+            return [], []
+
+        confirm2 = input(
+            f"Final confirmation: Delete {len(test_runners)} deployments? (type 'DELETE' to confirm): "
+        )
+
+        if confirm2 != "DELETE":
+            print("❌ Deletion cancelled.")
+            return [], []
+
+        print(
+            f"\n🗑️  Deleting {len(test_runners)} {self.TEST_RUNNER_PATTERN} deployments in parallel..."
+        )
+
+        # Create a wrapper function for parallel processing
+        def delete_single_deployment(deployment_info: Dict) -> Dict:
+            """Delete a single deployment and return result info."""
+            success, error_msg = self.delete_deployment(
+                deployment_info["deployment_id"], deployment_info["name"]
+            )
+
+            return {
+                "name": deployment_info["name"],
+                "deployment_id": deployment_info["deployment_id"],
+                "success": success,
+                "error": error_msg,
+            }
+
+        # Process all deletions in parallel
+        results = map_func(delete_single_deployment, test_runners)
+
+        # Separate successful and failed deletions
+        deleted_deployments = []
+        failed_deletions = []
+
+        for result in results:
+            if result["success"]:
+                deleted_deployments.append(result["name"])
+            else:
+                failed_deletions.append(
+                    {
+                        "name": result["name"],
+                        "deployment_id": result["deployment_id"],
+                        "error": result["error"],
+                    }
+                )
+
+        return deleted_deployments, failed_deletions
+
+
+def main():
+    """Main function to handle command line interaction."""
+    parser = argparse.ArgumentParser(
+        description="Manage Astronomer de_bench_test_runner deployments",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  %(prog)s                    # Interactive mode to create deployments
+  %(prog)s --delete-all       # Delete all de_bench_test_runner deployments
+        """,
+    )
+    parser.add_argument(
+        "--delete-all",
+        action="store_true",
+        help="Delete all de_bench_test_runner deployments (requires confirmation)",
+    )
+
+    args = parser.parse_args()
+    manager = AstroDeploymentManager()
+
+    print("🚀 Astronomer Test Runner Deployment Manager")
+    print("=" * 50)
+
+    if args.delete_all:
+        # Delete all test_runner deployments
+        try:
+            deleted, failed = manager.delete_all_test_runners()
+
+            # Print summary
+            print("\n" + "=" * 80)
+            print("🔥 DELETION SUMMARY")
+            print("=" * 80)
+
+            if deleted:
+                print(f"\n✅ Successfully deleted {len(deleted)} deployment(s):")
+                for deployment in deleted:
+                    print(f"  - {deployment}")
+
+            if failed:
+                print(f"\n❌ Failed to delete {len(failed)} deployment(s):")
+                for failure in failed:
+                    print(f"  - {failure['name']} ({failure['deployment_id']})")
+                    print(f"    Reason: {failure['error']}")
+
+            if not deleted and not failed:
+                print("\n❌ No deployments were processed.")
+
+            # Overall result
+            total_attempted = len(deleted) + len(failed)
+            if total_attempted > 0:
+                success_rate = (len(deleted) / total_attempted) * 100
+                print(
+                    f"\n📊 Overall: {len(deleted)}/{total_attempted} successful ({success_rate:.1f}%)"
+                )
+
+        except KeyboardInterrupt:
+            print("\n\n👋 Cancelled by user.")
+        except Exception as e:
+            print(f"❌ An error occurred: {e}")
+    else:
+        # Interactive mode to create deployments
+        # Display existing test runners
+        manager.display_test_runners()
+
+        # Get user input for how many new deployments to create
+        try:
+            # Show preview of what numbers would be created
+            print(f"\nNext available numbers (filling gaps first):")
+            preview_numbers = manager.get_next_available_numbers(
+                10
+            )  # Show first 10 available
+            print(
+                f"  {', '.join(map(str, preview_numbers[:5]))}"
+                + ("..." if len(preview_numbers) > 5 else "")
+            )
+
+            count_input = input(
+                f"\nHow many new {manager.TEST_RUNNER_PATTERN} deployments would you like to create? (0 to exit): "
+            )
+            count = int(count_input.strip())
+
+            if count <= 0:
+                print("No deployments to create. Exiting.")
+                return
+
+            if count > 10:
+                confirm = input(
+                    f"You're about to create {count} deployments. Are you sure? (y/N): "
+                )
+                if confirm.lower() != "y":
+                    print("Cancelled.")
+                    return
+
+            # Create the deployments
+            created = manager.create_multiple_test_runners(count)
+
+            print(f"\n✅ Successfully created {len(created)} deployment(s):")
+            for deployment in created:
+                print(f"  - {deployment}")
+
+            if len(created) < count:
+                print(
+                    f"\n⚠️  Only {len(created)} out of {count} deployments were created due to errors."
+                )
+
+        except ValueError:
+            print("❌ Invalid input. Please enter a valid number.")
+        except KeyboardInterrupt:
+            print("\n\n👋 Cancelled by user.")
+        except Exception as e:
+            print(f"❌ An error occurred: {e}")
+
+
+if __name__ == "__main__":
+    main()
