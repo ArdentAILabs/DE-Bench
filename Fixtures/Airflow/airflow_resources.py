@@ -3,6 +3,7 @@ This module provides a pytest fixture for creating isolated Airflow instances us
 """
 
 import fcntl
+import functools
 import os
 import re
 import shutil
@@ -26,6 +27,56 @@ VALIDATE_ASTRO_INSTALL = "Please check if the Astro CLI is installed and in PATH
 load_dotenv()
 
 
+def retry_astro_command(max_retries: int = 3):
+    """
+    Retry decorator for astro CLI commands with exponential backoff.
+
+    :param max_retries: Maximum number of retries (default 3, so 4 total attempts)
+    :return: Decorated function
+    """
+
+    def decorator(func):
+        @functools.wraps(func)
+        def wrapper(*args, **kwargs):
+            last_exception = None
+
+            for attempt in range(max_retries + 1):  # +1 for the initial attempt
+                try:
+                    return func(*args, **kwargs)
+                except (
+                    subprocess.CalledProcessError,
+                    EnvironmentError,
+                    ValueError,
+                ) as e:
+                    last_exception = e
+
+                    if attempt == max_retries:
+                        # Final attempt failed
+                        print(
+                            f"Worker {os.getpid()}: {func.__name__} failed after {max_retries + 1} attempts: {e}"
+                        )
+                        raise
+
+                    # Calculate exponential backoff: 2^attempt seconds
+                    wait_time = 2**attempt
+                    print(
+                        f"Worker {os.getpid()}: {func.__name__} failed (attempt {attempt + 1}/{max_retries + 1}): {e}"
+                    )
+                    print(
+                        f"Worker {os.getpid()}: Retrying {func.__name__} in {wait_time} seconds..."
+                    )
+                    time.sleep(wait_time)
+
+            # This should never be reached, but just in case
+            if last_exception:
+                raise last_exception
+
+        return wrapper
+
+    return decorator
+
+
+@retry_astro_command(max_retries=3)
 def _ensure_astro_login() -> None:
     """
     Ensure Astro is logged in using file-based coordination to prevent multiple logins in parallel.
@@ -355,6 +406,7 @@ def airflow_resource(request, astro_login, shared_cache_manager):
         cleanup_airflow_resource(resource_id, test_resources, test_dir)
 
 
+@retry_astro_command(max_retries=3)
 def _parse_astro_version() -> None:
     """
     Runs the `astro version` command to check if the Astro CLI is installed and returns the version number.
@@ -495,6 +547,7 @@ def _check_and_update_gh_secrets(
 
 
 @traced(name="_create_deployment_in_astronomer")
+@retry_astro_command(max_retries=3)
 def _create_deployment_in_astronomer(
     deployment_name: str, wait: Optional[bool] = True
 ) -> Optional[str]:
@@ -549,6 +602,7 @@ def _create_deployment_in_astronomer(
         raise e from e
 
 
+@retry_astro_command(max_retries=3)
 def _create_dir_and_astro_project(unique_id: str) -> Path:
     """
     Creates a directory and an Astro project in it.
@@ -583,6 +637,7 @@ def _create_dir_and_astro_project(unique_id: str) -> Path:
 
 
 @traced(name="fetch_astro_deployments")
+@retry_astro_command(max_retries=3)
 def fetch_astro_deployments() -> list[dict[str, str]]:
     """
     Helper method to find the hibernating deployment in Astronomer.
@@ -626,6 +681,7 @@ def fetch_astro_deployments() -> list[dict[str, str]]:
 
 
 @traced(name="_check_deployment_status")
+@retry_astro_command(max_retries=3)
 def _check_deployment_status(deployment_name: str) -> str:
     """
     Helper method to check the status of a deployment in Astronomer.
@@ -656,6 +712,7 @@ def _check_deployment_status(deployment_name: str) -> str:
 
 
 @traced(name="_wake_up_deployment")
+@retry_astro_command(max_retries=3)
 def _wake_up_deployment(deployment_name: str) -> None:
     """
     Helper method to wake up a deployment in Astronomer.
@@ -709,6 +766,7 @@ def _validate_deployment_status(deployment_name: str, expected_status: str) -> N
     )
 
 
+@retry_astro_command(max_retries=3)
 def _hibernate_deployment(deployment_name: str) -> None:
     """
     Helper method to hibernate a deployment in Astronomer.
@@ -740,6 +798,7 @@ def _hibernate_deployment(deployment_name: str) -> None:
 
 
 @traced(name="_create_variables_in_airflow_deployment")
+@retry_astro_command(max_retries=3)
 def _create_variables_in_airflow_deployment(deployment_name: str) -> None:
     """
     Helper method to create a user in the Airflow deployment using Astronomer CLI and environment variables in Airflow.
@@ -847,6 +906,7 @@ def _create_variables_in_airflow_deployment(deployment_name: str) -> None:
 
 
 @traced(name="cleanup_airflow_resource")
+@retry_astro_command(max_retries=3)
 def cleanup_airflow_resource(
     resource_id: str,
     test_resources: list[tuple],
@@ -904,6 +964,7 @@ def cleanup_airflow_resource(
         print(f"Worker {os.getpid()}: Error cleaning up Airflow resource: {e}")
 
 
+@retry_astro_command(max_retries=3)
 def _get_deployment_id_by_name(deployment_name: str) -> Optional[str]:
     """
     Helper function to get the deployment ID by deployment name from Astronomer using inspect command.
@@ -949,6 +1010,7 @@ def _get_deployment_id_by_name(deployment_name: str) -> Optional[str]:
 
 
 @traced(name="_create_astro_deployment_api_token")
+@retry_astro_command(max_retries=3)
 def _create_astro_deployment_api_token(
     deployment_id: str, deployment_name: str, retries: int = 5
 ) -> str:
