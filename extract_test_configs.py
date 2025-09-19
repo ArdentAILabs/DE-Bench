@@ -337,7 +337,7 @@ def setup_supabase_account_resource(mode: str = "Ardent") -> SupabaseAccountReso
                 "Authorization": f"Bearer {jwt_token}",
                 "Content-Type": "application/json",
             },
-            timeout=10,
+            timeout=120,
         )
 
         if not token_creation_response.ok:
