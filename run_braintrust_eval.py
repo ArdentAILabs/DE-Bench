@@ -361,8 +361,11 @@ def teardown_all_fixtures(args: TeardownAllFixturesArgs) -> None:
                 print(f"🧹 Tearing down fixtures for test: {test.test_name}")
                 for fixture in reversed(test.fixtures):
                     try:
-                        fixture.teardown()
-                        print(f"...✅ Tore down fixture: {fixture.get_resource_type()}")
+                        if hasattr(fixture, "test_teardown"):
+                            fixture.test_teardown()
+                            print(
+                                f"...✅ Tore down fixture: {fixture.get_resource_type()}"
+                            )
                     except Exception as e:
                         print(f"⚠️ Error tearing down fixture for {test.test_name}: {e}")
                         continue
@@ -376,7 +379,9 @@ def signal_handler(signum: int, frame: Any) -> None:
     sys.exit(0)
 
 
-def discover_available_tests(filter_patterns: Optional[List[str]] = None) -> List[str]:
+def discover_available_tests(
+    filter_patterns: Optional[List[str]] = None,
+) -> Dict[str, List[str]]:
     """
     Dynamically discover available tests for Braintrust evaluation with optional filtering.
 
@@ -388,14 +393,14 @@ def discover_available_tests(filter_patterns: Optional[List[str]] = None) -> Lis
         filter_patterns: List of regex patterns to filter test names
 
     Returns:
-        List of test names that match the filter patterns (if any)
+        Dict with 'all_tests' (all discovered valid tests) and 'filtered_tests' (tests matching filter patterns)
     """
     available_tests = []
     tests_dir = "Tests"
 
     if not os.path.exists(tests_dir):
         print(f"⚠️  Tests directory '{tests_dir}' not found")
-        return []
+        return {"all_tests": [], "filtered_tests": []}
 
     # Scan all directories in Tests/
     for item in os.listdir(tests_dir):
@@ -420,6 +425,7 @@ def discover_available_tests(filter_patterns: Optional[List[str]] = None) -> Lis
     available_tests.sort()
 
     # Apply filters if provided
+    filtered_tests = available_tests.copy()  # Default to all tests
     if filter_patterns:
         filtered_tests = []
         for test_name in available_tests:
@@ -431,9 +437,8 @@ def discover_available_tests(filter_patterns: Optional[List[str]] = None) -> Lis
                 except re.error as e:
                     print(f"⚠️  Invalid regex pattern '{pattern}': {e}")
                     continue
-        return filtered_tests
 
-    return available_tests
+    return {"all_tests": available_tests, "filtered_tests": filtered_tests}
 
 
 def _is_valid_new_pattern_test(test_name: str) -> bool:
@@ -614,6 +619,7 @@ Examples:
 def run_multi_test_evaluation(
     modes: List[str] = ["Ardent"],
     test_names: Optional[List[str]] = None,
+    all_valid_tests: Optional[List[str]] = None,
     verbose: bool = False,
     skip_model_run: bool = False,
 ) -> Dict[str, Any]:
@@ -630,10 +636,18 @@ def run_multi_test_evaluation(
 
     # Discover available tests if not specified
     if test_names is None:
-        test_names = discover_available_tests()
+        test_discovery = discover_available_tests()
+        test_names = test_discovery["filtered_tests"]
+        if all_valid_tests is None:
+            all_valid_tests = test_discovery["all_tests"]
+
+    # Ensure all_valid_tests is set (fallback if not provided)
+    if all_valid_tests is None:
+        all_valid_tests = test_names
 
     if verbose:
-        print(f"🔍 Available tests discovered: {test_names}")
+        print(f"🔍 All valid tests discovered: {all_valid_tests}")
+        print(f"🔍 Tests to run (after filtering): {test_names}")
 
     if not test_names:
         print("❌ No tests found matching the filter criteria")
@@ -755,7 +769,8 @@ def run_multi_test_evaluation(
                     "test_types": test_names,
                     "timestamp": str(time.time()),
                     "num_tests_included": len(mode_samples),
-                    "num_tests_excluded": len(test_names) - len(mode_samples),
+                    "num_tests_excluded": len(all_valid_tests) - len(test_names),
+                    "all_valid_tests": all_valid_tests,
                 },
                 # TODO: Make this configurable
                 max_concurrency=20,
@@ -793,14 +808,19 @@ if __name__ == "__main__":
         # Discover tests with filtering
         if args.filter_patterns:
             print(f"🔍 Filtering tests with patterns: {args.filter_patterns}")
-            filtered_tests = discover_available_tests(args.filter_patterns)
+            test_discovery = discover_available_tests(args.filter_patterns)
+            filtered_tests = test_discovery["filtered_tests"]
+            all_tests = test_discovery["all_tests"]
         else:
-            filtered_tests = None
+            test_discovery = discover_available_tests()
+            filtered_tests = test_discovery["filtered_tests"]
+            all_tests = test_discovery["all_tests"]
 
         # Run evaluation on filtered tests
         results = run_multi_test_evaluation(
             modes=args.modes,
             test_names=filtered_tests,
+            all_valid_tests=all_tests,
             verbose=args.verbose,
             skip_model_run=args.skip_model_run,
         )
