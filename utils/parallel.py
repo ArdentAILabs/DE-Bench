@@ -32,3 +32,5 @@ def map_func(func: Callable, items: List[Any]) -> List[Any]:
 
     with ThreadPoolExecutor() as executor:
         return list(executor.map(func, items))
+
+

@@ -126,8 +126,9 @@ class AstroDeploymentManager:
         config: Optional[Dict] = None,
         max_retries: int = 5,
         max_wait: float = 10.0,
-    ) -> bool:
-        """Create a new de_bench_test_runner deployment with retry logic and exponential backoff."""
+    ) -> tuple[bool, bool]:
+        """Create a new de_bench_test_runner deployment with retry logic and exponential backoff.
+        Returns (creation_success, hibernation_success)."""
         if config is None:
             config = self.default_config.copy()
 
@@ -183,7 +184,7 @@ class AstroDeploymentManager:
                     print(
                         f"❌ Failed to create {deployment_name} after {max_retries} attempts: {error_msg}"
                     )
-                    return False
+                    return False, False
             else:
                 print(
                     f"✅ Successfully created {deployment_name}"
@@ -191,6 +192,68 @@ class AstroDeploymentManager:
                 )
                 if result.stdout:
                     print(f"Output: {result.stdout}")
+
+                # Immediately hibernate the deployment after creation
+                hibernate_success = self.hibernate_deployment(deployment_name)
+                if not hibernate_success:
+                    print(
+                        f"⚠️  WARNING: {deployment_name} was created but failed to hibernate!"
+                    )
+                    print(
+                        f"    You may need to manually hibernate this deployment to avoid costs."
+                    )
+
+                return True, hibernate_success
+
+        return False, False
+
+    def hibernate_deployment(
+        self, deployment_name: str, max_retries: int = 3, max_wait: float = 5.0
+    ) -> bool:
+        """Hibernate a deployment with retry logic and exponential backoff."""
+        command = [
+            "astro",
+            "deployment",
+            "hibernate",
+            "--deployment-name",
+            deployment_name,
+            "-f",  # Force without confirmation
+        ]
+
+        print(f"🛌 Hibernating deployment: {deployment_name}")
+
+        for attempt in range(max_retries):
+            result = self.run_astro_command(command, exit_on_error=False)
+
+            # Check if the result is an exception (failed command)
+            if isinstance(result, subprocess.CalledProcessError):
+                error_msg = (
+                    result.stderr.strip()
+                    if result.stderr
+                    else f"Command failed with exit code {result.returncode}"
+                )
+
+                if attempt < max_retries - 1:  # Not the last attempt
+                    # Calculate wait time with exponential backoff + jitter
+                    base_wait = min(2**attempt, max_wait)
+                    jitter = random.uniform(0, 0.1 * base_wait)  # 10% jitter
+                    wait_time = min(base_wait + jitter, max_wait)
+
+                    print(
+                        f"⚠️  Hibernation attempt {attempt + 1}/{max_retries} failed for {deployment_name}: {error_msg}"
+                    )
+                    print(f"🔄 Retrying hibernation in {wait_time:.1f}s...")
+                    time.sleep(wait_time)
+                else:
+                    print(
+                        f"❌ Failed to hibernate {deployment_name} after {max_retries} attempts: {error_msg}"
+                    )
+                    return False
+            else:
+                print(
+                    f"✅ Successfully hibernated {deployment_name}"
+                    + (f" (attempt {attempt + 1})" if attempt > 0 else "")
+                )
                 return True
 
         return False
@@ -210,8 +273,9 @@ class AstroDeploymentManager:
 
         return available_numbers
 
-    def create_multiple_test_runners(self, count: int) -> List[str]:
-        """Create multiple de_bench_test_runner deployments in parallel, filling gaps first."""
+    def create_multiple_test_runners(self, count: int) -> tuple[List[str], List[str]]:
+        """Create multiple de_bench_test_runner deployments in parallel, filling gaps first.
+        Returns (created_deployments, hibernation_failed_deployments)."""
         runner_numbers = self.get_next_available_numbers(count)
 
         print(
@@ -222,27 +286,34 @@ class AstroDeploymentManager:
         # Create wrapper function for parallel processing
         def create_single_runner(runner_number: int) -> Dict:
             """Create a single test runner and return result info."""
-            success = self.create_test_runner_deployment(runner_number)
+            creation_success, hibernation_success = self.create_test_runner_deployment(
+                runner_number
+            )
             return {
                 "runner_number": runner_number,
                 "name": f"{self.TEST_RUNNER_PATTERN}_{runner_number}",
-                "success": success,
+                "creation_success": creation_success,
+                "hibernation_success": hibernation_success,
             }
 
         # Process all creations in parallel
         results = map_func(create_single_runner, runner_numbers)
 
-        # Extract successful deployments
+        # Extract successful deployments and track hibernation failures
         created_deployments = []
+        hibernation_failed = []
+
         for result in results:
-            if result["success"]:
+            if result["creation_success"]:
                 created_deployments.append(result["name"])
+                if not result["hibernation_success"]:
+                    hibernation_failed.append(result["name"])
             else:
                 print(
                     f"⚠️  Failed to create {result['name']}, continuing with remaining deployments..."
                 )
 
-        return created_deployments
+        return created_deployments, hibernation_failed
 
     def display_test_runners(self):
         """Display all existing de_bench_test_runner deployments."""
@@ -456,7 +527,7 @@ Examples:
                     return
 
             # Create the deployments
-            created = manager.create_multiple_test_runners(count)
+            created, hibernation_failed = manager.create_multiple_test_runners(count)
 
             print(f"\n✅ Successfully created {len(created)} deployment(s):")
             for deployment in created:
@@ -466,6 +537,25 @@ Examples:
                 print(
                     f"\n⚠️  Only {len(created)} out of {count} deployments were created due to errors."
                 )
+
+            # Show hibernation failure summary if any
+            if hibernation_failed:
+                print(f"\n🚨 HIBERNATION FAILURES - MANUAL ACTION REQUIRED!")
+                print("=" * 60)
+                print(
+                    f"The following {len(hibernation_failed)} deployment(s) were created but failed to hibernate:"
+                )
+                for deployment in hibernation_failed:
+                    print(f"  ⚠️  {deployment}")
+                print(
+                    "\n💡 To avoid costs, manually hibernate these deployments using:"
+                )
+                print(
+                    "   astro deployment hibernate --deployment-name <DEPLOYMENT_NAME> -f"
+                )
+                print("   Or use the Astronomer UI to hibernate them.")
+            elif created:
+                print(f"\n✅ All {len(created)} deployments successfully hibernated!")
 
         except ValueError:
             print("❌ Invalid input. Please enter a valid number.")
