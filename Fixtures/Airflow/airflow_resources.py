@@ -102,7 +102,7 @@ def _ensure_astro_login() -> None:
             try:
                 # Try a simple command that requires authentication
                 result = subprocess.run(
-                    ["astro", "deployment", "list"],
+                    ["astro", "deployment", "list", "--workspace-id", os.getenv("ASTRO_WORKSPACE_ID")],
                     capture_output=True,
                     text=True,
                     timeout=10,
@@ -648,7 +648,7 @@ def fetch_astro_deployments() -> list[dict[str, str]]:
     astro_deployments: list[dict[str, str]] = []
     # get all deployments
     deployment_command_output = _run_and_validate_subprocess(
-        ["astro", "deployment", "list"],
+        ["astro", "deployment", "list", "--workspace-id", os.getenv("ASTRO_WORKSPACE_ID")],
         "listing deployments in Astronomer",
         return_output=True,
     )
