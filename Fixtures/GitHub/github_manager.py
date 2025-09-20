@@ -186,6 +186,53 @@ class GitHubManager:
                 
         return dag_files
 
+    def get_requirements_text(self, branch: Optional[str] = None) -> Optional[Dict[str, str]]:
+        """
+        Retrieve the contents of requirements.txt from the repository for a given branch.
+
+        Tries common locations in order:
+          1) Requirements/requirements.txt
+          2) requirements.txt (repo root)
+
+        :param branch: Branch name to read from (defaults to current test branch or main)
+        :return: {"path": <path>, "content": <text>} or None if not found
+        :rtype: Optional[Dict[str, str]]
+        """
+        try_branch = branch or getattr(self, 'branch_name', 'main')
+        candidate_paths = [
+            os.path.join("Requirements", "requirements.txt"),
+            "requirements.txt",
+        ]
+
+        for path in candidate_paths:
+            try:
+                file_content = self.repo.get_contents(path, ref=try_branch)
+                if isinstance(file_content, list):
+                    continue
+                content_text = file_content.decoded_content.decode("utf-8")
+                return {"path": path, "content": content_text}
+            except github.GithubException as e:
+                if getattr(e, "status", None) == 404:
+                    continue
+                # Surface unexpected errors
+                raise e
+
+        # Not found in the target branch; try main as a last resort if different
+        if try_branch != "main":
+            for path in candidate_paths:
+                try:
+                    file_content = self.repo.get_contents(path, ref="main")
+                    if isinstance(file_content, list):
+                        continue
+                    content_text = file_content.decoded_content.decode("utf-8")
+                    return {"path": path, "content": content_text}
+                except github.GithubException as e:
+                    if getattr(e, "status", None) == 404:
+                        continue
+                    raise e
+
+        return None
+
     def clear_folder(self, folder_name: str, keep_file_names: Optional[list[str]] = None) -> None:
         """
         Clear the folder and ensure .gitkeep exists and nothing else.

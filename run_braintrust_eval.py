@@ -41,7 +41,7 @@ def _teardown_test_fixtures(test_name, fixtures, test_resources=None):
     try:
         if fixtures:
             print(
-                f"🧹 Tearing down {len(fixtures)} fixtures for {test_name} (fixtures: {', '.join([f'"{f.get_resource_type()}"' for f in fixtures])})"
+                f"🧹 Tearing down {len(fixtures)} fixtures for {test_name} (fixtures: {', '.join([f.get_resource_type() for f in fixtures])})"
             )
 
             for fixture in reversed(fixtures):
