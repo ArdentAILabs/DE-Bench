@@ -390,6 +390,105 @@ def validate_test(model_result, fixtures=None):
             "Result_Message"
         ] = f"✅ DAG '{dag_name}' executed successfully (run_id: {dag_run_id})"
 
+        # Capture comprehensive DAG information for debugging (source, import errors, task logs)
+        print("📊 Capturing comprehensive DAG information for debugging...")
+        try:
+            comprehensive_dag_info = airflow_instance.get_comprehensive_dag_info(
+                dag_id=dag_name,
+                dag_run_id=dag_run_id,
+                github_manager=github_manager,
+            )
+
+            # Add requirements.txt snapshot to comprehensive DAG info
+            print(f"📦 Adding requirements.txt snapshot from feature branch: {branch_name}")
+            req_snapshot = None
+            candidate_paths = ["Requirements/requirements.txt", "requirements.txt"]
+            
+            for path in candidate_paths:
+                try:
+                    content = github_manager.get_file_content(path, branch_name)
+                    if content is not None:
+                        req_snapshot = {"path": path, "content": content}
+                        print(f"✅ Found requirements.txt at {path}")
+                        break
+                except Exception as e:
+                    print(f"⚠️ Could not read {path} from {branch_name}: {e}")
+                    continue
+            
+            if req_snapshot:
+                comprehensive_dag_info["requirements_snapshot"] = req_snapshot
+                print(f"📄 Requirements snapshot added to comprehensive DAG info ({len(req_snapshot['content'])} chars)")
+            else:
+                print("⚠️ requirements.txt not found in any expected location")
+
+            dag_source = comprehensive_dag_info.get("dag_source", {})
+            import_errors = comprehensive_dag_info.get("import_errors", [])
+
+            if dag_source.get("source_code"):
+                print(
+                    f"📄 DAG source code captured ({len(dag_source['source_code'])} characters)"
+                )
+                print(
+                    f"📄 Source code preview: {dag_source['source_code'][:200]}..."
+                )
+            else:
+                print("⚠️ DAG source code not available - attempting manual retrieval...")
+                try:
+                    dag_files = github_manager.get_all_dag_files()
+                    if dag_files:
+                        comprehensive_dag_info.setdefault("dag_source", {}).setdefault("github_files", dag_files)
+                        for filename, file_data in dag_files.items():
+                            if filename.endswith('.py'):
+                                comprehensive_dag_info["dag_source"]["source_code"] = file_data["content"]
+                                print(
+                                    f"✅ Retrieved DAG source from GitHub: {filename} ({len(file_data['content'])} chars)"
+                                )
+                                break
+                except Exception as e:
+                    print(f"❌ Failed to retrieve DAG files from GitHub: {e}")
+
+            if import_errors:
+                print(f"❌ Found {len(import_errors)} import errors")
+                for error in import_errors:
+                    print(
+                        f"   - {error.get('filename', 'Unknown')}: {error.get('stack_trace', 'No details')}"
+                    )
+            else:
+                print("✅ No DAG import errors found")
+
+            # Attach to test metadata
+            test_steps.append(
+                {
+                    "name": "DAG Information Capture",
+                    "description": "Capture comprehensive DAG information for debugging",
+                    "status": "passed",
+                    "Result_Message": "✅ Comprehensive DAG information captured successfully",
+                    "comprehensive_dag_info": comprehensive_dag_info,
+                    "dag_source_code": dag_source.get("source_code"),
+                    "dag_file_path": dag_source.get("file_path"),
+                    "dag_import_errors": import_errors,
+                    "task_logs_summary": {
+                        task_id: {
+                            "state": task_info.get("state"),
+                            "duration": task_info.get("duration"),
+                            "log_length": len(task_info.get("logs", "")),
+                        }
+                        for task_id, task_info in comprehensive_dag_info.get("task_logs", {}).items()
+                    },
+                }
+            )
+
+        except Exception as e:
+            print(f"⚠️ Could not capture comprehensive DAG info: {e}")
+            test_steps.append(
+                {
+                    "name": "DAG Information Capture",
+                    "description": "Capture comprehensive DAG information for debugging",
+                    "status": "failed",
+                    "Result_Message": f"❌ Failed to capture DAG information: {str(e)}",
+                }
+            )
+
         # Step 8: PostgreSQL Source Data Validation
         try:
             postgres_config = postgres_resource_data.get("databases", [{}])[0]
