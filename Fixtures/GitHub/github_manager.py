@@ -620,12 +620,23 @@ class GitHubManager:
             time.sleep(60)
             
         print(f"✗ Action did not complete after {max_retries} retries")
+
+        #now we capture CI details for the run
+
+        ci_details = self.get_ci_failure_details(run,failure_override=True)
+        timeout_result["ci_details"] = ci_details
+        print(f"📋 Captured CI details: {len(ci_details.get('jobs', []))} jobs analyzed")
+
+
+
+
         timeout_result = {
             "completed": False,
             "success": False,
             "status": "timeout",
             "conclusion": "timeout",
-            "timeout_after_retries": max_retries
+            "timeout_after_retries": max_retries,
+            "ci_details": ci_details
         }
         
         # Return based on return_details flag
@@ -634,7 +645,7 @@ class GitHubManager:
         else:
             return timeout_result.get("success", False)
     
-    def get_ci_failure_details(self, workflow_run) -> Dict[str, Any]:
+    def get_ci_failure_details(self, workflow_run,failure_override: Optional[bool] = False) -> Dict[str, Any]:
         """
         Get detailed CI failure information from a workflow run object.
         
@@ -687,7 +698,7 @@ class GitHubManager:
                         job_info["steps"].append(step_info)
                     
                     # Capture full logs only on failure, steps always captured
-                    if job.conclusion == 'failure':
+                    if job.conclusion == 'failure' or failure_override:
                         print(f"📋 Job failed - fetching full logs for: {job.name} (ID: {job.id})")
                         try:
                             # Parse owner and repo name from self.repo_name (format: "owner/repo")
