@@ -24,6 +24,7 @@ class PostgreSQLResourceConfig(TypedDict):
     resource_id: str
     databases: List[PostgreSQLDatabaseConfig]
     test_module_path: Optional[str]
+    load_bulk: Optional[bool]
 
 
 class PostgreSQLDatabaseData(TypedDict):
@@ -50,6 +51,7 @@ class PostgreSQLFixture(
     PostgreSQL fixture implementation using DEBenchFixture pattern.
 
     Supports creating multiple databases with optional SQL schema loading.
+    Supports loading bulk tables from bulk_tables.sql before loading individual SQL files.
     """
 
     @classmethod
@@ -141,6 +143,10 @@ class PostgreSQLFixture(
                     name=db_name, tables=[], type="database"
                 )
                 created_resources.append(db_resource)
+
+                # Load bulk tables if requested
+                if config.get("load_bulk", False):
+                    self._load_bulk_tables(db_name, db_resource)
 
                 # Load SQL file if specified
                 if sql_file := db_config.get("sql_file"):
@@ -285,6 +291,71 @@ class PostgreSQLFixture(
             print(f"STDERR: {e.stderr}")
             raise
 
+    def _load_bulk_tables(
+        self, db_name: str, db_resource: PostgreSQLDatabaseData
+    ) -> None:
+        """Load bulk tables from bulk_tables.sql into the specified database"""
+        # Get the path to bulk_tables.sql in the same directory as this file
+        bulk_sql_path = os.path.join(os.path.dirname(__file__), "bulk_tables.sql")
+        
+        if not os.path.exists(bulk_sql_path):
+            print(f"⚠️ Warning - bulk_tables.sql not found at {bulk_sql_path}")
+            return
+
+        print(f"📄 Loading bulk tables from {bulk_sql_path} into database {db_name}")
+
+        # Set up environment for psql command
+        env = os.environ.copy()
+        env["PGPASSWORD"] = os.getenv("POSTGRES_PASSWORD")
+
+        # Run psql to load the bulk tables file
+        cmd = [
+            "psql",
+            "-h",
+            os.getenv("POSTGRES_HOSTNAME"),
+            "-p",
+            os.getenv("POSTGRES_PORT"),
+            "-U",
+            os.getenv("POSTGRES_USERNAME"),
+            "-d",
+            db_name,
+            "-f",
+            bulk_sql_path,
+            "--quiet",
+            "--set=sslmode=require",
+        ]
+
+        try:
+            subprocess.run(cmd, env=env, capture_output=True, text=True, check=True)
+            print(f"✅ Successfully loaded bulk tables into {db_name}")
+
+            # Update table list to include bulk tables
+            db_connection = self.get_connection(db_name)
+            db_cursor = db_connection.cursor()
+
+            try:
+                db_cursor.execute(
+                    """
+                    SELECT table_name 
+                    FROM information_schema.tables 
+                    WHERE table_schema = 'public'
+                    ORDER BY table_name
+                    """
+                )
+                tables = [row[0] for row in db_cursor.fetchall()]
+                db_resource["tables"] = tables
+                print(f"📊 Loaded {len(tables)} tables from bulk_tables.sql into {db_name}")
+
+            finally:
+                db_cursor.close()
+                db_connection.close()
+
+        except subprocess.CalledProcessError as e:
+            print(f"❌ Error loading bulk tables: {e}")
+            print(f"STDOUT: {e.stdout}")
+            print(f"STDERR: {e.stderr}")
+            raise
+
     def _cleanup_databases(
         self, cursor, created_resources: List[PostgreSQLDatabaseData]
     ) -> None:
@@ -351,6 +422,7 @@ class PostgreSQLFixture(
                     name=f"test_database_{timestamp}", sql_file=None
                 )
             ],
+            load_bulk=False,
         )
 
     def create_config_section(self) -> Dict[str, Any]:
