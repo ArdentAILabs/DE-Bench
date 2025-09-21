@@ -143,16 +143,20 @@ class AirflowFixture(
         # since they're managed by the Astronomer platform
         print("✅ Airflow session cleanup complete")
 
-    def _test_setup(self, resource_config: Optional[AirflowResourceConfig] = None) -> AirflowResourceData:
+    def _test_setup(
+        self, resource_config: Optional[AirflowResourceConfig] = None
+    ) -> AirflowResourceData:
         """
         Set up the resource and ensure _resource_data is set.
         """
         from braintrust import traced
-        
+
         @traced(name=f"{self.get_resource_type()}.test_setup")
-        def inner_test_setup(resource_config: Optional[AirflowResourceConfig] = None) -> AirflowResourceData:
+        def inner_test_setup(
+            resource_config: Optional[AirflowResourceConfig] = None,
+        ) -> AirflowResourceData:
             return self.test_setup(resource_config)
-        
+
         resource_data = inner_test_setup(resource_config)
         self._resource_data = resource_data
         return resource_data
@@ -190,21 +194,69 @@ class AirflowFixture(
         test_dir = _create_dir_and_astro_project(resource_id)
 
         try:
-            # Try to allocate a hibernating deployment from session cache
+            # Try to allocate a hibernating deployment from session cache with retry logic
             print(f"🔄 Attempting to allocate deployment for {resource_id}...")
 
-            if deployment_info := cache_manager.allocate_astronomer_deployment(
-                resource_id, os.getpid()
-            ):
-                # Got an existing hibernating deployment
-                astro_deployment_id = deployment_info["deployment_id"]
-                astro_deployment_name = deployment_info["deployment_name"]
-                print(f"♻️  Allocated hibernating deployment: {astro_deployment_name}")
-                _wake_up_deployment(astro_deployment_name)
-            else:
-                # No hibernating deployment available, create a new one
+            astro_deployment_id = None
+            astro_deployment_name = None
+            max_retries = 3
+
+            for attempt in range(max_retries):
+                print(f"🔄 Allocation attempt {attempt + 1}/{max_retries}...")
+
+                if deployment_info := cache_manager.allocate_astronomer_deployment(
+                    resource_id, os.getpid()
+                ):
+                    # Got an existing hibernating deployment
+                    temp_deployment_id = deployment_info["deployment_id"]
+                    temp_deployment_name = deployment_info["deployment_name"]
+                    print(
+                        f"♻️  Allocated hibernating deployment: {temp_deployment_name}"
+                    )
+
+                    try:
+                        _wake_up_deployment(temp_deployment_name)
+                        # Wake up successful - use this deployment
+                        astro_deployment_id = temp_deployment_id
+                        astro_deployment_name = temp_deployment_name
+                        print(
+                            f"✅ Successfully woke up deployment: {temp_deployment_name}"
+                        )
+                        break
+
+                    except Exception as wake_error:
+                        print(
+                            f"❌ Failed to wake up deployment {temp_deployment_name}: {wake_error}"
+                        )
+
+                        # Release the deployment back to hibernating state for future use
+                        try:
+                            cache_manager.release_astronomer_deployment(
+                                temp_deployment_name, os.getpid()
+                            )
+                            print(
+                                f"🔄 Released deployment {temp_deployment_name} back to hibernating state"
+                            )
+                        except Exception as release_error:
+                            print(
+                                f"⚠️  Failed to release deployment {temp_deployment_name}: {release_error}"
+                            )
+
+                        if attempt < max_retries - 1:
+                            print(f"🔄 Trying next available deployment...")
+                        continue
+
+                else:
+                    # No more hibernating deployments available
+                    print(
+                        f"💤 No hibernating deployments available on attempt {attempt + 1}"
+                    )
+                    break
+
+            # If we didn't successfully allocate and wake a deployment, create a new one
+            if not astro_deployment_id:
                 print(
-                    f"🆕 No hibernating deployments available, creating new: {resource_id}"
+                    f"🆕 Creating new deployment after {max_retries} failed wake-up attempts: {resource_id}"
                 )
                 astro_deployment_id = _create_deployment_in_astronomer(resource_id)
                 astro_deployment_name = resource_id
@@ -304,16 +356,18 @@ class AirflowFixture(
         Clean up the resource and ensure proper teardown.
         """
         from braintrust import traced
-        
+
         @traced(name=f"{self.get_resource_type()}.test_teardown")
         def inner_test_teardown(resource_data: AirflowResourceData) -> None:
             return self.test_teardown(resource_data)
-        
+
         # Check if _resource_data exists before trying to use it
-        if hasattr(self, '_resource_data') and self._resource_data:
+        if hasattr(self, "_resource_data") and self._resource_data:
             inner_test_teardown(self._resource_data)
         else:
-            print(f"⚠️ No _resource_data found for {self.get_resource_type()}, skipping teardown")
+            print(
+                f"⚠️ No _resource_data found for {self.get_resource_type()}, skipping teardown"
+            )
 
     def test_teardown(self, resource_data: AirflowResourceData) -> None:
         """Clean up individual Airflow resource"""
