@@ -33,6 +33,10 @@ def set_up_model_configs(Configs, custom_info=None):
             for service in Configs["services"]:
                 service_config = Configs["services"][service]
 
+
+                print(f"🔍 SERVICE CONFIG: {service_config}")
+                print(f"🔍 SERVICE: {service}")
+
                 # Handle different service types
                 if service == "airflow":
                     # ensure all required fields are present

@@ -306,29 +306,11 @@ class Airflow_Local:
             )
             print(f"❌ {dag_info['error']}")
 
-        # Try to get source code from GitHub if manager is provided
+        # Note: GitHub source code retrieval is now handled by agent_code_snapshot
+        # captured early in test execution (see get_multiple_file_contents_from_branch)
         if github_manager:
-            try:
-                print("🐙 Retrieving DAG files from GitHub...")
-                dag_files = github_manager.get_all_dag_files()
-                dag_info["github_files"] = dag_files
-
-                # Try to find the specific DAG file
-                for filename, file_data in dag_files.items():
-                    if dag_id in file_data["content"] or dag_id in filename:
-                        dag_info["source_code"] = file_data["content"]
-                        print(f"✅ Found DAG source code in {filename}")
-                        break
-
-                if not dag_info["source_code"] and dag_files:
-                    # If we can't find the specific DAG, return the first Python file
-                    first_file = next(iter(dag_files.values()))
-                    dag_info["source_code"] = first_file["content"]
-                    print(f"📄 Using first DAG file as source code")
-
-            except Exception as e:
-                print(f"⚠️ Could not retrieve DAG files from GitHub: {e}")
-                dag_info["github_error"] = str(e)
+            print("📝 GitHub source code available in agent_code_snapshot (captured during test)")
+            dag_info["github_note"] = "Source code available in agent_code_snapshot from test metadata"
 
         return dag_info
 

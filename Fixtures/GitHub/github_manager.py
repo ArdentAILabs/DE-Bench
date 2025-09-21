@@ -3,8 +3,12 @@ This module provides a class for managing GitHub operations.
 """
 
 import os
+import re
+import random
 import time
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, Union
+import datetime
+import requests
 
 import github
 from github import Github, Repository
@@ -70,7 +74,6 @@ class GitHubManager:
         :return: Modified user input string with merge step
         :rtype: str
         """
-        import re
         numbers = [int(n) for n in re.findall(r'\d+', user_input)]
         last_number = max(numbers) if numbers else 0
         # add the test name to the user input
@@ -108,130 +111,147 @@ class GitHubManager:
                 else:
                     raise e
     
-    def get_file_content(self, file_path: str, branch: str = "main") -> Optional[str]:
-        """
-        Get the content of a file from the repository.
-        
-        :param str file_path: Path to the file in the repository
-        :param str branch: Branch to get the file from (default: main)
-        :return: File content as string, or None if file doesn't exist
-        :rtype: Optional[str]
-        """
-        try:
-            file_content = self.repo.get_contents(file_path, ref=branch)
-            if isinstance(file_content, list):
-                # If it's a directory, return None
-                return None
-            # Decode the content from base64
-            return file_content.decoded_content.decode('utf-8')
-        except github.GithubException as e:
-            if e.status == 404:
-                print(f"📄 File not found: {file_path}")
-                return None
-            else:
-                print(f"❌ Error getting file content for {file_path}: {e}")
-                raise e
 
-    def get_all_dag_files(self, branch: str = None) -> dict:
+
+    def get_multiple_file_contents_from_branch(self, branch_name: str, paths_to_capture: List[str]) -> Dict[str, Any]:
         """
-        Get all DAG files from the dags folder.
+        Get multiple file/folder contents from a specific branch.
         
-        :param str branch: Branch to get files from (default: uses current branch or main)
-        :return: Dictionary mapping filename to content
-        :rtype: dict
+        This function captures code snapshots from the agent's work, allowing flexible
+        specification of files and folders to capture. Useful for debugging agent failures
+        by getting exact code state regardless of PR success/failure.
+        
+        :param str branch_name: Name of the branch to capture content from
+        :param List[str] paths_to_capture: List of file paths or folder paths to capture
+                                          - Paths ending with '/' are treated as folders (captures all files)
+                                          - Other paths are treated as individual files
+        :return: Dictionary containing captured content, metadata, and any errors
+        :rtype: Dict[str, Any]
+        
+        Example:
+            >>> snapshot = github_manager.get_multiple_file_contents_from_branch(
+            ...     branch_name="feature/my-branch",
+            ...     paths_to_capture=["dags/", "requirements.txt", "models/"]
+            ... )
         """
-        dag_files = {}
         
-        # Use current branch if no branch specified
-        if branch is None:
-            branch = getattr(self, 'branch_name', 'main')
+        result = {
+            "branch_name": branch_name,
+            "capture_timestamp": datetime.datetime.utcnow().isoformat(),
+            "captured_files": {},
+            "captured_folders": {},
+            "errors": [],
+            "summary": {
+                "total_files": 0,
+                "total_size_bytes": 0,
+                "folders_captured": 0,
+                "files_captured": 0
+            }
+        }
         
-        print(f"🔍 Looking for DAG files in branch: {branch}")
+        print(f"📸 Capturing code snapshot from branch: {branch_name}")
+        print(f"🔍 DEBUG: Starting capture with paths: {paths_to_capture}")
         
-        # Try current branch first, then main as fallback
-        branches_to_try = [branch] if branch != 'main' else ['main']
-        if branch != 'main':
-            branches_to_try.append('main')
-            
-        for try_branch in branches_to_try:
+        for path in paths_to_capture:
             try:
-                print(f"📁 Checking dags folder in branch: {try_branch}")
-                # Get contents of dags folder
-                dags_contents = self.repo.get_contents("dags", ref=try_branch)
-                
-                for content in dags_contents:
-                    if content.type == "file" and content.name.endswith('.py'):
-                        file_content = self.get_file_content(content.path, try_branch)
-                        if file_content:
-                            dag_files[content.name] = {
-                                "path": content.path,
-                                "content": file_content,
-                                "size": content.size,
-                                "sha": content.sha,
-                                "branch": try_branch
-                            }
-                            print(f"✅ Found DAG file: {content.name} ({content.size} bytes)")
-                
-                # If we found files, break out of the loop
-                if dag_files:
-                    print(f"📄 Retrieved {len(dag_files)} DAG files from branch: {try_branch}")
-                    break
+                if path.endswith('/'):
+                    # Treat as folder - capture all files in it
+                    folder_name = path.rstrip('/')
+                    print(f"📁 Capturing folder: {folder_name}")
                     
-            except github.GithubException as e:
-                if e.status == 404:
-                    print(f"📁 Dags folder not found in branch: {try_branch}")
-                else:
-                    print(f"❌ Error getting DAG files from {try_branch}: {e}")
-                continue
+                    try:
+                        folder_contents = self.repo.get_contents(folder_name, ref=branch_name)
+                        folder_files = {}
+                        
+                        # Handle both single file and list of files
+                        if not isinstance(folder_contents, list):
+                            folder_contents = [folder_contents]
+                        
+                        for content in folder_contents:
+                            if content.type == "file":
+                                file_content = content.decoded_content.decode('utf-8')
+                                folder_files[content.name] = {
+                                    "path": content.path,
+                                    "content": file_content,
+                                    "size": content.size,
+                                    "sha": content.sha
+                                }
+                                result["summary"]["total_files"] += 1
+                                result["summary"]["total_size_bytes"] += content.size
+                                print(f"  ✅ {content.name} ({content.size} bytes)")
+                                print(f"🔍 DEBUG: File content preview (first 100 chars): {file_content[:100]}")
+                        
+                        if folder_files:
+                            result["captured_folders"][folder_name] = folder_files
+                            result["summary"]["folders_captured"] += 1
+                            print(f"📁 Captured {len(folder_files)} files from {folder_name}")
+                        else:
+                            print(f"📁 No files found in {folder_name}")
+                            
+                    except github.GithubException as e:
+                        if e.status == 404:
+                            error_msg = f"Folder not found: {folder_name}"
+                            result["errors"].append(error_msg)
+                            print(f"⚠️ {error_msg}")
+                        else:
+                            error_msg = f"Error accessing folder {folder_name}: {e}"
+                            result["errors"].append(error_msg)
+                            print(f"❌ {error_msg}")
                 
-        return dag_files
+                else:
+                    # Treat as individual file
+                    print(f"📄 Capturing file: {path}")
+                    
+                    try:
+                        file_content_obj = self.repo.get_contents(path, ref=branch_name)
+                        if isinstance(file_content_obj, list):
+                            # This shouldn't happen for individual files, but handle it
+                            error_msg = f"Expected file but got directory: {path}"
+                            result["errors"].append(error_msg)
+                            print(f"❌ {error_msg}")
+                            continue
+                        
+                        file_content = file_content_obj.decoded_content.decode('utf-8')
+                        result["captured_files"][path] = {
+                            "path": path,
+                            "content": file_content,
+                            "size": file_content_obj.size,
+                            "sha": file_content_obj.sha
+                        }
+                        result["summary"]["total_files"] += 1
+                        result["summary"]["total_size_bytes"] += file_content_obj.size
+                        result["summary"]["files_captured"] += 1
+                        print(f"  ✅ {path} ({file_content_obj.size} bytes)")
+                        print(f"🔍 DEBUG: File content preview (first 100 chars): {file_content[:100]}")
+                        
+                    except github.GithubException as e:
+                        if e.status == 404:
+                            error_msg = f"File not found: {path}"
+                            result["errors"].append(error_msg)
+                            print(f"⚠️ {error_msg}")
+                        else:
+                            error_msg = f"Error accessing file {path}: {e}"
+                            result["errors"].append(error_msg)
+                            print(f"❌ {error_msg}")
+            
+            except Exception as e:
+                error_msg = f"Unexpected error processing {path}: {e}"
+                result["errors"].append(error_msg)
+                print(f"❌ {error_msg}")
+        
+        # Final summary
+        print(f"📸 Snapshot complete: {result['summary']['total_files']} files, "
+              f"{result['summary']['total_size_bytes']} bytes, {len(result['errors'])} errors")
+        
+        # Debug: Show result structure
+        print(f"🔍 DEBUG: Final result structure:")
+        print(f"  - captured_folders keys: {list(result['captured_folders'].keys())}")
+        print(f"  - captured_files keys: {list(result['captured_files'].keys())}")
+        print(f"  - errors: {result['errors']}")
+        
+        return result
 
-    def get_requirements_text(self, branch: Optional[str] = None) -> Optional[Dict[str, str]]:
-        """
-        Retrieve the contents of requirements.txt from the repository for a given branch.
 
-        Tries common locations in order:
-          1) Requirements/requirements.txt
-          2) requirements.txt (repo root)
-
-        :param branch: Branch name to read from (defaults to current test branch or main)
-        :return: {"path": <path>, "content": <text>} or None if not found
-        :rtype: Optional[Dict[str, str]]
-        """
-        try_branch = branch or getattr(self, 'branch_name', 'main')
-        candidate_paths = [
-            os.path.join("Requirements", "requirements.txt"),
-            "requirements.txt",
-        ]
-
-        for path in candidate_paths:
-            try:
-                file_content = self.repo.get_contents(path, ref=try_branch)
-                if isinstance(file_content, list):
-                    continue
-                content_text = file_content.decoded_content.decode("utf-8")
-                return {"path": path, "content": content_text}
-            except github.GithubException as e:
-                if getattr(e, "status", None) == 404:
-                    continue
-                # Surface unexpected errors
-                raise e
-
-        # Not found in the target branch; try main as a last resort if different
-        if try_branch != "main":
-            for path in candidate_paths:
-                try:
-                    file_content = self.repo.get_contents(path, ref="main")
-                    if isinstance(file_content, list):
-                        continue
-                    content_text = file_content.decoded_content.decode("utf-8")
-                    return {"path": path, "content": content_text}
-                except github.GithubException as e:
-                    if getattr(e, "status", None) == 404:
-                        continue
-                    raise e
-
-        return None
 
     def clear_folder(self, folder_name: str, keep_file_names: Optional[list[str]] = None) -> None:
         """
@@ -380,7 +400,6 @@ class GitHubManager:
                 
                 if is_conflict and merge_attempt < merge_retries - 1:
                     # Wait with exponential backoff and jitter for parallel execution conflicts
-                    import random
                     wait_time = (2 ** merge_attempt) + random.uniform(1, 3)  # 1-3s, 3-5s, 5-7s, etc.
                     print(f"⚠️ Merge conflict detected (attempt {merge_attempt + 1}): {e}")
                     print(f"⏳ Waiting {wait_time:.1f}s before retry...")
@@ -541,35 +560,171 @@ class GitHubManager:
         except Exception as e:
             print(f"Error resetting repository state: {e}")
     
-    def check_if_action_is_complete(self, pr_title: str, wait_before_checking: Optional[int] = 60, max_retries: Optional[int] = 10, branch_name: Optional[str] = None) -> bool:
+    def check_if_action_is_complete(self, pr_title: str, wait_before_checking: Optional[int] = 60, max_retries: Optional[int] = 10, branch_name: Optional[str] = None, return_details: bool = False) -> Union[bool, Dict[str, Any]]:
         """
-        Check if an action is complete.
+        Check if GitHub action is complete, with optional detailed status and failure info.
         
         :param str pr_title: Title of the PR to check the action for
         :param int wait_before_checking: Time to wait before checking if the action is complete, defaults to 60 seconds
         :param int max_retries: Maximum number of retries, defaults to 10
         :param str branch_name: Name of the branch to check
-        :return: True if action is complete, False otherwise
+        :param bool return_details: If True, return detailed status dict; if False, return bool
+        :return: Bool (success/failure) or Dict with detailed action status and failure info
         """
-        import time
         print(f"Waiting {wait_before_checking} seconds before checking if action is complete...")
         time.sleep(wait_before_checking)
-        print(f"Checking if action is complete...")
+        print(f"Checking GitHub action status...")
         if not branch_name:
             branch_name = self.branch_name
+            
         for retry in range(max_retries):
             workflow_runs = self.repo.get_workflow_runs(branch=branch_name)  # type: ignore
             if workflow_runs.totalCount > 0:
                 if filtered_runs := [run for run in workflow_runs if run.display_title.lower() == pr_title.lower()]:
-                    # check the first run in the list
-                    if filtered_runs[0].status == "completed":
-                        print(f"✓ Action is complete")
-                        return True
-                print(f"✗ Action is not complete")
+                    run = filtered_runs[0]
+                    
+                    if run.status == "completed":
+                        result = {
+                            "completed": True,
+                            "success": run.conclusion == "success",
+                            "status": run.status,
+                            "conclusion": run.conclusion,
+                            "url": run.html_url,
+                            "run_id": run.id,
+                            "display_title": run.display_title
+                        }
+                        
+                        # TESTING: Always capture CI details regardless of success/failure
+                        print(f"📋 Action completed - capturing CI details for testing...")
+                        try:
+                            ci_details = self.get_ci_failure_details(run)
+                            result["ci_details"] = ci_details
+                            print(f"📋 Captured CI details: {len(ci_details.get('jobs', []))} jobs analyzed")
+                        except Exception as e:
+                            print(f"⚠️ Could not capture CI details: {e}")
+                            result["ci_details_error"] = str(e)
+                        
+                        print(f"✓ Action completed with status: {run.status}/{run.conclusion}")
+                        
+                        # Return based on return_details flag
+                        if return_details:
+                            return result
+                        else:
+                            return result.get("success", False)
+                        
+                print(f"✗ Action is not complete (status: {run.status if 'run' in locals() else 'unknown'})")
+            else:
+                print(f"✗ No workflow runs found")
+                
             print(f"Waiting 60 seconds before checking again...{retry + 1} of {max_retries}")
             time.sleep(60)
-        print(f"✗ Action is not complete after {max_retries} retries")
-        return False
+            
+        print(f"✗ Action did not complete after {max_retries} retries")
+        timeout_result = {
+            "completed": False,
+            "success": False,
+            "status": "timeout",
+            "conclusion": "timeout",
+            "timeout_after_retries": max_retries
+        }
+        
+        # Return based on return_details flag
+        if return_details:
+            return timeout_result
+        else:
+            return timeout_result.get("success", False)
+    
+    def get_ci_failure_details(self, workflow_run) -> Dict[str, Any]:
+        """
+        Get detailed CI failure information from a workflow run object.
+        
+        :param workflow_run: GitHub workflow run object
+        :return: Dictionary containing failure information
+        """
+        try:
+            failure_info = {
+                "workflow_run": {
+                    "id": workflow_run.id,
+                    "name": workflow_run.name,
+                    "display_title": workflow_run.display_title,
+                    "status": workflow_run.status,
+                    "conclusion": workflow_run.conclusion,
+                    "url": workflow_run.html_url,
+                    "created_at": workflow_run.created_at.isoformat() if workflow_run.created_at else None,
+                    "updated_at": workflow_run.updated_at.isoformat() if workflow_run.updated_at else None,
+                    "head_branch": workflow_run.head_branch,
+                    "head_sha": workflow_run.head_sha,
+                },
+                "jobs": [],
+                "summary": f"{'✅' if workflow_run.conclusion == 'success' else '❌'} Workflow '{workflow_run.name}' {workflow_run.conclusion} (status: {workflow_run.status})"
+            }
+            
+            # Get job details for workflow run
+            print(f"🔧 Fetching job details for workflow run...")
+            try:
+                for job in workflow_run.jobs():
+                    job_info = {
+                        "id": job.id,
+                        "name": job.name,
+                        "status": job.status,
+                        "conclusion": job.conclusion,
+                        "url": job.html_url,
+                        "started_at": job.started_at.isoformat() if job.started_at else None,
+                        "completed_at": job.completed_at.isoformat() if job.completed_at else None,
+                    }
+                    
+                    # Add step details for all jobs (for testing - we can filter later)
+                    job_info["steps"] = []
+                    for step in job.steps:
+                        step_info = {
+                            "name": step.name,
+                            "status": step.status,
+                            "conclusion": step.conclusion,
+                            "number": step.number,
+                            "started_at": step.started_at.isoformat() if step.started_at else None,
+                            "completed_at": step.completed_at.isoformat() if step.completed_at else None,
+                        }
+                        job_info["steps"].append(step_info)
+                    
+                    # Capture full logs only on failure, steps always captured
+                    if job.conclusion == 'failure':
+                        print(f"📋 Job failed - fetching full logs for: {job.name} (ID: {job.id})")
+                        try:
+                            # Parse owner and repo name from self.repo_name (format: "owner/repo")
+                            owner, repo_name = self.repo_name.split("/")
+                            
+                            url = f"https://api.github.com/repos/{owner}/{repo_name}/actions/jobs/{job.id}/logs"
+                            
+                            headers = {
+                                "Authorization": f"token {self.access_token}",
+                                "Accept": "application/vnd.github.v3+json"
+                            }
+                            
+                            response = requests.get(url, headers=headers)
+                            response.raise_for_status()
+                            job_logs = response.text
+                            
+                            job_info["logs"] = job_logs
+                            print(f"✅ Fetched {len(job_logs)} characters of failure logs for job {job.name}")
+                        except Exception as e:
+                            print(f"⚠️ Could not fetch failure logs for job {job.id}: {e}")
+                            job_info["logs"] = None
+                            job_info["logs_error"] = str(e)
+                    else:
+                        print(f"📋 Job succeeded - skipping logs for: {job.name} (steps still captured)")
+                        job_info["logs"] = None
+                    
+                    failure_info["jobs"].append(job_info)
+                    
+            except Exception as e:
+                print(f"⚠️ Could not fetch job details: {e}")
+                failure_info["job_fetch_error"] = str(e)
+            
+            return failure_info
+            
+        except Exception as e:
+            print(f"⚠️ Error getting CI failure details: {e}")
+            return {"error": "Failed to get CI details", "details": str(e)}
     
     def cleanup_requirements(self, requirements_path: str = "Requirements/") -> None:
         """
