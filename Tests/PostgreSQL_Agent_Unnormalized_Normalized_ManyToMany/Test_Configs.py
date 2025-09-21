@@ -11,15 +11,4 @@ Please analyze the current schema and data, identify the issue, and implement a 
 Test your solution to verify all co-author relationships are preserved.
 """
 
-# Basic system configuration for PostgreSQL agent testing
-Configs = {
-    "services": {
-        "postgreSQL": {
-            "hostname": os.getenv("POSTGRES_HOSTNAME"),
-            "port": os.getenv("POSTGRES_PORT"),
-            "username": os.getenv("POSTGRES_USERNAME"),
-            "password": os.getenv("POSTGRES_PASSWORD"),
-            "databases": [{"name": "authors_schema_test_db"}],
-        }
-    }
-} 
+# Configuration will be generated dynamically by create_config function

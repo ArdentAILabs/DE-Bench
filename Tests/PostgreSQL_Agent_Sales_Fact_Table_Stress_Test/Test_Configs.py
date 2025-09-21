@@ -19,14 +19,4 @@ Requirements for the sales_fact table:
 Do not specify which exact tables to use - analyze the schema and make intelligent decisions about which tables are most appropriate for a sales fact table.
 """
 
-Configs = {
-    "services": {
-        "postgreSQL": {
-            "hostname": os.getenv("POSTGRES_HOSTNAME"),
-            "port": os.getenv("POSTGRES_PORT"),
-            "username": os.getenv("POSTGRES_USERNAME"),
-            "password": os.getenv("POSTGRES_PASSWORD"),
-            "databases": [{"name": "stress_test_db"}],  # Will be overridden by fixture
-        },
-    }
-}
+# Configuration will be generated dynamically by create_config function

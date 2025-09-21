@@ -11,15 +11,4 @@ Please analyze the database, identify what's causing this issue, and implement a
 Test your solution to verify the calculations are working correctly.
 """
 
-# Basic system configuration for PostgreSQL agent testing
-Configs = {
-    "services": {
-        "postgreSQL": {
-            "hostname": os.getenv("POSTGRES_HOSTNAME"),
-            "port": os.getenv("POSTGRES_PORT"),
-            "username": os.getenv("POSTGRES_USERNAME"),
-            "password": os.getenv("POSTGRES_PASSWORD"),
-            "databases": [{"name": "purchases_test_db"}],
-        }
-    }
-} 
+# Configuration will be generated dynamically by create_config function

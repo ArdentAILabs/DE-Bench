@@ -16,15 +16,27 @@ from python_on_whales import DockerClient
 
 
 class Airflow_Local:
-    def __init__(self, airflow_dir: Path, host: Optional[str] = None, api_token: Optional[str] = None, api_url: Optional[str] = None, max_retries: Optional[int] = 5):
+    def __init__(
+        self,
+        airflow_dir: Path,
+        host: Optional[str] = None,
+        api_token: Optional[str] = None,
+        api_url: Optional[str] = None,
+        max_retries: Optional[int] = 5,
+    ):
         self.Airflow_DIR = airflow_dir.absolute()
         self.AIRFLOW_HOST = host
         self.API_TOKEN = api_token
         self.API_URL = api_url
-        self.API_HEADERS = {"Authorization": f"Bearer {self.API_TOKEN}", "Cache-Control": "no-cache"}
+        self.API_HEADERS = {
+            "Authorization": f"Bearer {self.API_TOKEN}",
+            "Cache-Control": "no-cache",
+        }
         self.max_retries = max_retries
 
-    def wait_for_airflow_to_be_ready(self, wait_time_in_minutes: Optional[int] = 0) -> bool:
+    def wait_for_airflow_to_be_ready(
+        self, wait_time_in_minutes: Optional[int] = 0
+    ) -> bool:
         """
         Wait for a total of 10 minutes for the Airflow webserver to be ready.
 
@@ -39,16 +51,28 @@ class Airflow_Local:
         retries = 10
         while retries > 0:
             print(f"Checking if Airflow webserver is ready... {retries} retries left")
-            response = requests.get(f"{self.AIRFLOW_HOST}/health", headers={"Authorization": f"Bearer {self.API_TOKEN}"})
-            if response.status_code == 200:
+            response = requests.get(
+                f"{self.AIRFLOW_HOST}/health",
+                headers={"Authorization": f"Bearer {self.API_TOKEN}"},
+            )
+
+            if response.status_code == 401:
+                print(
+                    f"WARNING: 401 Unauthorized Encountered while querying Airflow webserver status. Will retry. {retries} retries left. Message: {response.text}"
+                )
+            elif response.status_code == 200:
                 print("Airflow webserver is ready")
                 return True
+
             retries -= 1
             time.sleep(60)
+
         print("Airflow webserver is not ready")
         return False
-    
-    def verify_airflow_dag_exists(self, dag_id: str) -> bool:
+
+    def verify_airflow_dag_exists(
+        self, dag_id: str, max_wait_minutes: Optional[int] = 8
+    ) -> bool:
         """
         Verify if a DAG exists using the dag_id in Airflow via API call.
         Extended timeout for DAG synchronization after GitHub Actions deployment.
@@ -57,12 +81,14 @@ class Airflow_Local:
         :return: True if the DAG exists, False otherwise.
         :rtype: bool
         """
-        # Extended retries for DAG synchronization - up to 12 minutes total
-        max_retries = 36  # Increased from default 5 to 36 (36 * 20s = 12 minutes)
-        wait_time = 20    # Increased from 10s to 20s per attempt
-        
+        wait_time_seconds = 20  # Increased from 10s to 20s per attempt
+        max_wait_seconds = max_wait_minutes * 60
+        max_retries = max_wait_seconds // wait_time_seconds
+
         for attempt in range(max_retries):
-            print(f"Attempt {attempt + 1}/{max_retries}: Checking for DAG '{dag_id}'...")
+            print(
+                f"Attempt {attempt + 1}/{max_retries}: Checking for DAG '{dag_id}'..."
+            )
             # Check if DAG exists
             dag_response = requests.get(
                 f"{self.AIRFLOW_HOST.rstrip('/')}/api/v1/dags/{dag_id}",
@@ -74,25 +100,31 @@ class Airflow_Local:
                 return True
             elif dag_response.status_code == 404:
                 print(f"⏳ DAG '{dag_id}' not found yet (status: 404)")
-                
+
                 # On certain attempts, list available DAGs for debugging
                 if attempt % 6 == 5:  # Every 6th attempt (every 2 minutes)
                     self._list_available_dags()
-                    
+
             else:
-                print(f"⚠️ Unexpected response (status: {dag_response.status_code}): {dag_response.text}")
-                
+                print(
+                    f"⚠️ Unexpected response (status: {dag_response.status_code}): {dag_response.text}"
+                )
+
             if attempt == max_retries - 1:
                 # Final attempt - list all DAGs for debugging
-                print(f"❌ DAG '{dag_id}' not found after {max_retries} attempts ({max_retries * wait_time / 60:.1f} minutes)")
+                print(
+                    f"❌ DAG '{dag_id}' not found after {max_retries} attempts ({max_retries * wait_time / 60:.1f} minutes)"
+                )
                 self._list_available_dags()
-                raise Exception(f"DAG '{dag_id}' not found after max retries. Check DAG deployment and syntax.")
-                
+                raise Exception(
+                    f"DAG '{dag_id}' not found after max retries. Check DAG deployment and syntax."
+                )
+
             print(f"Waiting {wait_time} seconds before next attempt...")
             time.sleep(wait_time)
 
         return False
-    
+
     def _list_available_dags(self):
         """Helper method to list all available DAGs for debugging purposes."""
         try:
@@ -101,29 +133,31 @@ class Airflow_Local:
                 f"{self.AIRFLOW_HOST.rstrip('/')}/api/v1/dags",
                 headers=self.API_HEADERS,
             )
-            
+
             if dags_response.status_code == 200:
                 dags_data = dags_response.json()
-                dags = dags_data.get('dags', [])
-                
+                dags = dags_data.get("dags", [])
+
                 if dags:
                     print(f"📋 Found {len(dags)} DAGs in Airflow:")
                     for dag in dags[:10]:  # Show first 10 DAGs
-                        dag_id = dag.get('dag_id', 'Unknown')
-                        is_paused = dag.get('is_paused', True)
+                        dag_id = dag.get("dag_id", "Unknown")
+                        is_paused = dag.get("is_paused", True)
                         status = "⏸️ Paused" if is_paused else "▶️ Active"
                         print(f"  - {dag_id} ({status})")
-                    
+
                     if len(dags) > 10:
                         print(f"  ... and {len(dags) - 10} more DAGs")
                 else:
                     print("📭 No DAGs found in Airflow")
             else:
-                print(f"❌ Failed to list DAGs (status: {dags_response.status_code}): {dags_response.text}")
-                
+                print(
+                    f"❌ Failed to list DAGs (status: {dags_response.status_code}): {dags_response.text}"
+                )
+
         except Exception as e:
             print(f"❌ Error listing DAGs: {e}")
-    
+
     def unpause_and_trigger_airflow_dag(self, dag_id: str) -> Optional[str]:
         """
         Unpause a DAG using the dag_id in Airflow via API call.
@@ -167,7 +201,7 @@ class Airflow_Local:
                 time.sleep(10)
                 continue
         return None
-    
+
     def verify_dag_id_ran(self, dag_id: str, dag_run_id: str) -> bool:
         """
         Verify if a DAG has been executed.
@@ -197,7 +231,7 @@ class Airflow_Local:
                     time.sleep(60)
                     continue
         return self.check_dag_task_instances(dag_id, dag_run_id)
-    
+
     def get_task_instance_logs(self, dag_id: str, dag_run_id: str, task_id: str) -> str:
         """
         Get the logs for a task instance.
@@ -229,17 +263,241 @@ class Airflow_Local:
         )
         if task_logs_response.status_code != 200:
             raise Exception(f"Failed to retrieve task logs: {task_logs_response.text}")
-        
+
         print(f"Task logs received for task '{task_id}' with try number: {try_number}")
         return task_logs_response.text
-    
+
+    def get_dag_source_code(self, dag_id: str, github_manager=None) -> dict:
+        """
+        Get the DAG source code and details from Airflow and GitHub.
+
+        :param str dag_id: The ID of the DAG to retrieve source for.
+        :param github_manager: Optional GitHub manager to get source code from repository.
+        :return: Dictionary containing DAG details and source code.
+        :rtype: dict
+        """
+        print(f"🔍 Retrieving DAG source code for: {dag_id}")
+
+        # Get DAG details from Airflow API
+        dag_details_response = requests.get(
+            f"{self.AIRFLOW_HOST.rstrip('/')}/api/v1/dags/{dag_id}/details",
+            headers=self.API_HEADERS,
+        )
+
+        dag_info = {
+            "dag_id": dag_id,
+            "source_code": None,
+            "github_files": {},
+            "file_path": None,
+            "dag_details": None,
+            "error": None,
+        }
+
+        if dag_details_response.status_code == 200:
+            dag_details = dag_details_response.json()
+            dag_info["dag_details"] = dag_details
+            dag_info["file_path"] = dag_details.get("fileloc")
+
+            print(f"📄 DAG file location: {dag_details.get('fileloc', 'Unknown')}")
+
+        else:
+            dag_info["error"] = (
+                f"Failed to retrieve DAG details: {dag_details_response.text}"
+            )
+            print(f"❌ {dag_info['error']}")
+
+        # Try to get source code from GitHub if manager is provided
+        if github_manager:
+            try:
+                print("🐙 Retrieving DAG files from GitHub...")
+                dag_files = github_manager.get_all_dag_files()
+                dag_info["github_files"] = dag_files
+
+                # Try to find the specific DAG file
+                for filename, file_data in dag_files.items():
+                    if dag_id in file_data["content"] or dag_id in filename:
+                        dag_info["source_code"] = file_data["content"]
+                        print(f"✅ Found DAG source code in {filename}")
+                        break
+
+                if not dag_info["source_code"] and dag_files:
+                    # If we can't find the specific DAG, return the first Python file
+                    first_file = next(iter(dag_files.values()))
+                    dag_info["source_code"] = first_file["content"]
+                    print(f"📄 Using first DAG file as source code")
+
+            except Exception as e:
+                print(f"⚠️ Could not retrieve DAG files from GitHub: {e}")
+                dag_info["github_error"] = str(e)
+
+        return dag_info
+
+    def get_dag_import_errors(self) -> list:
+        """
+        Get all DAG import errors from Airflow.
+
+        :return: List of import errors.
+        :rtype: list
+        """
+        print("🔍 Retrieving DAG import errors...")
+
+        import_errors_response = requests.get(
+            f"{self.AIRFLOW_HOST.rstrip('/')}/api/v1/importErrors",
+            headers=self.API_HEADERS,
+        )
+
+        if import_errors_response.status_code == 200:
+            import_errors = import_errors_response.json().get("import_errors", [])
+            print(f"📋 Found {len(import_errors)} import errors")
+            return import_errors
+        else:
+            print(f"❌ Failed to retrieve import errors: {import_errors_response.text}")
+            return []
+
+    def get_all_task_logs_for_dag_run(self, dag_id: str, dag_run_id: str) -> dict:
+        """
+        Get logs for all tasks in a DAG run.
+
+        :param str dag_id: The ID of the DAG.
+        :param str dag_run_id: The ID of the DAG run.
+        :return: Dictionary mapping task_id to logs.
+        :rtype: dict
+        """
+        print(f"🔍 Retrieving all task logs for DAG run: {dag_run_id}")
+
+        # Get all task instances for this DAG run
+        task_instances_response = requests.get(
+            f"{self.AIRFLOW_HOST.rstrip('/')}/api/v1/dags/{dag_id}/dagRuns/{dag_run_id}/taskInstances",
+            headers=self.API_HEADERS,
+        )
+
+        all_logs = {}
+
+        if task_instances_response.status_code == 200:
+            task_instances = task_instances_response.json().get("task_instances", [])
+
+            for task_instance in task_instances:
+                task_id = task_instance["task_id"]
+                try_number = task_instance.get("try_number", 1)
+                state = task_instance.get("state", "unknown")
+
+                try:
+                    logs = self.get_task_instance_logs(dag_id, dag_run_id, task_id)
+                    all_logs[task_id] = {
+                        "logs": logs,
+                        "state": state,
+                        "try_number": try_number,
+                        "start_date": task_instance.get("start_date"),
+                        "end_date": task_instance.get("end_date"),
+                        "duration": task_instance.get("duration"),
+                    }
+                except Exception as e:
+                    all_logs[task_id] = {
+                        "logs": f"Error retrieving logs: {str(e)}",
+                        "state": state,
+                        "try_number": try_number,
+                        "error": str(e),
+                    }
+        else:
+            print(
+                f"❌ Failed to retrieve task instances: {task_instances_response.text}"
+            )
+
+        return all_logs
+
+    def get_comprehensive_dag_info(
+        self, dag_id: str, dag_run_id: str = None, github_manager=None
+    ) -> dict:
+        """
+        Get comprehensive information about a DAG including source code, errors, and logs.
+
+        :param str dag_id: The ID of the DAG.
+        :param str dag_run_id: Optional DAG run ID for execution logs.
+        :param github_manager: Optional GitHub manager to get source code from repository.
+        :return: Comprehensive DAG information.
+        :rtype: dict
+        """
+        print(f"📊 Gathering comprehensive DAG information for: {dag_id}")
+
+        comprehensive_info = {
+            "dag_id": dag_id,
+            "dag_run_id": dag_run_id,
+            "timestamp": time.time(),
+            "dag_source": self.get_dag_source_code(dag_id, github_manager),
+            "import_errors": self.get_dag_import_errors(),
+            "task_logs": {},
+            "dag_run_info": None,
+        }
+
+        # If we have a DAG run ID, get execution details
+        if dag_run_id:
+            comprehensive_info["task_logs"] = self.get_all_task_logs_for_dag_run(
+                dag_id, dag_run_id
+            )
+
+            # Get DAG run details
+            dag_run_response = requests.get(
+                f"{self.AIRFLOW_HOST.rstrip('/')}/api/v1/dags/{dag_id}/dagRuns/{dag_run_id}",
+                headers=self.API_HEADERS,
+            )
+
+            if dag_run_response.status_code == 200:
+                comprehensive_info["dag_run_info"] = dag_run_response.json()
+
+        return comprehensive_info
+
+    def get_dag_tasks(self, dag_id: str) -> list:
+        """
+        Get all tasks for a specific DAG.
+
+        :param str dag_id: The ID of the DAG to get tasks for.
+        :return: List of task dictionaries containing task information.
+        :rtype: list
+        """
+        print(f"🔍 Retrieving tasks for DAG: {dag_id}")
+
+        max_retries = copy.deepcopy(self.max_retries)
+        for attempt in range(max_retries):
+            print(f"Attempt {attempt + 1}/{max_retries}: Getting DAG tasks...")
+
+            tasks_response = requests.get(
+                f"{self.AIRFLOW_HOST.rstrip('/')}/api/v1/dags/{dag_id}/tasks",
+                headers=self.API_HEADERS,
+            )
+
+            if tasks_response.status_code == 200:
+                tasks_data = tasks_response.json()
+                tasks = tasks_data.get("tasks", [])
+                print(f"✅ Retrieved {len(tasks)} tasks for DAG '{dag_id}'")
+                return tasks
+            elif tasks_response.status_code == 404:
+                print(f"❌ DAG '{dag_id}' not found (status: 404)")
+                if attempt == max_retries - 1:
+                    raise Exception(f"DAG '{dag_id}' not found")
+            else:
+                print(
+                    f"⚠️ Unexpected response (status: {tasks_response.status_code}): {tasks_response.text}"
+                )
+                if attempt == max_retries - 1:
+                    raise Exception(
+                        f"Failed to retrieve tasks for DAG '{dag_id}': {tasks_response.text}"
+                    )
+
+            if attempt < max_retries - 1:
+                print("Waiting 10 seconds before retry...")
+                time.sleep(10)
+
+        return []
+
     def check_dag_task_instances(self, dag_id: str, dag_run_id: str) -> bool:
         """
         Check if all tasks in a DAG have been executed.
         """
         max_retries = copy.deepcopy(self.max_retries)
         for attempt in range(max_retries):
-            print(f"Attempt {attempt + 1}/{max_retries}: Checking for DAG task instances...")
+            print(
+                f"Attempt {attempt + 1}/{max_retries}: Checking for DAG task instances..."
+            )
             task_instances_response = requests.get(
                 f"{self.AIRFLOW_HOST.rstrip('/')}/api/v1/dags/{dag_id}/dagRuns/{dag_run_id}/taskInstances?limit=100",
                 headers=self.API_HEADERS,
@@ -252,11 +510,20 @@ class Airflow_Local:
                     continue
                 elif task_instances_response.json()["total_entries"] >= 1:
                     for task_instance in task_instances:
-                        if task_instance["state"] in ["success", "failed", "error", "up_for_retry"]:
-                            print(f"Task instance {task_instance['task_id']} completed successfully")
+                        if task_instance["state"] in [
+                            "success",
+                            "failed",
+                            "error",
+                            "up_for_retry",
+                        ]:
+                            print(
+                                f"Task instance {task_instance['task_id']} completed successfully"
+                            )
                             return True
                         else:
-                            print(f"Task instance {task_instance['task_id']} is still running")
+                            print(
+                                f"Task instance {task_instance['task_id']} is still running"
+                            )
                             continue
                 else:
                     print(f"Task instances found: {len(task_instances)}")
@@ -275,7 +542,7 @@ class Airflow_Local:
         github_token = os.getenv("AIRFLOW_GITHUB_TOKEN")
         repo_url = os.getenv("AIRFLOW_REPO")
         dag_path = os.getenv("AIRFLOW_DAG_PATH", "dags/")
-        
+
         # Debug: Print current working directory and Airflow directory
         print(f"Current working directory: {os.getcwd()}")
         print(f"Airflow directory: {self.Airflow_DIR}")
@@ -313,11 +580,11 @@ class Airflow_Local:
             except (PermissionError, OSError) as e:
                 print(f"Could not change directory permissions: {e}")
                 pass  # Continue even if we can't change permissions
-        
+
         # Verify directory is writable
         try:
             test_file = os.path.join(destination_dag_path, ".test_write")
-            with open(test_file, 'w') as f:
+            with open(test_file, "w") as f:
                 f.write("test")
             os.remove(test_file)
             print(f"Directory {destination_dag_path} is writable")
@@ -417,12 +684,12 @@ class Airflow_Local:
         for item in os.listdir(source_dag_path):
             s = os.path.join(source_dag_path, item)
             d = os.path.join(destination_dag_path, item)
-            
+
             # Check if source file/directory exists and is accessible
             if not os.path.exists(s):
                 print(f"Warning: Source path does not exist: {s}")
                 continue
-                
+
             if not os.access(s, os.R_OK):
                 print(f"Warning: Source path is not readable: {s}")
                 continue
@@ -436,19 +703,19 @@ class Airflow_Local:
                     os.chmod(destination_dag_path, 0o755)
                 except (PermissionError, OSError):
                     pass  # Continue even if we can't change directory permissions
-                
+
                 # Handle file copying with comprehensive error handling
                 try:
                     # Debug: Print paths for troubleshooting
                     print(f"Copying from: {s}")
                     print(f"Copying to: {d}")
-                    
+
                     # If destination file exists, try to remove it first
                     if os.path.exists(d):
                         print(f"Destination file exists, attempting to remove: {d}")
                         # Try multiple approaches to remove the file
                         removed = False
-                        
+
                         # Approach 1: Normal remove
                         try:
                             os.chmod(d, 0o666)  # Make writable
@@ -457,19 +724,21 @@ class Airflow_Local:
                             print(f"Successfully removed existing file: {d}")
                         except (PermissionError, OSError) as e:
                             print(f"Normal remove failed: {e}")
-                        
+
                         # Approach 2: Force remove with system command
                         if not removed:
                             try:
                                 result = os.system(f"rm -f '{d}'")
                                 if result == 0:
                                     removed = True
-                                    print(f"Successfully removed file using rm command: {d}")
+                                    print(
+                                        f"Successfully removed file using rm command: {d}"
+                                    )
                                 else:
                                     print(f"rm command failed with exit code: {result}")
                             except Exception as rm_e:
                                 print(f"rm command failed: {rm_e}")
-                        
+
                         # Approach 3: Try with different permissions
                         if not removed:
                             try:
@@ -479,11 +748,13 @@ class Airflow_Local:
                                 print(f"Successfully removed file after chmod: {d}")
                             except Exception as chmod_e:
                                 print(f"chmod + remove failed: {chmod_e}")
-                        
+
                         if not removed:
-                            print(f"Warning: Could not remove existing file {d}, skipping...")
+                            print(
+                                f"Warning: Could not remove existing file {d}, skipping..."
+                            )
                             continue
-                    
+
                     # Ensure the destination directory exists and is writable
                     dest_dir = os.path.dirname(d)
                     if not os.path.exists(dest_dir):
@@ -493,7 +764,7 @@ class Airflow_Local:
                             os.chmod(dest_dir, 0o755)
                         except (PermissionError, OSError):
                             pass
-                    
+
                     # Try to copy the file
                     print(f"Attempting to copy file using shutil.copy2...")
                     try:
@@ -503,14 +774,14 @@ class Airflow_Local:
                         print(f"shutil.copy2 failed: {copy_error}")
                         # Try manual copy as fallback
                         try:
-                            with open(s, 'rb') as fsrc:
-                                with open(d, 'wb') as fdst:
+                            with open(s, "rb") as fsrc:
+                                with open(d, "wb") as fdst:
                                     fdst.write(fsrc.read())
                             print(f"Successfully copied file using manual method")
                         except Exception as manual_error:
                             print(f"Manual copy also failed: {manual_error}")
                             raise
-                    
+
                     # Ensure the copied file has proper permissions
                     try:
                         os.chmod(d, 0o644)  # Readable by all, writable by owner
@@ -518,7 +789,7 @@ class Airflow_Local:
                     except (PermissionError, OSError) as perm_error:
                         print(f"Could not set file permissions: {perm_error}")
                         pass  # Continue even if we can't set permissions
-                        
+
                 except Exception as e:
                     print(f"Unexpected error copying {s} to {d}: {e}")
                     continue
@@ -559,10 +830,12 @@ class Airflow_Local:
                 os.remove(cache_path)
 
             # Reset the permanent requirements.txt file to be empty
-            permanent_requirements_path = os.path.join(self.Airflow_DIR, "Requirements", "requirements.txt")
+            permanent_requirements_path = os.path.join(
+                self.Airflow_DIR, "Requirements", "requirements.txt"
+            )
             if os.path.exists(permanent_requirements_path):
                 print("Resetting requirements.txt file...")
-                with open(permanent_requirements_path, 'w') as f:
+                with open(permanent_requirements_path, "w") as f:
                     pass  # Make the file empty
 
             # Clean each directory
@@ -601,8 +874,12 @@ class Airflow_Local:
         Returns:
             bool: True if containers were rebuilt, False otherwise
         """
-        requirements_path = os.path.join(self.Airflow_DIR, "GitRepo", "Requirements", "requirements.txt")
-        permanent_requirements_path = os.path.join(self.Airflow_DIR, "Requirements", "requirements.txt")
+        requirements_path = os.path.join(
+            self.Airflow_DIR, "GitRepo", "Requirements", "requirements.txt"
+        )
+        permanent_requirements_path = os.path.join(
+            self.Airflow_DIR, "Requirements", "requirements.txt"
+        )
         cache_path = os.path.join(self.Airflow_DIR, ".requirements_cache")
 
         # If requirements file doesn't exist, nothing to do
@@ -611,7 +888,7 @@ class Airflow_Local:
             return False
 
         # Check if requirements file is empty
-        with open(requirements_path, 'r') as f:
+        with open(requirements_path, "r") as f:
             requirements_content = f.read().strip()
             if not requirements_content:
                 print("Requirements file is empty, skipping update")
@@ -619,25 +896,23 @@ class Airflow_Local:
 
         # Check if requirements have changed from previous run
         if os.path.exists(cache_path):
-            with open(cache_path, 'r') as f:
+            with open(cache_path, "r") as f:
                 cached_content = f.read().strip()
                 if cached_content == requirements_content:
                     print("Requirements unchanged, skipping rebuild")
                     return False
 
-
         print("Requirements have changed, rebuilding Airflow containers...")
 
-        #now lets copy to the permanent requirements file if it exists
+        # now lets copy to the permanent requirements file if it exists
         if os.path.exists(os.path.dirname(permanent_requirements_path)):
-            with open(requirements_path, 'r') as src:
+            with open(requirements_path, "r") as src:
                 content = src.read()
-                with open(permanent_requirements_path, 'w') as dst:
+                with open(permanent_requirements_path, "w") as dst:
                     dst.write(content)
 
-
         # Save current requirements to cache
-        with open(cache_path, 'w') as f:
+        with open(cache_path, "w") as f:
             f.write(requirements_content)
 
         # Initialize Docker client
@@ -661,14 +936,20 @@ class Airflow_Local:
 
             time.sleep(10)  # Increased wait time to ensure services are ready
 
-
             # Rebuild and start containers
             print("Building containers with no cache...")
 
             subprocess.run(
-            ["docker", "compose", "-f", os.path.join(self.Airflow_DIR, "docker-compose.yml"), "build", "--no-cache"],
-            check=True
-        )  # Force clean build every time
+                [
+                    "docker",
+                    "compose",
+                    "-f",
+                    os.path.join(self.Airflow_DIR, "docker-compose.yml"),
+                    "build",
+                    "--no-cache",
+                ],
+                check=True,
+            )  # Force clean build every time
 
             print("Starting containers...")
             docker.compose.up(detach=True)

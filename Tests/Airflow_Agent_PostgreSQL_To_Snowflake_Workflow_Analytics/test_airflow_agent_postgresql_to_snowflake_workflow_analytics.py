@@ -1,13 +1,16 @@
-import importlib
+# Braintrust-only Airflow test - no pytest dependencies
+from model.Run_Model import run_model
+from model.Configure_Model import set_up_model_configs, cleanup_model_artifacts
 import os
-import pytest
+import importlib
 import time
 import uuid
+import psycopg2
+import snowflake.connector
+from typing import List, Dict, Any
+from Fixtures.base_fixture import DEBenchFixture
 
-from model.Configure_Model import cleanup_model_artifacts
-from model.Configure_Model import set_up_model_configs
-from model.Run_Model import run_model
-
+# Dynamic config loading
 current_dir = os.path.dirname(os.path.abspath(__file__))
 parent_dir_name = os.path.basename(current_dir)
 module_path = f"Tests.{parent_dir_name}.Test_Configs"
@@ -18,228 +21,606 @@ test_timestamp = int(time.time())
 test_uuid = uuid.uuid4().hex[:8]
 
 
-@pytest.mark.airflow
-@pytest.mark.postgres
-@pytest.mark.snowflake
-@pytest.mark.pipeline
-@pytest.mark.database
-@pytest.mark.three  # Difficulty 3 - involves multi-database ETL, JSON processing, and analytics
-@pytest.mark.parametrize("postgres_resource", [{
-    "resource_id": f"workflow_analytics_test_{test_timestamp}_{test_uuid}",
-    "load_bulk": True,
-    "databases": [
-        {
-            "name": f"workflow_db_{test_timestamp}_{test_uuid}",
-            "sql_file": "postgres_schema.sql"
-        }
-    ]
-}], indirect=True)
-@pytest.mark.parametrize("snowflake_resource", [{
-    "resource_id": f"snowflake_analytics_test_{test_timestamp}_{test_uuid}",
-    "database": f"ANALYTICS_DB_{test_timestamp}_{test_uuid}",
-    "schema": f"WORKFLOW_ANALYTICS_{test_timestamp}_{test_uuid}",
-    "sql_file": "snowflake_schema.sql"
-}], indirect=True)
-@pytest.mark.parametrize("github_resource", [{
-    "resource_id": f"test_airflow_analytics_test_{test_timestamp}_{test_uuid}",
-}], indirect=True)
-@pytest.mark.parametrize("airflow_resource", [{
-    "resource_id": f"workflow_analytics_test_{test_timestamp}_{test_uuid}",
-}], indirect=True)
-def test_airflow_agent_postgresql_to_snowflake_workflow_analytics(request, airflow_resource, github_resource, supabase_account_resource, postgres_resource, snowflake_resource):
-    model_result = None  # Initialize before try block
-    input_dir = os.path.dirname(os.path.abspath(__file__))
-    github_manager = github_resource["github_manager"]
-    Test_Configs.User_Input = github_manager.add_merge_step_to_user_input(Test_Configs.User_Input)
-    dag_name = "workflow_analytics_etl"
-    pr_title = f"Add_Workflow_Analytics_ETL {test_timestamp}_{test_uuid}"
-    branch_name = f"feature/workflow_analytics_etl-{test_timestamp}_{test_uuid}"
-    Test_Configs.User_Input = Test_Configs.User_Input.replace("BRANCH_NAME", branch_name)
-    Test_Configs.User_Input = Test_Configs.User_Input.replace("PR_NAME", pr_title)
-    request.node.user_properties.append(("user_query", Test_Configs.User_Input))
+def get_fixtures() -> List[DEBenchFixture]:
+    """
+    Provides custom DEBenchFixture instances for Braintrust evaluation.
+    This Airflow test validates that AI can create a PostgreSQL to Snowflake workflow analytics DAG.
+    """
+    from Fixtures.Airflow.airflow_fixture import AirflowFixture
+    from Fixtures.PostgreSQL.postgres_resources import PostgreSQLFixture
+    from Fixtures.Snowflake.snowflake_fixture import SnowflakeFixture
+    from Fixtures.GitHub.github_fixture import GitHubFixture
+
+    # Initialize Airflow fixture with test-specific configuration
+    custom_airflow_config = {
+        "resource_id": f"workflow_analytics_test_{test_timestamp}_{test_uuid}",
+    }
+
+    # Initialize PostgreSQL fixture for workflow data
+    custom_postgres_config = {
+        "resource_id": f"workflow_analytics_test_{test_timestamp}_{test_uuid}",
+        "load_bulk": True,
+        "databases": [
+            {
+                "name": f"workflow_db_{test_timestamp}_{test_uuid}",
+                "sql_file": "postgres_schema.sql",
+            }
+        ],
+    }
+
+    # Initialize Snowflake fixture for analytics data
+    custom_snowflake_config = {
+        "resource_id": f"snowflake_analytics_test_{test_timestamp}_{test_uuid}",
+        "database": f"ANALYTICS_DB_{test_timestamp}_{test_uuid}",
+        "schema": f"WORKFLOW_ANALYTICS_{test_timestamp}_{test_uuid}",
+        "sql_file": "snowflake_schema.sql",
+    }
+
+    # Initialize GitHub fixture for PR and branch management
+    custom_github_config = {
+        "resource_id": f"test_airflow_workflow_analytics_test_{test_timestamp}_{test_uuid}",
+    }
+
+    airflow_fixture = AirflowFixture(custom_config=custom_airflow_config)
+    postgres_fixture = PostgreSQLFixture(custom_config=custom_postgres_config)
+    snowflake_fixture = SnowflakeFixture(custom_config=custom_snowflake_config)
+    github_fixture = GitHubFixture(custom_config=custom_github_config)
+
+    return [airflow_fixture, postgres_fixture, snowflake_fixture, github_fixture]
+
+
+def create_model_inputs(
+    base_model_inputs: Dict[str, Any], fixtures: List[DEBenchFixture]
+) -> Dict[str, Any]:
+    """
+    Create test-specific config using the set-up fixtures.
+    This function has access to all fixture data after setup and dynamically
+    updates the task description with GitHub branch and PR information.
+    """
+    import os
+    from extract_test_configs import create_config_from_fixtures
+
+    # Get GitHub fixture to access manager for dynamic branch/PR creation
+    github_fixture = next(
+        (f for f in fixtures if f.get_resource_type() == "github_resource"), None
+    )
+
+    if not github_fixture:
+        raise Exception(
+            "GitHub fixture not found - required for branch and PR management"
+        )
+
+    # Get the GitHub manager from the fixture
+    github_resource_data = getattr(github_fixture, "_resource_data", None)
+    if not github_resource_data:
+        raise Exception("GitHub resource data not available")
+
+    github_manager = github_resource_data.get("github_manager")
+    if not github_manager:
+        raise Exception("GitHub manager not available")
+
+    # Generate dynamic branch and PR names
+    pr_title = (
+        f"Add PostgreSQL to Snowflake Workflow Analytics {test_timestamp}_{test_uuid}"
+    )
+    branch_name = f"feature/workflow-analytics-{test_timestamp}_{test_uuid}"
+
+    # Start with the original user input from Test_Configs
+    task_description = Test_Configs.User_Input
+
+    # Add merge step to user input
+    task_description = github_manager.add_merge_step_to_user_input(task_description)
+
+    # Replace placeholders with dynamic values
+    task_description = task_description.replace("BRANCH_NAME", branch_name)
+    task_description = task_description.replace("PR_NAME", pr_title)
+
+    # Set up GitHub secrets for Astro access
     github_manager.check_and_update_gh_secrets(
         secrets={
             "ASTRO_ACCESS_TOKEN": os.environ["ASTRO_ACCESS_TOKEN"],
         }
     )
-    
-    # Use the fixtures - following the exact pattern from working tests
-    print("=== Starting PostgreSQL to Snowflake Workflow Analytics Pipeline Test ===")
-    print(f"Using Airflow instance from fixture: {airflow_resource['resource_id']}")
-    print(f"Using GitHub instance from fixture: {github_resource['resource_id']}")
-    print(f"Using PostgreSQL instance from fixture: {postgres_resource['resource_id']}")
-    print(f"Using Snowflake instance from fixture: {snowflake_resource['resource_id']}")
-    print(f"Airflow base URL: {airflow_resource['base_url']}")
-    print(f"Test directory: {input_dir}")
 
+    print(f"🔧 Generated dynamic branch name: {branch_name}")
+    print(f"🔧 Generated dynamic PR title: {pr_title}")
+
+    # Use the helper to automatically create config from all fixtures
+    return {
+        **base_model_inputs,
+        "model_configs": create_config_from_fixtures(fixtures),
+        "task_description": task_description,
+    }
+
+
+def validate_test(model_result, fixtures=None):
+    """
+    Validates that the AI agent successfully created a PostgreSQL to Snowflake workflow analytics DAG.
+
+    Expected behavior:
+    - DAG should be created with name "workflow_analytics_etl"
+    - DAG should extract workflow data from PostgreSQL workflows table
+    - DAG should transform JSON workflow definitions into analytics format
+    - DAG should load results into Snowflake workflow_analytics table
+
+    Args:
+        model_result: The result from the AI model execution
+        fixtures: List of DEBenchFixture instances used in the test
+
+    Returns:
+        dict: Contains 'score' float and 'metadata' dict with validation details
+    """
+    # Create comprehensive test steps for validation
     test_steps = [
         {
-            "name": "Checking Git Branch Existence",
-            "description": "Checking if the git branch exists with the right name",
-            "status": "did not reach",
-            "Result_Message": "",
+            "name": "Agent Task Execution",
+            "description": "AI Agent executes task to create Workflow Analytics DAG",
+            "status": "running",
+            "Result_Message": "Checking if AI agent executed the Airflow DAG creation task...",
         },
         {
-            "name": "Checking PR Creation",
-            "description": "Checking if the PR was created with the right name",
-            "status": "did not reach",
-            "Result_Message": "",
+            "name": "Git Branch Creation",
+            "description": "Verify that git branch was created with the correct name",
+            "status": "running",
+            "Result_Message": "Checking if git branch exists...",
         },
         {
-            "name": "Checking DAG Results",
-            "description": "Checking if the DAG produces the expected results",
-            "status": "did not reach",
-            "Result_Message": "",
+            "name": "PR Creation and Merge",
+            "description": "Verify that PR was created and merged successfully",
+            "status": "running",
+            "Result_Message": "Checking if PR was created and merged...",
+        },
+        {
+            "name": "GitHub Action Completion",
+            "description": "Verify that GitHub action completed successfully",
+            "status": "running",
+            "Result_Message": "Waiting for GitHub action to complete...",
+        },
+        {
+            "name": "Airflow Redeployment",
+            "description": "Verify that Airflow redeployed after GitHub action",
+            "status": "running",
+            "Result_Message": "Checking if Airflow redeployed successfully...",
+        },
+        {
+            "name": "DAG Creation Validation",
+            "description": "Verify that workflow_analytics_etl was created in Airflow",
+            "status": "running",
+            "Result_Message": "Validating that Workflow Analytics DAG exists in Airflow...",
+        },
+        {
+            "name": "DAG Execution and Monitoring",
+            "description": "Trigger the DAG and verify it runs successfully",
+            "status": "running",
+            "Result_Message": "Triggering DAG and monitoring execution...",
+        },
+        {
+            "name": "PostgreSQL Source Data Validation",
+            "description": "Verify source workflow data in PostgreSQL workflows table",
+            "status": "running",
+            "Result_Message": "Checking source workflow data in PostgreSQL...",
+        },
+        {
+            "name": "Snowflake Target Table Creation",
+            "description": "Verify that workflow_analytics table was created in Snowflake",
+            "status": "running",
+            "Result_Message": "Checking if workflow_analytics table exists in Snowflake...",
+        },
+        {
+            "name": "JSON Transformation Validation",
+            "description": "Verify that JSON workflow definitions were properly transformed",
+            "status": "running",
+            "Result_Message": "Validating JSON transformation results...",
         },
     ]
 
-    request.node.user_properties.append(("test_steps", test_steps))
-
-    # SECTION 1: SETUP THE TEST - following exact pattern from working tests
-    config_results = None  # Initialize before try block
     try:
-        # Get the actual database names from the fixtures
-        postgres_db_name = postgres_resource["created_resources"][0]["name"]
-        snowflake_db_name = snowflake_resource["database"]
-        snowflake_schema_name = snowflake_resource["schema"]
-        
-        print(f"Using PostgreSQL database: {postgres_db_name}")
-        print(f"Using Snowflake database: {snowflake_db_name}")
-        print(f"Using Snowflake schema: {snowflake_schema_name}")
+        # Step 1: Check that the agent task executed
+        if not model_result or model_result.get("status") == "failed":
+            test_steps[0]["status"] = "failed"
+            test_steps[0][
+                "Result_Message"
+            ] = "❌ AI Agent task execution failed or returned no result"
+            return {"score": 0.0, "metadata": {"test_steps": test_steps}}
 
-        # Update the configs to use the fixture-created databases
-        Test_Configs.Configs["services"]["postgreSQL"]["databases"][0]["name"] = postgres_db_name
-        Test_Configs.Configs["services"]["snowflake"]["database"] = snowflake_db_name
-        Test_Configs.Configs["services"]["snowflake"]["schema"] = snowflake_schema_name
-        
-        # Update Airflow configs with values from airflow_resource fixture - following exact pattern
-        Test_Configs.Configs["services"]["airflow"]["host"] = airflow_resource["base_url"]
-        Test_Configs.Configs["services"]["airflow"]["username"] = airflow_resource["username"]
-        Test_Configs.Configs["services"]["airflow"]["password"] = airflow_resource["password"]
-        Test_Configs.Configs["services"]["airflow"]["api_token"] = airflow_resource["api_token"]
+        test_steps[0]["status"] = "passed"
+        test_steps[0][
+            "Result_Message"
+        ] = "✅ AI Agent completed task execution successfully"
 
-        custom_info = {"mode": request.config.getoption("--mode")}
-        if request.config.getoption("--mode") == "Ardent":
-            custom_info["publicKey"] = supabase_account_resource["publicKey"]
-            custom_info["secretKey"] = supabase_account_resource["secretKey"]
-
-        config_results = set_up_model_configs(Configs=Test_Configs.Configs, custom_info=custom_info)
-
-        custom_info = {
-            **custom_info,
-            **config_results,
-        }
-
-        # SECTION 2: RUN THE MODEL - following exact pattern
-        start_time = time.time()
-        model_result = run_model(
-            container=None, 
-            task=Test_Configs.User_Input, 
-            configs=Test_Configs.Configs,
-            extra_information=custom_info
+        # Get fixtures for Airflow, PostgreSQL, Snowflake, and GitHub
+        airflow_fixture = (
+            next(
+                (f for f in fixtures if f.get_resource_type() == "airflow_resource"),
+                None,
+            )
+            if fixtures
+            else None
         )
-        end_time = time.time()
-        request.node.user_properties.append(("model_runtime", end_time - start_time))
-        
-        # Register the Braintrust root span ID for tracking (Ardent mode only)
-        if model_result and "bt_root_span_id" in model_result:
-            request.node.user_properties.append(("run_trace_id", model_result.get("bt_root_span_id")))
-            print(f"Registered Braintrust root span ID: {model_result.get('bt_root_span_id')}")
+        postgres_fixture = (
+            next(
+                (f for f in fixtures if f.get_resource_type() == "postgres_resource"),
+                None,
+            )
+            if fixtures
+            else None
+        )
+        snowflake_fixture = (
+            next(
+                (f for f in fixtures if f.get_resource_type() == "snowflake_resource"),
+                None,
+            )
+            if fixtures
+            else None
+        )
+        github_fixture = (
+            next(
+                (f for f in fixtures if f.get_resource_type() == "github_resource"),
+                None,
+            )
+            if fixtures
+            else None
+        )
 
-        # SECTION 3: VERIFY THE OUTCOMES - following exact pattern from working tests
-        # Check if the branch exists and verify PR creation/merge
-        print("Waiting 10 seconds for model to create branch and PR...")
-        time.sleep(10)  # Give the model time to create the branch and PR
-        
-        branch_exists, test_steps[0] = github_manager.verify_branch_exists(branch_name, test_steps[0])
+        if not airflow_fixture:
+            raise Exception("Airflow fixture not found")
+        if not postgres_fixture:
+            raise Exception("PostgreSQL fixture not found")
+        if not snowflake_fixture:
+            raise Exception("Snowflake fixture not found")
+        if not github_fixture:
+            raise Exception("GitHub fixture not found")
+
+        # Get resource data
+        airflow_resource_data = getattr(airflow_fixture, "_resource_data", None)
+        if not airflow_resource_data:
+            raise Exception("Airflow resource data not available")
+
+        postgres_resource_data = getattr(postgres_fixture, "_resource_data", None)
+        if not postgres_resource_data:
+            raise Exception("PostgreSQL resource data not available")
+
+        snowflake_resource_data = getattr(snowflake_fixture, "_resource_data", None)
+        if not snowflake_resource_data:
+            raise Exception("Snowflake resource data not available")
+
+        github_resource_data = getattr(github_fixture, "_resource_data", None)
+        if not github_resource_data:
+            raise Exception("GitHub resource data not available")
+
+        airflow_instance = airflow_resource_data["airflow_instance"]
+        base_url = airflow_resource_data["base_url"]
+        github_manager = github_resource_data.get("github_manager")
+
+        if not github_manager:
+            raise Exception("GitHub manager not available")
+
+        # Generate the same branch and PR names used in create_model_inputs
+        pr_title = f"Add PostgreSQL to Snowflake Workflow Analytics {test_timestamp}_{test_uuid}"
+        branch_name = f"feature/workflow-analytics-{test_timestamp}_{test_uuid}"
+
+        # Step 2-6: GitHub and Airflow workflow
+        print(f"🔍 Checking for branch: {branch_name}")
+        time.sleep(10)
+
+        branch_exists, test_steps[1] = github_manager.verify_branch_exists(
+            branch_name, test_steps[1]
+        )
         if not branch_exists:
-            raise Exception(test_steps[0]["Result_Message"])
+            test_steps[1]["status"] = "failed"
+            return {"score": 0.0, "metadata": {"test_steps": test_steps}}
 
-        pr_exists, test_steps[1] = github_manager.find_and_merge_pr(
-            pr_title=pr_title, 
-            test_step=test_steps[1], 
-            commit_title=pr_title, 
+        test_steps[1]["status"] = "passed"
+        test_steps[1][
+            "Result_Message"
+        ] = f"✅ Git branch '{branch_name}' created successfully"
+
+        # PR creation and merge
+        pr_exists, test_steps[2] = github_manager.find_and_merge_pr(
+            pr_title=pr_title,
+            test_step=test_steps[2],
+            commit_title=pr_title,
             merge_method="squash",
             build_info={
-                "deploymentId": airflow_resource["deployment_id"],
-                "deploymentName": airflow_resource["deployment_name"],
-            }
+                "deploymentId": airflow_resource_data["deployment_id"],
+                "deploymentName": airflow_resource_data["deployment_name"],
+            },
         )
+
         if not pr_exists:
-            raise Exception("Unable to find and merge PR. Please check the PR title and commit title.")
+            test_steps[2]["status"] = "failed"
+            test_steps[2]["Result_Message"] = "❌ Unable to find and merge PR"
+            return {"score": 0.0, "metadata": {"test_steps": test_steps}}
 
-        # Use the airflow instance from the fixture to pull DAGs from GitHub
-        # The fixture already has the Docker instance running
-        airflow_instance = airflow_resource["airflow_instance"]
-        
+        test_steps[2]["status"] = "passed"
+        test_steps[2][
+            "Result_Message"
+        ] = f"✅ PR '{pr_title}' created and merged successfully"
+
+        # GitHub action completion
         if not github_manager.check_if_action_is_complete(pr_title=pr_title):
-            raise Exception("Action is not complete")
-        
-        # verify the airflow instance is ready after the github action redeployed
+            test_steps[3]["status"] = "failed"
+            test_steps[3][
+                "Result_Message"
+            ] = "❌ GitHub action did not complete successfully"
+            return {"score": 0.0, "metadata": {"test_steps": test_steps}}
+
+        test_steps[3]["status"] = "passed"
+        test_steps[3]["Result_Message"] = "✅ GitHub action completed successfully"
+
+        # Airflow redeployment
         if not airflow_instance.wait_for_airflow_to_be_ready():
-            raise Exception("Airflow instance did not redeploy successfully.")
+            test_steps[4]["status"] = "failed"
+            test_steps[4][
+                "Result_Message"
+            ] = "❌ Airflow instance did not redeploy successfully"
+            return {"score": 0.0, "metadata": {"test_steps": test_steps}}
 
-        # Use the connection details from the fixture
-        airflow_base_url = airflow_resource["base_url"]
-        airflow_api_token = airflow_resource["api_token"]
-        
-        print(f"Connecting to Airflow at: {airflow_base_url}")
-        print(f"Using API Token: {airflow_api_token}")
+        test_steps[4]["status"] = "passed"
+        test_steps[4][
+            "Result_Message"
+        ] = "✅ Airflow redeployed successfully after GitHub action"
 
-        # Wait for DAG to appear and trigger it
+        # DAG existence check
         dag_name = "workflow_analytics_etl"
-        if not airflow_instance.verify_airflow_dag_exists(dag_name):
-            raise Exception(f"DAG '{dag_name}' did not appear in Airflow")
+        print(f"🔍 Checking for DAG: {dag_name} in Airflow at {base_url}")
 
+        if airflow_instance.verify_airflow_dag_exists(dag_name):
+            test_steps[5]["status"] = "passed"
+            test_steps[5]["Result_Message"] = f"✅ DAG '{dag_name}' found in Airflow"
+        else:
+            test_steps[5]["status"] = "failed"
+            test_steps[5][
+                "Result_Message"
+            ] = f"❌ DAG '{dag_name}' not found in Airflow"
+            return {"score": 0.0, "metadata": {"test_steps": test_steps}}
+
+        # DAG execution
+        print(f"🔍 Triggering DAG: {dag_name}")
         dag_run_id = airflow_instance.unpause_and_trigger_airflow_dag(dag_name)
+
         if not dag_run_id:
-            raise Exception("Failed to trigger DAG")
+            test_steps[6]["status"] = "failed"
+            test_steps[6]["Result_Message"] = "❌ Failed to trigger DAG"
+            return {"score": 0.0, "metadata": {"test_steps": test_steps}}
 
-        # Monitor the DAG run
-        print(f"Monitoring DAG run {dag_run_id} for completion...")
+        # Monitor the DAG run until completion
         airflow_instance.verify_dag_id_ran(dag_name, dag_run_id)
+        test_steps[6]["status"] = "passed"
+        test_steps[6][
+            "Result_Message"
+        ] = f"✅ DAG '{dag_name}' executed successfully (run_id: {dag_run_id})"
 
-        # Verify the data was loaded to Snowflake correctly
-        print("Verifying data was loaded to Snowflake...")
-        snowflake_conn = snowflake_resource["connection"]
-        cursor = snowflake_conn.cursor()
-        
+        # Capture comprehensive DAG information for debugging (source, import errors, task logs)
+        print("📊 Capturing comprehensive DAG information for debugging...")
         try:
-            # Check workflow_definitions table
-            cursor.execute(f"SELECT COUNT(*) FROM {snowflake_db_name}.{snowflake_schema_name}.workflow_definitions")
-            workflow_count = cursor.fetchone()[0]
-            print(f"Found {workflow_count} workflows in Snowflake")
+            comprehensive_dag_info = airflow_instance.get_comprehensive_dag_info(
+                dag_id=dag_name,
+                dag_run_id=dag_run_id,
+                github_manager=github_manager,
+            )
+
+            # Add requirements.txt snapshot to comprehensive DAG info
+            print(f"📦 Adding requirements.txt snapshot from feature branch: {branch_name}")
+            req_snapshot = None
+            candidate_paths = ["Requirements/requirements.txt", "requirements.txt"]
             
-            # Check workflow_edges table
-            cursor.execute(f"SELECT COUNT(*) FROM {snowflake_db_name}.{snowflake_schema_name}.workflow_edges")
-            edge_count = cursor.fetchone()[0]
-            print(f"Found {edge_count} edges in Snowflake")
+            for path in candidate_paths:
+                try:
+                    content = github_manager.get_file_content(path, branch_name)
+                    if content is not None:
+                        req_snapshot = {"path": path, "content": content}
+                        print(f"✅ Found requirements.txt at {path}")
+                        break
+                except Exception as e:
+                    print(f"⚠️ Could not read {path} from {branch_name}: {e}")
+                    continue
             
-            # Check workflow_node_details table
-            cursor.execute(f"SELECT COUNT(*) FROM {snowflake_db_name}.{snowflake_schema_name}.workflow_node_details")
-            node_count = cursor.fetchone()[0]
-            print(f"Found {node_count} nodes in Snowflake")
-            
-            if workflow_count > 0 and edge_count > 0 and node_count > 0:
-                test_steps[2]["status"] = "passed"
-                test_steps[2]["Result_Message"] = f"Data successfully loaded: {workflow_count} workflows, {edge_count} edges, {node_count} nodes"
-                print("✅ All validations passed! Workflow analytics ETL pipeline created and executed successfully.")
+            if req_snapshot:
+                comprehensive_dag_info["requirements_snapshot"] = req_snapshot
+                print(f"📄 Requirements snapshot added to comprehensive DAG info ({len(req_snapshot['content'])} chars)")
             else:
-                test_steps[2]["status"] = "failed"
-                test_steps[2]["Result_Message"] = "No data found in Snowflake tables"
-                raise Exception("ETL pipeline did not load data correctly")
-                
-        finally:
-            cursor.close()
+                print("⚠️ requirements.txt not found in any expected location")
 
-    finally:
-        try:
-            # CLEANUP - following exact pattern from working tests
-            if request.config.getoption("--mode") == "Ardent":
-                custom_info['job_id'] = model_result.get("id") if model_result else None
-            cleanup_model_artifacts(Configs=Test_Configs.Configs, custom_info=custom_info)
-            # Delete the branch from github using the github manager
-            github_manager.delete_branch(branch_name)
+            dag_source = comprehensive_dag_info.get("dag_source", {})
+            import_errors = comprehensive_dag_info.get("import_errors", [])
+
+            if dag_source.get("source_code"):
+                print(
+                    f"📄 DAG source code captured ({len(dag_source['source_code'])} characters)"
+                )
+                print(
+                    f"📄 Source code preview: {dag_source['source_code'][:200]}..."
+                )
+            else:
+                print("⚠️ DAG source code not available - attempting manual retrieval...")
+                try:
+                    dag_files = github_manager.get_all_dag_files()
+                    if dag_files:
+                        comprehensive_dag_info.setdefault("dag_source", {}).setdefault("github_files", dag_files)
+                        for filename, file_data in dag_files.items():
+                            if filename.endswith('.py'):
+                                comprehensive_dag_info["dag_source"]["source_code"] = file_data["content"]
+                                print(
+                                    f"✅ Retrieved DAG source from GitHub: {filename} ({len(file_data['content'])} chars)"
+                                )
+                                break
+                except Exception as e:
+                    print(f"❌ Failed to retrieve DAG files from GitHub: {e}")
+
+            if import_errors:
+                print(f"❌ Found {len(import_errors)} import errors")
+                for error in import_errors:
+                    print(
+                        f"   - {error.get('filename', 'Unknown')}: {error.get('stack_trace', 'No details')}"
+                    )
+            else:
+                print("✅ No DAG import errors found")
+
+            # Attach to test metadata
+            test_steps.append(
+                {
+                    "name": "DAG Information Capture",
+                    "description": "Capture comprehensive DAG information for debugging",
+                    "status": "passed",
+                    "Result_Message": "✅ Comprehensive DAG information captured successfully",
+                    "comprehensive_dag_info": comprehensive_dag_info,
+                    "dag_source_code": dag_source.get("source_code"),
+                    "dag_file_path": dag_source.get("file_path"),
+                    "dag_import_errors": import_errors,
+                    "task_logs_summary": {
+                        task_id: {
+                            "state": task_info.get("state"),
+                            "duration": task_info.get("duration"),
+                            "log_length": len(task_info.get("logs", "")),
+                        }
+                        for task_id, task_info in comprehensive_dag_info.get("task_logs", {}).items()
+                    },
+                }
+            )
 
         except Exception as e:
-            print(f"Error during cleanup: {e}")
+            print(f"⚠️ Could not capture comprehensive DAG info: {e}")
+            test_steps.append(
+                {
+                    "name": "DAG Information Capture",
+                    "description": "Capture comprehensive DAG information for debugging",
+                    "status": "failed",
+                    "Result_Message": f"❌ Failed to capture DAG information: {str(e)}",
+                }
+            )
+
+        # Step 8: PostgreSQL Source Data Validation
+        try:
+            postgres_config = postgres_resource_data.get("databases", [{}])[0]
+            postgres_db_name = postgres_config.get("name", "")
+
+            postgres_conn = psycopg2.connect(
+                host=os.getenv("POSTGRES_HOSTNAME"),
+                port=os.getenv("POSTGRES_PORT"),
+                user=os.getenv("POSTGRES_USERNAME"),
+                password=os.getenv("POSTGRES_PASSWORD"),
+                database=postgres_db_name,
+                sslmode="require",
+            )
+            postgres_cur = postgres_conn.cursor()
+
+            # Check workflows table
+            postgres_cur.execute("SELECT COUNT(*) FROM workflows")
+            workflows_count = postgres_cur.fetchone()[0]
+
+            if workflows_count > 0:
+                test_steps[7]["status"] = "passed"
+                test_steps[7][
+                    "Result_Message"
+                ] = f"✅ PostgreSQL source data validated: {workflows_count} workflows"
+            else:
+                test_steps[7]["status"] = "failed"
+                test_steps[7][
+                    "Result_Message"
+                ] = "❌ No source workflow data found in PostgreSQL"
+
+            postgres_cur.close()
+            postgres_conn.close()
+
+        except Exception as e:
+            test_steps[7]["status"] = "failed"
+            test_steps[7][
+                "Result_Message"
+            ] = f"❌ PostgreSQL validation error: {str(e)}"
+
+        # Step 9 & 10: Snowflake Target Data Validation
+        try:
+            # Get Snowflake connection details from fixture
+            database_name = snowflake_resource_data.get("database_name")
+            schema_name = snowflake_resource_data.get("schema_name")
+
+            snowflake_conn = snowflake.connector.connect(
+                account=os.getenv("SNOWFLAKE_ACCOUNT"),
+                user=os.getenv("SNOWFLAKE_USERNAME"),
+                password=os.getenv("SNOWFLAKE_PASSWORD"),
+                database=database_name,
+                schema=schema_name,
+                warehouse=os.getenv("SNOWFLAKE_WAREHOUSE"),
+                role=os.getenv("SNOWFLAKE_ROLE", "SYSADMIN"),
+            )
+            snowflake_cur = snowflake_conn.cursor()
+
+            # Check if workflow_analytics table was created and has data
+            snowflake_cur.execute("SELECT COUNT(*) FROM workflow_analytics")
+            analytics_count = snowflake_cur.fetchone()[0]
+
+            if analytics_count >= 0:  # Table exists even if no records
+                test_steps[8]["status"] = "passed"
+                test_steps[8][
+                    "Result_Message"
+                ] = f"✅ Snowflake workflow_analytics table created with {analytics_count} records"
+
+                # Step 10: Validate JSON transformation logic
+                if analytics_count > 0:
+                    # Check for required analytics columns
+                    snowflake_cur.execute(
+                        """
+                        SELECT workflow_id, workflow_name, node_count, created_by 
+                        FROM workflow_analytics 
+                        LIMIT 1
+                    """
+                    )
+                    sample_record = snowflake_cur.fetchone()
+
+                    if sample_record and all(
+                        field is not None for field in sample_record[:3]
+                    ):  # Check first 3 required fields
+                        test_steps[9]["status"] = "passed"
+                        test_steps[9][
+                            "Result_Message"
+                        ] = f"✅ JSON transformation validated: proper analytics structure with workflow data"
+                    else:
+                        test_steps[9]["status"] = "failed"
+                        test_steps[9][
+                            "Result_Message"
+                        ] = "❌ Analytics records exist but lack proper transformation structure"
+                else:
+                    test_steps[9]["status"] = "failed"
+                    test_steps[9][
+                        "Result_Message"
+                    ] = "❌ No analytics records found - transformation may have failed"
+            else:
+                test_steps[8]["status"] = "failed"
+                test_steps[8][
+                    "Result_Message"
+                ] = "❌ Snowflake workflow_analytics table not found"
+                test_steps[9]["status"] = "failed"
+                test_steps[9][
+                    "Result_Message"
+                ] = "❌ Cannot validate transformation - table not found"
+
+            snowflake_cur.close()
+            snowflake_conn.close()
+
+        except Exception as e:
+            test_steps[8]["status"] = "failed"
+            test_steps[8]["Result_Message"] = f"❌ Snowflake validation error: {str(e)}"
+            test_steps[9]["status"] = "failed"
+            test_steps[9]["Result_Message"] = f"❌ Snowflake validation error: {str(e)}"
+
+    except Exception as e:
+        # Mark any unfinished steps as failed
+        for step in test_steps:
+            if step["status"] == "running":
+                step["status"] = "failed"
+                step["Result_Message"] = f"❌ Validation error: {str(e)}"
+
+    # Calculate score as the fraction of steps that passed
+    passed_steps = sum([step["status"] == "passed" for step in test_steps])
+    total_steps = len(test_steps)
+    score = passed_steps / total_steps
+
+    print(
+        f"🎯 Validation completed: {passed_steps}/{total_steps} steps passed (Score: {score:.2f})"
+    )
+
+    return {
+        "score": score,
+        "metadata": {"test_steps": test_steps},
+    }

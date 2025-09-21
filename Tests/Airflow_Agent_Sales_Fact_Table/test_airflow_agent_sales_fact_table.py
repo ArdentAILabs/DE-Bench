@@ -1,15 +1,15 @@
-import importlib
+# Braintrust-only Airflow test - no pytest dependencies
+from model.Run_Model import run_model
+from model.Configure_Model import set_up_model_configs, cleanup_model_artifacts
 import os
-import pytest
-import re
+import importlib
 import time
 import uuid
 import psycopg2
+from typing import List, Dict, Any
+from Fixtures.base_fixture import DEBenchFixture
 
-from model.Configure_Model import cleanup_model_artifacts
-from model.Configure_Model import set_up_model_configs
-from model.Run_Model import run_model
-
+# Dynamic config loading
 current_dir = os.path.dirname(os.path.abspath(__file__))
 parent_dir_name = os.path.basename(current_dir)
 module_path = f"Tests.{parent_dir_name}.Test_Configs"
@@ -20,285 +20,757 @@ test_timestamp = int(time.time())
 test_uuid = uuid.uuid4().hex[:8]
 
 
-@pytest.mark.airflow
-@pytest.mark.pipeline
-@pytest.mark.database
-@pytest.mark.three  # Difficulty 3 - involves DAG creation, fact table creation, and foreign key validation
-@pytest.mark.parametrize("postgres_resource", [{
-    "resource_id": f"sales_fact_test_{test_timestamp}_{test_uuid}",
-    "databases": [
-        {
-            "name": f"sales_data_{test_timestamp}_{test_uuid}",
-            "sql_file": "schema.sql"
-        }
-    ]
-}], indirect=True)
-@pytest.mark.parametrize("github_resource", [{
-    "resource_id": f"test_airflow_sales_fact_table_test_{test_timestamp}_{test_uuid}",
-}], indirect=True)
-@pytest.mark.parametrize("airflow_resource", [{
-    "resource_id": f"sales_fact_table_test_{test_timestamp}_{test_uuid}",
-}], indirect=True)
-def test_airflow_agent_sales_fact_table(request, airflow_resource, github_resource, supabase_account_resource, postgres_resource):
-    input_dir = os.path.dirname(os.path.abspath(__file__))
-    github_manager = github_resource["github_manager"]
-    Test_Configs.User_Input = github_manager.add_merge_step_to_user_input(Test_Configs.User_Input)
-    dag_name = "sales_fact_creation_dag"
+def get_fixtures() -> List[DEBenchFixture]:
+    """
+    Provides custom DEBenchFixture instances for Braintrust evaluation.
+    This Airflow test validates that AI can create a sales fact table DAG pipeline.
+    """
+    from Fixtures.Airflow.airflow_fixture import AirflowFixture
+    from Fixtures.PostgreSQL.postgres_resources import PostgreSQLFixture
+    from Fixtures.GitHub.github_fixture import GitHubFixture
+
+    # Initialize Airflow fixture with test-specific configuration
+    custom_airflow_config = {
+        "resource_id": f"sales_fact_table_test_{test_timestamp}_{test_uuid}",
+        "runtime_version": "13.1.0",
+        "scheduler_size": "small",
+    }
+
+    # Initialize PostgreSQL fixture for the sales data
+    custom_postgres_config = {
+        "resource_id": f"sales_fact_test_{test_timestamp}_{test_uuid}",
+        "databases": [
+            {
+                "name": f"sales_data_{test_timestamp}_{test_uuid}",
+                "sql_file": f"{os.path.dirname(os.path.abspath(__file__))}/schema.sql",
+            }
+        ],
+    }
+
+    # Initialize GitHub fixture for PR and branch management
+    custom_github_config = {
+        "resource_id": f"test_airflow_sales_fact_table_test_{test_timestamp}_{test_uuid}",
+    }
+
+    airflow_fixture = AirflowFixture(custom_config=custom_airflow_config)
+    postgres_fixture = PostgreSQLFixture(custom_config=custom_postgres_config)
+    github_fixture = GitHubFixture(custom_config=custom_github_config)
+
+    return [airflow_fixture, postgres_fixture, github_fixture]
+
+
+def create_model_inputs(
+    base_model_inputs: Dict[str, Any], fixtures: List[DEBenchFixture]
+) -> Dict[str, Any]:
+    """
+    Create test-specific config using the set-up fixtures.
+    This function has access to all fixture data after setup and dynamically
+    updates the task description with GitHub branch and PR information.
+    """
+    import os
+    from extract_test_configs import create_config_from_fixtures
+
+    # Get GitHub fixture to access manager for dynamic branch/PR creation
+    github_fixture = next(
+        (f for f in fixtures if f.get_resource_type() == "github_resource"), None
+    )
+
+    if not github_fixture:
+        raise Exception(
+            "GitHub fixture not found - required for branch and PR management"
+        )
+
+    # Get the GitHub manager from the fixture
+    github_resource_data = getattr(github_fixture, "_resource_data", None)
+    if not github_resource_data:
+        raise Exception("GitHub resource data not available")
+
+    github_manager = github_resource_data.get("github_manager")
+    if not github_manager:
+        raise Exception("GitHub manager not available")
+
+    # Generate dynamic branch and PR names (same pattern as old pytest version)
     pr_title = f"Add Sales Fact Table Creation Pipeline {test_timestamp}_{test_uuid}"
     branch_name = f"feature/sales-fact-table-{test_timestamp}_{test_uuid}"
-    Test_Configs.User_Input = Test_Configs.User_Input.replace("BRANCH_NAME", branch_name)
-    Test_Configs.User_Input = Test_Configs.User_Input.replace("PR_NAME", pr_title)
-    request.node.user_properties.append(("user_query", Test_Configs.User_Input))
+
+    # Start with the original user input from Test_Configs
+    task_description = Test_Configs.User_Input
+
+    # Add merge step to user input (from old pytest version)
+    task_description = github_manager.add_merge_step_to_user_input(task_description)
+
+    # Replace placeholders with dynamic values
+    task_description = task_description.replace("BRANCH_NAME", branch_name)
+    task_description = task_description.replace("PR_NAME", pr_title)
+
+    # Set up GitHub secrets for Astro access (from old pytest version)
     github_manager.check_and_update_gh_secrets(
         secrets={
             "ASTRO_ACCESS_TOKEN": os.environ["ASTRO_ACCESS_TOKEN"],
         }
     )
-    
-    # Use the airflow_resource fixture - the Docker instance is already running
-    print("=== Starting Sales Fact Table Creation Airflow Pipeline Test ===")
-    print(f"Using Airflow instance from fixture: {airflow_resource['resource_id']}")
-    print(f"Using GitHub instance from fixture: {github_resource['resource_id']}")
-    print(f"Using PostgreSQL instance from fixture: {postgres_resource['resource_id']}")
-    print(f"Airflow base URL: {airflow_resource['base_url']}")
-    print(f"Test directory: {input_dir}")
 
+    print(f"🔧 Generated dynamic branch name: {branch_name}")
+    print(f"🔧 Generated dynamic PR title: {pr_title}")
+
+    # Use the helper to automatically create config from all fixtures
+    return {
+        # Always do this
+        **base_model_inputs,
+        # Always do this
+        "model_configs": create_config_from_fixtures(fixtures),
+        # Now with dynamic branch and PR names
+        "task_description": task_description,
+    }
+
+
+def validate_test(model_result, fixtures=None):
+    """
+    Validates that the AI agent successfully created a sales fact table DAG.
+
+    Expected behavior:
+    - DAG should be created with name "sales_fact_creation_dag"
+    - DAG should run successfully and create the sales_fact table
+    - Table should have proper structure with foreign key constraints
+    - Data should be populated with correct business logic
+
+    Args:
+        model_result: The result from the AI model execution
+        fixtures: List of DEBenchFixture instances used in the test
+
+    Returns:
+        dict: Contains 'score' float and 'metadata' dict with validation details
+    """
+    # Create comprehensive test steps for validation
     test_steps = [
         {
-            "name": "Checking Git Branch Existence",
-            "description": "Checking if the git branch exists with the right name",
-            "status": "did not reach",
-            "Result_Message": "",
+            "name": "Agent Task Execution",
+            "description": "AI Agent executes task to create Sales Fact Table DAG",
+            "status": "running",
+            "Result_Message": "Checking if AI agent executed the Airflow DAG creation task...",
         },
         {
-            "name": "Checking PR Creation",
-            "description": "Checking if the PR was created with the right name",
-            "status": "did not reach",
-            "Result_Message": "",
+            "name": "Git Branch Creation",
+            "description": "Verify that git branch was created with the correct name",
+            "status": "running",
+            "Result_Message": "Checking if git branch exists...",
         },
         {
-            "name": "Checking Sales Fact Table Creation",
-            "description": "Checking if the sales_fact table was properly created with foreign keys",
-            "status": "did not reach",
-            "Result_Message": "",
+            "name": "PR Creation and Merge",
+            "description": "Verify that PR was created and merged successfully",
+            "status": "running",
+            "Result_Message": "Checking if PR was created and merged...",
+        },
+        {
+            "name": "GitHub Action Completion",
+            "description": "Verify that GitHub action completed successfully",
+            "status": "running",
+            "Result_Message": "Waiting for GitHub action to complete...",
+        },
+        {
+            "name": "Airflow Redeployment",
+            "description": "Verify that Airflow redeployed after GitHub action",
+            "status": "running",
+            "Result_Message": "Checking if Airflow redeployed successfully...",
+        },
+        {
+            "name": "DAG Creation Validation",
+            "description": "Verify that sales_fact_creation_dag was created in Airflow",
+            "status": "running",
+            "Result_Message": "Validating that Sales Fact Creation DAG exists in Airflow...",
+        },
+        {
+            "name": "DAG Execution and Monitoring",
+            "description": "Trigger the DAG and verify it runs successfully",
+            "status": "running",
+            "Result_Message": "Triggering DAG and monitoring execution...",
+        },
+        {
+            "name": "Sales Fact Table Creation",
+            "description": "Verify that sales_fact table was created with data",
+            "status": "running",
+            "Result_Message": "Checking if sales_fact table exists and has data...",
+        },
+        {
+            "name": "Table Structure Validation",
+            "description": "Verify that sales_fact table has expected columns",
+            "status": "running",
+            "Result_Message": "Validating table structure and columns...",
+        },
+        {
+            "name": "Foreign Key Constraints",
+            "description": "Verify that foreign key constraints are properly set up",
+            "status": "running",
+            "Result_Message": "Checking foreign key constraints...",
+        },
+        {
+            "name": "Data Integrity Validation",
+            "description": "Verify that foreign keys reference valid records",
+            "status": "running",
+            "Result_Message": "Validating data integrity and relationships...",
+        },
+        {
+            "name": "Business Logic Validation",
+            "description": "Verify that business logic calculations are correct",
+            "status": "running",
+            "Result_Message": "Checking business logic calculations...",
         },
     ]
 
-    # SECTION 1: SETUP THE TEST
-    request.node.user_properties.append(("test_steps", test_steps))
-    created_db_name = postgres_resource["created_resources"][0]["name"]
+    overall_success = False
 
-    config_results = None  # Initialize before try block
-    custom_info = {"mode": request.config.getoption("--mode")}
     try:
-        # The dags folder is already set up by the fixture
-        # The PostgreSQL database is already set up by the postgres_resource fixture
+        # Step 1: Check that the agent task executed
+        if not model_result or model_result.get("status") == "failed":
+            test_steps[0]["status"] = "failed"
+            test_steps[0][
+                "Result_Message"
+            ] = "❌ AI Agent task execution failed or returned no result"
+            return {"score": 0.0, "metadata": {"test_steps": test_steps}}
 
-        # Get the actual database name from the fixture
-        print(f"Using PostgreSQL database: {created_db_name}")
+        test_steps[0]["status"] = "passed"
+        test_steps[0][
+            "Result_Message"
+        ] = "✅ AI Agent completed task execution successfully"
 
-        # Set up model configurations with actual database name and test-specific credentials
-        test_configs = Test_Configs.Configs.copy()
-        test_configs["services"]["postgreSQL"]["databases"] = [{"name": created_db_name}]
+        # Get fixtures for Airflow, PostgreSQL, and GitHub
+        airflow_fixture = None
+        postgres_fixture = None
+        github_fixture = None
 
-        # set the airflow folder with the correct configs
-        # this function is for you to take the configs for the test and set them up however you want. They follow a set structure
-        test_configs["services"]["airflow"]["host"] = airflow_resource["base_url"]
-        test_configs["services"]["airflow"]["username"] = airflow_resource["username"]
-        test_configs["services"]["airflow"]["password"] = airflow_resource["password"]
-        test_configs["services"]["airflow"]["api_token"] = airflow_resource["api_token"]
-        if request.config.getoption("--mode") == "Ardent":
-            custom_info["publicKey"] = supabase_account_resource["publicKey"]
-            custom_info["secretKey"] = supabase_account_resource["secretKey"]
-        config_results = set_up_model_configs(Configs=test_configs,custom_info=custom_info)
+        if fixtures:
+            airflow_fixture = next(
+                (f for f in fixtures if f.get_resource_type() == "airflow_resource"),
+                None,
+            )
+            postgres_fixture = next(
+                (f for f in fixtures if f.get_resource_type() == "postgres_resource"),
+                None,
+            )
+            github_fixture = next(
+                (f for f in fixtures if f.get_resource_type() == "github_resource"),
+                None,
+            )
 
-        custom_info = {
-            **custom_info,
-            **config_results,
-        }
+        if not airflow_fixture:
+            raise Exception("Airflow fixture not found")
+        if not postgres_fixture:
+            raise Exception("PostgreSQL fixture not found")
+        if not github_fixture:
+            raise Exception("GitHub fixture not found")
 
-        # SECTION 2: RUN THE MODEL
-        start_time = time.time()
-        print("Running model to create DAG and PR...")
-        model_result = run_model(container=None, task=Test_Configs.User_Input, configs=test_configs,extra_information = custom_info)
-        end_time = time.time()
-        print(f"Model execution completed. Result: {model_result}")
-        request.node.user_properties.append(("model_runtime", end_time - start_time))
+        # Get Airflow instance from stored resource data (needed early for GitHub steps)
+        airflow_resource_data = getattr(airflow_fixture, "_resource_data", None)
+        if not airflow_resource_data:
+            raise Exception("Airflow resource data not available")
 
-        # Register the Braintrust root span ID for tracking (Ardent mode only)
-        if model_result and "bt_root_span_id" in model_result:
-            request.node.user_properties.append(("run_trace_id", model_result.get("bt_root_span_id")))
-            print(f"Registered Braintrust root span ID: {model_result.get('bt_root_span_id')}")
+        airflow_instance = airflow_resource_data["airflow_instance"]
+        api_headers = airflow_resource_data["api_headers"]
+        base_url = airflow_resource_data["base_url"]
 
-        # Check if the branch exists and verify PR creation/merge
-        print("Waiting 10 seconds for model to create branch and PR...")
-        time.sleep(10)  # Give the model time to create the branch and PR
-        
-        branch_exists, test_steps[0] = github_manager.verify_branch_exists(branch_name, test_steps[0])
-        if not branch_exists:
-            raise Exception(test_steps[0]["Result_Message"])
+        # Get PostgreSQL connection info
+        postgres_resource_data = getattr(postgres_fixture, "_resource_data", None)
+        if not postgres_resource_data:
+            raise Exception("PostgreSQL resource data not available")
 
-        pr_exists, test_steps[1] = github_manager.find_and_merge_pr(
-            pr_title=pr_title, 
-            test_step=test_steps[1], 
-            commit_title=pr_title, 
-            merge_method="squash",
-            build_info={
-                "deploymentId": airflow_resource["deployment_id"],
-                "deploymentName": airflow_resource["deployment_name"],
-            }
+        # Get GitHub manager for validation
+        github_resource_data = getattr(github_fixture, "_resource_data", None)
+        if not github_resource_data:
+            raise Exception("GitHub resource data not available")
+
+        github_manager = github_resource_data.get("github_manager")
+        if not github_manager:
+            raise Exception("GitHub manager not available")
+
+        # Generate the same branch and PR names used in create_model_inputs
+        pr_title = (
+            f"Add Sales Fact Table Creation Pipeline {test_timestamp}_{test_uuid}"
         )
-        if not pr_exists:
-            raise Exception("Unable to find and merge PR. Please check the PR title and commit title.")
+        branch_name = f"feature/sales-fact-table-{test_timestamp}_{test_uuid}"
 
-        # Use the airflow instance from the fixture to pull DAGs from GitHub
-        # The fixture already has the Docker instance running
-        airflow_instance = airflow_resource["airflow_instance"]
-        
-        if not github_manager.check_if_action_is_complete(pr_title=pr_title):
-            raise Exception("Action is not complete")
-        
-        # verify the airflow instance is ready after the github action redeployed
-        if not airflow_instance.wait_for_airflow_to_be_ready():
-            raise Exception("Airflow instance did not redeploy successfully.")
-
-        # Use the connection details from the fixture
-        airflow_base_url = airflow_resource["base_url"]
-        airflow_api_token = airflow_resource["api_token"]
-        
-        print(f"Connecting to Airflow at: {airflow_base_url}")
-        print(f"Using API Token: {airflow_api_token}")
-
-        # Wait for DAG to appear and trigger it
-        if not airflow_instance.verify_airflow_dag_exists(dag_name):
-            raise Exception(f"DAG '{dag_name}' did not appear in Airflow")
-
-        dag_run_id = airflow_instance.unpause_and_trigger_airflow_dag(dag_name)
-        if not dag_run_id:
-            raise Exception("Failed to trigger DAG")
-
-        # Monitor the DAG run
-        print(f"Monitoring DAG run {dag_run_id} for completion...")
-        airflow_instance.verify_dag_id_ran(dag_name, dag_run_id)
-
-        # SECTION 3: VERIFY THE OUTCOMES
-        print("Verifying sales fact table creation...")
-        conn = psycopg2.connect(
-            host=os.getenv("POSTGRES_HOSTNAME"),
-            port=os.getenv("POSTGRES_PORT"),
-            user=os.getenv("POSTGRES_USERNAME"),
-            password=os.getenv("POSTGRES_PASSWORD"),
-            database=created_db_name,
-            sslmode="require"
-        )
-        cur = conn.cursor()
-        
-        # Check if sales_fact table exists and has data
-        cur.execute("""
-            SELECT COUNT(*) 
-            FROM sales_fact
-        """)
-        row_count = cur.fetchone()[0]
-        
-        assert row_count > 0, "No sales fact data found in the database"
-        print(f"✓ Found {row_count} sales fact records")
-
-        # Check table structure
-        cur.execute("""
-            SELECT column_name, data_type 
-            FROM information_schema.columns 
-            WHERE table_name = 'sales_fact'
-            ORDER BY ordinal_position
-        """)
-        columns = cur.fetchall()
-        expected_columns = ['sales_id', 'transaction_id', 'item_id', 'customer_id', 'quantity', 'unit_price', 'total_amount', 'sale_date']
-        actual_columns = [col[0] for col in columns]
-        
-        # Check that all expected columns exist
-        for expected_col in expected_columns:
-            assert expected_col in actual_columns, f"Missing expected column '{expected_col}' in sales_fact table"
-        
-        # Verify foreign key constraints exist
-        cur.execute("""
-            SELECT 
-                tc.constraint_name,
-                tc.table_name,
-                kcu.column_name,
-                ccu.table_name AS foreign_table_name,
-                ccu.column_name AS foreign_column_name
-            FROM information_schema.table_constraints AS tc
-            JOIN information_schema.key_column_usage AS kcu
-                ON tc.constraint_name = kcu.constraint_name
-            JOIN information_schema.constraint_column_usage AS ccu
-                ON ccu.constraint_name = tc.constraint_name
-            WHERE tc.constraint_type = 'FOREIGN KEY' 
-                AND tc.table_name = 'sales_fact'
-            ORDER BY kcu.column_name
-        """)
-        foreign_keys = cur.fetchall()
-        
-        # Should have 3 foreign keys: transaction_id, item_id, customer_id
-        assert len(foreign_keys) >= 3, f"Expected at least 3 foreign key constraints, found {len(foreign_keys)}"
-        
-        # Verify specific foreign key relationships
-        fk_columns = [fk[2] for fk in foreign_keys]
-        expected_fk_columns = ['transaction_id', 'item_id', 'customer_id']
-        for expected_fk in expected_fk_columns:
-            assert expected_fk in fk_columns, f"Missing foreign key constraint for '{expected_fk}'"
-        
-        # Verify data integrity - check that foreign keys reference valid records
-        cur.execute("""
-            SELECT COUNT(*) 
-            FROM sales_fact sf
-            LEFT JOIN transactions t ON sf.transaction_id = t.transaction_id
-            LEFT JOIN items i ON sf.item_id = i.item_id
-            LEFT JOIN customers c ON sf.customer_id = c.customer_id
-            WHERE t.transaction_id IS NULL OR i.item_id IS NULL OR c.customer_id IS NULL
-        """)
-        orphaned_records = cur.fetchone()[0]
-        assert orphaned_records == 0, f"Found {orphaned_records} sales fact records with invalid foreign key references"
-        
-        # Verify some sample data relationships
-        cur.execute("""
-            SELECT 
-                sf.sales_id,
-                sf.quantity,
-                sf.unit_price,
-                sf.total_amount,
-                t.transaction_date,
-                i.item_name,
-                c.first_name || ' ' || c.last_name as customer_name
-            FROM sales_fact sf
-            JOIN transactions t ON sf.transaction_id = t.transaction_id
-            JOIN items i ON sf.item_id = i.item_id
-            JOIN customers c ON sf.customer_id = c.customer_id
-            LIMIT 5
-        """)
-        sample_records = cur.fetchall()
-        
-        assert len(sample_records) > 0, "No valid sales fact records with proper foreign key relationships found"
-        
-        # Verify that total_amount = quantity * unit_price (basic business logic)
-        cur.execute("""
-            SELECT COUNT(*) 
-            FROM sales_fact 
-            WHERE ABS(total_amount - (quantity * unit_price)) > 0.01
-        """)
-        invalid_totals = cur.fetchone()[0]
-        assert invalid_totals == 0, f"Found {invalid_totals} records where total_amount doesn't equal quantity * unit_price"
-        
-        print(f"✓ Successfully verified sales_fact table with {row_count} records and proper foreign key relationships")
-        test_steps[2]["status"] = "passed"
-        test_steps[2]["Result_Message"] = f"Successfully created sales_fact table with {row_count} records and proper foreign key constraints"
-
-    finally:
+        # Step 2: Check if git branch was created
+        print(f"🔍 Checking for branch: {branch_name}")
         try:
-            # this function is for you to remove the configs for the test. They follow a set structure.
-            if request.config.getoption("--mode") == "Ardent":
-                custom_info['job_id'] = model_result.get("id") if model_result else None
-            cleanup_model_artifacts(Configs=test_configs, custom_info=custom_info)
-            # Delete the branch from github using the github manager
-            github_manager.delete_branch(branch_name)
+            # Wait a bit for the model to create branch and PR
+            import time
+
+            time.sleep(10)
+
+            branch_exists, test_steps[1] = github_manager.verify_branch_exists(
+                branch_name, test_steps[1]
+            )
+            if not branch_exists:
+                test_steps[1]["status"] = "failed"
+                return {"score": 0.0, "metadata": {"test_steps": test_steps}}
+
+            test_steps[1]["status"] = "passed"
+            test_steps[1][
+                "Result_Message"
+            ] = f"✅ Git branch '{branch_name}' created successfully"
 
         except Exception as e:
-            print(f"Error during cleanup: {e}")
+            test_steps[1]["status"] = "failed"
+            test_steps[1]["Result_Message"] = f"❌ Error checking git branch: {str(e)}"
+            return {"score": 0.0, "metadata": {"test_steps": test_steps}}
+
+        # Step 3: Check if PR was created and merge it
+        print(f"🔍 Checking for PR: {pr_title}")
+        try:
+            pr_exists, test_steps[2] = github_manager.find_and_merge_pr(
+                pr_title=pr_title,
+                test_step=test_steps[2],
+                commit_title=pr_title,
+                merge_method="squash",
+                build_info={
+                    "deploymentId": airflow_resource_data["deployment_id"],
+                    "deploymentName": airflow_resource_data["deployment_name"],
+                },
+            )
+
+            if not pr_exists:
+                test_steps[2]["status"] = "failed"
+                test_steps[2]["Result_Message"] = "❌ Unable to find and merge PR"
+                return {"score": 0.0, "metadata": {"test_steps": test_steps}}
+
+            test_steps[2]["status"] = "passed"
+            test_steps[2][
+                "Result_Message"
+            ] = f"✅ PR '{pr_title}' created and merged successfully"
+
+        except Exception as e:
+            test_steps[2]["status"] = "failed"
+            test_steps[2][
+                "Result_Message"
+            ] = f"❌ Error with PR creation/merge: {str(e)}"
+            return {"score": 0.0, "metadata": {"test_steps": test_steps}}
+
+        # Step 4: Check if GitHub action completed
+        print(f"🔍 Waiting for GitHub action to complete...")
+        try:
+            if not github_manager.check_if_action_is_complete(pr_title=pr_title):
+                test_steps[3]["status"] = "failed"
+                test_steps[3][
+                    "Result_Message"
+                ] = "❌ GitHub action did not complete successfully"
+                return {"score": 0.0, "metadata": {"test_steps": test_steps}}
+
+            test_steps[3]["status"] = "passed"
+            test_steps[3]["Result_Message"] = "✅ GitHub action completed successfully"
+
+        except Exception as e:
+            test_steps[3]["status"] = "failed"
+            test_steps[3][
+                "Result_Message"
+            ] = f"❌ Error checking GitHub action: {str(e)}"
+            return {"score": 0.0, "metadata": {"test_steps": test_steps}}
+
+        # Step 5: Verify Airflow redeployment
+        print(f"🔍 Verifying Airflow redeployment...")
+        try:
+            if not airflow_instance.wait_for_airflow_to_be_ready():
+                test_steps[4]["status"] = "failed"
+                test_steps[4][
+                    "Result_Message"
+                ] = "❌ Airflow instance did not redeploy successfully"
+                return {"score": 0.0, "metadata": {"test_steps": test_steps}}
+
+            test_steps[4]["status"] = "passed"
+            test_steps[4][
+                "Result_Message"
+            ] = "✅ Airflow redeployed successfully after GitHub action"
+
+        except Exception as e:
+            test_steps[4]["status"] = "failed"
+            test_steps[4][
+                "Result_Message"
+            ] = f"❌ Error verifying Airflow redeployment: {str(e)}"
+            return {"score": 0.0, "metadata": {"test_steps": test_steps}}
+
+        # Step 6: Verify that sales_fact_creation_dag was created
+        dag_name = "sales_fact_creation_dag"
+        print(f"🔍 Checking for DAG: {dag_name} in Airflow at {base_url}")
+
+        try:
+            # Use airflow_instance method to check if DAG exists
+            if airflow_instance.verify_airflow_dag_exists(dag_name):
+                test_steps[5]["status"] = "passed"
+                test_steps[5][
+                    "Result_Message"
+                ] = f"✅ DAG '{dag_name}' found in Airflow"
+            else:
+                test_steps[5]["status"] = "failed"
+                test_steps[5][
+                    "Result_Message"
+                ] = f"❌ DAG '{dag_name}' not found in Airflow"
+                return {"score": 0.0, "metadata": {"test_steps": test_steps}}
+
+        except Exception as e:
+            test_steps[5]["status"] = "failed"
+            test_steps[5][
+                "Result_Message"
+            ] = f"❌ Error checking DAG existence: {str(e)}"
+            return {"score": 0.0, "metadata": {"test_steps": test_steps}}
+
+        # Step 7: Trigger DAG and wait for successful execution
+        try:
+            print(f"🔍 Triggering DAG: {dag_name}")
+
+            # Trigger the DAG
+            dag_run_id = airflow_instance.unpause_and_trigger_airflow_dag(dag_name)
+
+            if not dag_run_id:
+                test_steps[6]["status"] = "failed"
+                test_steps[6]["Result_Message"] = "❌ Failed to trigger DAG"
+                return {"score": 0.0, "metadata": {"test_steps": test_steps}}
+
+            print(f"🔍 Monitoring DAG run {dag_run_id} for completion...")
+
+            # Monitor the DAG run until completion
+            airflow_instance.verify_dag_id_ran(dag_name, dag_run_id)
+
+            test_steps[6]["status"] = "passed"
+            test_steps[6][
+                "Result_Message"
+            ] = f"✅ DAG '{dag_name}' executed successfully (run_id: {dag_run_id})"
+
+        # Capture comprehensive DAG information for debugging (source, import errors, task logs)
+        print("📊 Capturing comprehensive DAG information for debugging...")
+        try:
+            comprehensive_dag_info = airflow_instance.get_comprehensive_dag_info(
+                dag_id=dag_name,
+                dag_run_id=dag_run_id,
+                github_manager=github_manager,
+            )
+
+            # Add requirements.txt snapshot to comprehensive DAG info
+            print(f"📦 Adding requirements.txt snapshot from feature branch: {branch_name}")
+            req_snapshot = None
+            candidate_paths = ["Requirements/requirements.txt", "requirements.txt"]
+            
+            for path in candidate_paths:
+                try:
+                    content = github_manager.get_file_content(path, branch_name)
+                    if content is not None:
+                        req_snapshot = {"path": path, "content": content}
+                        print(f"✅ Found requirements.txt at {path}")
+                        break
+                except Exception as e:
+                    print(f"⚠️ Could not read {path} from {branch_name}: {e}")
+                    continue
+            
+            if req_snapshot:
+                comprehensive_dag_info["requirements_snapshot"] = req_snapshot
+                print(f"📄 Requirements snapshot added to comprehensive DAG info ({len(req_snapshot['content'])} chars)")
+            else:
+                print("⚠️ requirements.txt not found in any expected location")
+
+            dag_source = comprehensive_dag_info.get("dag_source", {})
+            import_errors = comprehensive_dag_info.get("import_errors", [])
+
+            if dag_source.get("source_code"):
+                print(
+                    f"📄 DAG source code captured ({len(dag_source['source_code'])} characters)"
+                )
+                print(
+                    f"📄 Source code preview: {dag_source['source_code'][:200]}..."
+                )
+            else:
+                print("⚠️ DAG source code not available - attempting manual retrieval...")
+                try:
+                    dag_files = github_manager.get_all_dag_files()
+                    if dag_files:
+                        comprehensive_dag_info.setdefault("dag_source", {}).setdefault("github_files", dag_files)
+                        for filename, file_data in dag_files.items():
+                            if filename.endswith('.py'):
+                                comprehensive_dag_info["dag_source"]["source_code"] = file_data["content"]
+                                print(
+                                    f"✅ Retrieved DAG source from GitHub: {filename} ({len(file_data['content'])} chars)"
+                                )
+                                break
+                except Exception as e:
+                    print(f"❌ Failed to retrieve DAG files from GitHub: {e}")
+
+            if import_errors:
+                print(f"❌ Found {len(import_errors)} import errors")
+                for error in import_errors:
+                    print(
+                        f"   - {error.get('filename', 'Unknown')}: {error.get('stack_trace', 'No details')}"
+                    )
+            else:
+                print("✅ No DAG import errors found")
+
+            # Attach to test metadata
+            test_steps.append(
+                {
+                    "name": "DAG Information Capture",
+                    "description": "Capture comprehensive DAG information for debugging",
+                    "status": "passed",
+                    "Result_Message": "✅ Comprehensive DAG information captured successfully",
+                    "comprehensive_dag_info": comprehensive_dag_info,
+                    "dag_source_code": dag_source.get("source_code"),
+                    "dag_file_path": dag_source.get("file_path"),
+                    "dag_import_errors": import_errors,
+                    "task_logs_summary": {
+                        task_id: {
+                            "state": task_info.get("state"),
+                            "duration": task_info.get("duration"),
+                            "log_length": len(task_info.get("logs", "")),
+                        }
+                        for task_id, task_info in comprehensive_dag_info.get("task_logs", {}).items()
+                    },
+                }
+            )
+
+        except Exception as e:
+            print(f"⚠️ Could not capture comprehensive DAG info: {e}")
+            test_steps.append(
+                {
+                    "name": "DAG Information Capture",
+                    "description": "Capture comprehensive DAG information for debugging",
+                    "status": "failed",
+                    "Result_Message": f"❌ Failed to capture DAG information: {str(e)}",
+                }
+            )
+
+        except Exception as e:
+            test_steps[6]["status"] = "failed"
+            test_steps[6][
+                "Result_Message"
+            ] = f"❌ Error triggering/monitoring DAG: {str(e)}"
+            return {"score": 0.0, "metadata": {"test_steps": test_steps}}
+
+        # Step 8-12: PostgreSQL Database Validation
+        try:
+            # Get database connection details
+            postgres_config = postgres_resource_data.get("databases", [{}])[0]
+            database_name = postgres_config.get("name", "")
+
+            # Use environment variables for connection (should be set by fixture)
+            conn = psycopg2.connect(
+                host=os.getenv("POSTGRES_HOSTNAME"),
+                port=os.getenv("POSTGRES_PORT"),
+                user=os.getenv("POSTGRES_USERNAME"),
+                password=os.getenv("POSTGRES_PASSWORD"),
+                database=database_name,
+                sslmode="require",
+            )
+            cur = conn.cursor()
+
+            print(f"🔍 Connected to PostgreSQL database: {database_name}")
+
+            # Step 8: Check if sales_fact table exists and has data
+            try:
+                cur.execute("SELECT COUNT(*) FROM sales_fact")
+                row_count = cur.fetchone()[0]
+
+                if row_count > 0:
+                    test_steps[7]["status"] = "passed"
+                    test_steps[7][
+                        "Result_Message"
+                    ] = f"✅ Found {row_count} records in sales_fact table"
+                else:
+                    test_steps[7]["status"] = "failed"
+                    test_steps[7][
+                        "Result_Message"
+                    ] = "❌ sales_fact table exists but has no data"
+
+            except psycopg2.Error as e:
+                test_steps[7]["status"] = "failed"
+                test_steps[7][
+                    "Result_Message"
+                ] = f"❌ sales_fact table does not exist or is inaccessible: {str(e)}"
+
+            # Step 9: Validate table structure
+            try:
+                cur.execute(
+                    """
+                    SELECT column_name, data_type 
+                    FROM information_schema.columns 
+                    WHERE table_name = 'sales_fact'
+                    ORDER BY ordinal_position
+                """
+                )
+                columns = cur.fetchall()
+
+                if columns:
+                    actual_columns = [col[0] for col in columns]
+                    expected_columns = [
+                        "sales_id",
+                        "transaction_id",
+                        "item_id",
+                        "customer_id",
+                        "quantity",
+                        "unit_price",
+                        "total_amount",
+                        "sale_date",
+                    ]
+
+                    missing_columns = [
+                        col for col in expected_columns if col not in actual_columns
+                    ]
+
+                    if not missing_columns:
+                        test_steps[8]["status"] = "passed"
+                        test_steps[8][
+                            "Result_Message"
+                        ] = f"✅ Table structure valid. Columns: {', '.join(actual_columns)}"
+                    else:
+                        test_steps[8]["status"] = "failed"
+                        test_steps[8][
+                            "Result_Message"
+                        ] = f"❌ Missing expected columns: {', '.join(missing_columns)}"
+                else:
+                    test_steps[8]["status"] = "failed"
+                    test_steps[8][
+                        "Result_Message"
+                    ] = "❌ Could not retrieve table structure"
+
+            except Exception as e:
+                test_steps[8]["status"] = "failed"
+                test_steps[8][
+                    "Result_Message"
+                ] = f"❌ Error validating table structure: {str(e)}"
+
+            # Step 10: Verify foreign key constraints
+            try:
+                cur.execute(
+                    """
+                    SELECT 
+                        tc.constraint_name,
+                        kcu.column_name,
+                        ccu.table_name AS foreign_table_name,
+                        ccu.column_name AS foreign_column_name
+                    FROM information_schema.table_constraints AS tc
+                    JOIN information_schema.key_column_usage AS kcu
+                        ON tc.constraint_name = kcu.constraint_name
+                    JOIN information_schema.constraint_column_usage AS ccu
+                        ON ccu.constraint_name = tc.constraint_name
+                    WHERE tc.constraint_type = 'FOREIGN KEY' 
+                        AND tc.table_name = 'sales_fact'
+                    ORDER BY kcu.column_name
+                """
+                )
+                foreign_keys = cur.fetchall()
+
+                if len(foreign_keys) >= 3:
+                    fk_columns = [fk[1] for fk in foreign_keys]
+                    expected_fk_columns = ["transaction_id", "item_id", "customer_id"]
+                    missing_fks = [
+                        col for col in expected_fk_columns if col not in fk_columns
+                    ]
+
+                    if not missing_fks:
+                        test_steps[9]["status"] = "passed"
+                        test_steps[9][
+                            "Result_Message"
+                        ] = f"✅ Found {len(foreign_keys)} foreign key constraints: {', '.join(fk_columns)}"
+                    else:
+                        test_steps[9]["status"] = "failed"
+                        test_steps[9][
+                            "Result_Message"
+                        ] = f"❌ Missing foreign key constraints for: {', '.join(missing_fks)}"
+                else:
+                    test_steps[9]["status"] = "failed"
+                    test_steps[9][
+                        "Result_Message"
+                    ] = f"❌ Expected at least 3 foreign key constraints, found {len(foreign_keys)}"
+
+            except Exception as e:
+                test_steps[9]["status"] = "failed"
+                test_steps[9][
+                    "Result_Message"
+                ] = f"❌ Error checking foreign key constraints: {str(e)}"
+
+            # Step 11: Verify data integrity
+            try:
+                cur.execute(
+                    """
+                    SELECT COUNT(*) 
+                    FROM sales_fact sf
+                    LEFT JOIN transactions t ON sf.transaction_id = t.transaction_id
+                    LEFT JOIN items i ON sf.item_id = i.item_id
+                    LEFT JOIN customers c ON sf.customer_id = c.customer_id
+                    WHERE t.transaction_id IS NULL OR i.item_id IS NULL OR c.customer_id IS NULL
+                """
+                )
+                orphaned_records = cur.fetchone()[0]
+
+                if orphaned_records == 0:
+                    test_steps[10]["status"] = "passed"
+                    test_steps[10][
+                        "Result_Message"
+                    ] = "✅ All foreign key references are valid"
+                else:
+                    test_steps[10]["status"] = "failed"
+                    test_steps[10][
+                        "Result_Message"
+                    ] = f"❌ Found {orphaned_records} records with invalid foreign key references"
+
+            except Exception as e:
+                test_steps[10]["status"] = "failed"
+                test_steps[10][
+                    "Result_Message"
+                ] = f"❌ Error validating data integrity: {str(e)}"
+
+            # Step 12: Verify business logic
+            try:
+                # Check that total_amount = quantity * unit_price (allowing small rounding differences)
+                cur.execute(
+                    """
+                    SELECT COUNT(*) 
+                    FROM sales_fact 
+                    WHERE ABS(total_amount - (quantity * unit_price)) > 0.01
+                """
+                )
+                invalid_totals = cur.fetchone()[0]
+
+                if invalid_totals == 0:
+                    test_steps[11]["status"] = "passed"
+                    test_steps[11][
+                        "Result_Message"
+                    ] = "✅ Business logic validation passed: total_amount = quantity * unit_price"
+                else:
+                    test_steps[11]["status"] = "failed"
+                    test_steps[11][
+                        "Result_Message"
+                    ] = f"❌ Found {invalid_totals} records where total_amount doesn't equal quantity * unit_price"
+
+            except Exception as e:
+                test_steps[11]["status"] = "failed"
+                test_steps[11][
+                    "Result_Message"
+                ] = f"❌ Error validating business logic: {str(e)}"
+
+            # Close database connection
+            cur.close()
+            conn.close()
+
+        except Exception as e:
+            # Mark all database-related steps as failed
+            for i in range(7, 12):
+                if test_steps[i]["status"] == "running":
+                    test_steps[i]["status"] = "failed"
+                    test_steps[i][
+                        "Result_Message"
+                    ] = f"❌ Database validation error: {str(e)}"
+
+    except Exception as e:
+        # Mark any unfinished steps as failed
+        for step in test_steps:
+            if step["status"] == "running":
+                step["status"] = "failed"
+                step["Result_Message"] = f"❌ Validation error: {str(e)}"
+
+    # Calculate score as the fraction of steps that passed
+    passed_steps = sum([step["status"] == "passed" for step in test_steps])
+    total_steps = len(test_steps)
+    score = passed_steps / total_steps
+
+    print(
+        f"🎯 Validation completed: {passed_steps}/{total_steps} steps passed (Score: {score:.2f})"
+    )
+
+    return {
+        "score": score,
+        "metadata": {"test_steps": test_steps},
+    }

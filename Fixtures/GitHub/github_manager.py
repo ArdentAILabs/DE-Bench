@@ -108,6 +108,131 @@ class GitHubManager:
                 else:
                     raise e
     
+    def get_file_content(self, file_path: str, branch: str = "main") -> Optional[str]:
+        """
+        Get the content of a file from the repository.
+        
+        :param str file_path: Path to the file in the repository
+        :param str branch: Branch to get the file from (default: main)
+        :return: File content as string, or None if file doesn't exist
+        :rtype: Optional[str]
+        """
+        try:
+            file_content = self.repo.get_contents(file_path, ref=branch)
+            if isinstance(file_content, list):
+                # If it's a directory, return None
+                return None
+            # Decode the content from base64
+            return file_content.decoded_content.decode('utf-8')
+        except github.GithubException as e:
+            if e.status == 404:
+                print(f"📄 File not found: {file_path}")
+                return None
+            else:
+                print(f"❌ Error getting file content for {file_path}: {e}")
+                raise e
+
+    def get_all_dag_files(self, branch: str = None) -> dict:
+        """
+        Get all DAG files from the dags folder.
+        
+        :param str branch: Branch to get files from (default: uses current branch or main)
+        :return: Dictionary mapping filename to content
+        :rtype: dict
+        """
+        dag_files = {}
+        
+        # Use current branch if no branch specified
+        if branch is None:
+            branch = getattr(self, 'branch_name', 'main')
+        
+        print(f"🔍 Looking for DAG files in branch: {branch}")
+        
+        # Try current branch first, then main as fallback
+        branches_to_try = [branch] if branch != 'main' else ['main']
+        if branch != 'main':
+            branches_to_try.append('main')
+            
+        for try_branch in branches_to_try:
+            try:
+                print(f"📁 Checking dags folder in branch: {try_branch}")
+                # Get contents of dags folder
+                dags_contents = self.repo.get_contents("dags", ref=try_branch)
+                
+                for content in dags_contents:
+                    if content.type == "file" and content.name.endswith('.py'):
+                        file_content = self.get_file_content(content.path, try_branch)
+                        if file_content:
+                            dag_files[content.name] = {
+                                "path": content.path,
+                                "content": file_content,
+                                "size": content.size,
+                                "sha": content.sha,
+                                "branch": try_branch
+                            }
+                            print(f"✅ Found DAG file: {content.name} ({content.size} bytes)")
+                
+                # If we found files, break out of the loop
+                if dag_files:
+                    print(f"📄 Retrieved {len(dag_files)} DAG files from branch: {try_branch}")
+                    break
+                    
+            except github.GithubException as e:
+                if e.status == 404:
+                    print(f"📁 Dags folder not found in branch: {try_branch}")
+                else:
+                    print(f"❌ Error getting DAG files from {try_branch}: {e}")
+                continue
+                
+        return dag_files
+
+    def get_requirements_text(self, branch: Optional[str] = None) -> Optional[Dict[str, str]]:
+        """
+        Retrieve the contents of requirements.txt from the repository for a given branch.
+
+        Tries common locations in order:
+          1) Requirements/requirements.txt
+          2) requirements.txt (repo root)
+
+        :param branch: Branch name to read from (defaults to current test branch or main)
+        :return: {"path": <path>, "content": <text>} or None if not found
+        :rtype: Optional[Dict[str, str]]
+        """
+        try_branch = branch or getattr(self, 'branch_name', 'main')
+        candidate_paths = [
+            os.path.join("Requirements", "requirements.txt"),
+            "requirements.txt",
+        ]
+
+        for path in candidate_paths:
+            try:
+                file_content = self.repo.get_contents(path, ref=try_branch)
+                if isinstance(file_content, list):
+                    continue
+                content_text = file_content.decoded_content.decode("utf-8")
+                return {"path": path, "content": content_text}
+            except github.GithubException as e:
+                if getattr(e, "status", None) == 404:
+                    continue
+                # Surface unexpected errors
+                raise e
+
+        # Not found in the target branch; try main as a last resort if different
+        if try_branch != "main":
+            for path in candidate_paths:
+                try:
+                    file_content = self.repo.get_contents(path, ref="main")
+                    if isinstance(file_content, list):
+                        continue
+                    content_text = file_content.decoded_content.decode("utf-8")
+                    return {"path": path, "content": content_text}
+                except github.GithubException as e:
+                    if getattr(e, "status", None) == 404:
+                        continue
+                    raise e
+
+        return None
+
     def clear_folder(self, folder_name: str, keep_file_names: Optional[list[str]] = None) -> None:
         """
         Clear the folder and ensure .gitkeep exists and nothing else.

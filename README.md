@@ -1,18 +1,29 @@
 # DE-Bench
 DE Bench: Can Agents Solve Real-World Data Engineering Problems?
 
-This is repository of real world problems for Data Engineering Agents to solve. It was designed to test Ardent's Agents
+This repository contains real-world data engineering problems for AI agents to solve, designed to evaluate agent capabilities across various data engineering tasks including databases, data pipelines, and workflow orchestration.
 
-There is a README within each test folder to explain the problem and the tests
+## 📖 **For Test Development**
 
-To Run this testing yourself:
+**See [Tests/TESTS.md](Tests/TESTS.md)** for comprehensive documentation on:
+- **Test pattern and structure** 
+- **Writing new tests**
+- **Fixture system usage**
+- **Validation patterns**
+- **Best practices**
 
-1. Clone the repo into wherever you want. Ideally a tests folder
+## 🚀 **Quick Start**
 
-2. Set Environment variables
+### 1. Clone and Setup
 
-  You will have to set a ton of environment variables for the tests to work. This provides the neccesary information for the tests to set up the right environments as well as provide the agent enough information to make solving the problem possible.
+```bash
+git clone <repo-url>
+cd DE-Bench
+```
 
+### 2. Environment Variables
+
+Set up your environment variables to provide credentials and configuration for various services:
 
 ## Environment Variables Template:
 
@@ -94,6 +105,7 @@ FINCH_ACCESS_TOKEN="YOUR_FINCH_ACCESS_TOKEN"
 # Astronomer Cloud Configuration
 ASTRO_WORKSPACE_ID="YOUR_ASTRO_WORKSPACE_ID"
 ASTRO_ACCESS_TOKEN="YOUR_ASTRO_ACCESS_TOKEN"
+ASTRO_API_TOKEN="YOUR_ASTRO_API_TOKEN"   # This can be used instead of the ASTRO_ACCESS_TOKEN
 ASTRO_CLOUD_PROVIDER="aws"
 ASTRO_REGION="us-east-1"
 
@@ -130,7 +142,7 @@ AWS_DEFAULT_REGION_CLAUDE="us-east-1"
 # Claude Code Configuration
 IS_SANDBOX=1
 
-# OpenAI Configuration (for OpenAI_Codex mode - Coming Soon)
+# OpenAI Configuration (for OpenAI_Codex mode)
 OPENAI_API_KEY="YOUR_OPENAI_API_KEY"
 AZURE_OPENAI_API_KEY="YOUR_AZURE_OPENAI_API_KEY"
 AZURE_OPENAI_ENDPOINT="YOUR_AZURE_OPENAI_ENDPOINT"
@@ -157,118 +169,81 @@ ARDENT_BASE_URL="http://localhost:8000"
 4. Set up and run the Docker Compose environment:
 
 ```bash
-# Build and start the containers
-docker-compose up --build
+# Copy the environment template
+cp env.example .env
 
-# Or run in detached mode
-docker-compose up -d --build
+# Edit the .env file with your actual credentials
+# Replace TODO_REQUIRED values with your credentials
+# TODO_OPTIONAL values can be left empty if you don't need those services
 ```
 
-5. Run tests from inside the container:
+The template includes:
+- **Core Framework Variables**: Required for all tests (Supabase, Ardent)
+- **Execution Mode Configuration**: Choose between Ardent, Claude_Code, or OpenAI_Codex modes
+- **Database Services**: MongoDB, MySQL, PostgreSQL, Snowflake, Azure SQL
+- **Workflow Orchestration**: Airflow, Databricks, Astronomer
+- **Cloud Services**: AWS, Azure configurations
+- **Third-party APIs**: Finch and other service integrations
+
+Each section is clearly documented with:
+- Purpose and usage explanations
+- Required vs optional variables
+- Default values where applicable
+- Example formats for complex values
+
+### 3. Install Dependencies
 
 ```bash
-# Enter the container
-docker-compose exec de-bench bash
-
-# Run tests with various options
-pytest -n auto -sv                    # Run with default settings (parallel)
-pytest -sv -k "keyword"               # Run tests by keyword
-pytest -m "postgres"                  # Run tests by marker
-pytest                                # Run all tests without parallelization (not recommended)
+pip install -r requirements.txt
 ```
 
-## Execution Modes
+### 4. Run Tests
 
-The test suite supports multiple AI model execution modes via the `--mode` flag:
+The framework uses Braintrust for evaluation. Run tests using the evaluation script:
+
+```bash
+# Run all tests
+python run_braintrust_eval.py Ardent
+
+# Run specific test
+python run_braintrust_eval.py --filter "MongoDB_Agent_Add_Record" Ardent
+
+# Run tests by category
+python run_braintrust_eval.py --filter "PostgreSQL_Agent.*" Ardent
+python run_braintrust_eval.py --filter "Airflow_Agent.*" Ardent
+
+# Run multiple test patterns
+python run_braintrust_eval.py --filter "MongoDB.*" "MySQL.*" Ardent
+
+# Run with different AI modes
+python run_braintrust_eval.py --filter "MongoDB_Agent_Add_Record" Claude_Code
+python run_braintrust_eval.py --filter "MongoDB_Agent_Add_Record" OpenAI_Codex
+
+```
 
 ### Available Modes:
+- **Ardent** (Default) - Uses Ardent AI's backend service
+- **Claude_Code** - Uses Claude Code via AWS Bedrock in Kubernetes containers
+- **OpenAI_Codex** - Uses OpenAI Codex via OpenAI API in Kubernetes containers
 
-1. **Ardent** (Default) - Uses Ardent AI's backend service
-2. **Claude_Code** - Uses Anthropic's Claude Code CLI in Kubernetes containers  
-3. **OpenAI_Codex** - Uses OpenAI's Codex CLI (coming soon)
-
-### Running Tests with Different Modes:
-
+### Filter Examples:
 ```bash
-# Run with Ardent AI (default mode)
-pytest Tests/MongoDB_Agent_Add_Record/ --mode Ardent -v
+# Database tests
+python run_braintrust_eval.py --filter ".*Agent_Add_Record" Ardent
 
-# Run with Claude Code in Kubernetes
-pytest Tests/MongoDB_Agent_Add_Record/ --mode Claude_Code -v
+# Airflow pipeline tests  
+python run_braintrust_eval.py --filter "Airflow_Agent.*" Ardent
 
-# Run multiple tests in parallel with Claude Code
-pytest -n auto --mode Claude_Code -v
+# Specific database types
+python run_braintrust_eval.py --filter "PostgreSQL.*" Ardent
+python run_braintrust_eval.py --filter "Snowflake.*" Ardent
+python run_braintrust_eval.py --filter "MongoDB.*" Ardent
 
-# Run specific test categories with different modes
-pytest -m "postgres" --mode Claude_Code -v
-pytest -m "airflow" --mode Ardent -v
 ```
 
-### Mode-Specific Requirements:
+### 5. Service Configuration
 
-**Ardent Mode:**
-- Requires `ARDENT_PUBLIC_KEY` and `ARDENT_SECRET_KEY` environment variables
-- Uses Supabase for account management
-
-**Claude_Code Mode:**
-- Requires Azure Kubernetes Service (AKS) access
-- Uses Kubernetes pods with Claude Code CLI installed
-- Automatically handles container lifecycle and cleanup
-- **Required Environment Variables:**
-  - `AZURE_CLIENT_ID` - Azure service principal client ID
-  - `AZURE_CLIENT_SECRET` - Azure service principal client secret  
-  - `AZURE_TENANT_ID` - Azure tenant ID
-  - `AZURE_SUBSCRIPTION_ID` - Azure subscription ID
-  - `ACI_RESOURCE_GROUP` - Azure resource group containing AKS cluster
-  - `AKS_CLUSTER_NAME` - Name of the AKS cluster
-  - `AWS_ACCESS_KEY_ID_CLAUDE` - AWS access key for Claude Code (Bedrock access)
-  - `AWS_SECRET_ACCESS_KEY_CLAUDE` - AWS secret key for Claude Code
-  - `AWS_DEFAULT_REGION_CLAUDE` - AWS region for Claude Code (defaults to us-east-1)
-  - `IS_SANDBOX=1` - Required for Claude Code non-interactive execution
-
-**OpenAI_Codex Mode:** (Coming Soon)
-- Will require OpenAI API credentials
-- Will support Azure OpenAI deployments
-
-### Performance & Usage Tips:
-
-**Parallel Execution:**
-```bash
-# Run 4 tests in parallel with Claude Code (recommended)
-pytest -n auto --mode Claude_Code Tests/MongoDB_Agent_Add_Record/ Tests/PostgreSQL_Agent_Add_Record/ Tests/MySQL_Agent_Update_Records/ Tests/Snowflake_Agent_Add_Record/ -v
-
-# Compare performance between modes
-pytest Tests/MongoDB_Agent_Add_Record/ --mode Ardent -v
-pytest Tests/MongoDB_Agent_Add_Record/ --mode Claude_Code -v
-```
-
-**Resource Management:**
-- **Claude_Code mode** automatically creates and destroys Kubernetes pods for each test
-- **Ardent mode** uses persistent backend connections
-- Both modes support parallel execution with `pytest-xdist` (`-n auto`)
-- Cleanup is handled automatically even if tests are interrupted with Ctrl+C
-
-**Benchmarking:**
-```bash
-# Benchmark all modes on the same test
-pytest Tests/MongoDB_Agent_Add_Record/ --mode Ardent -v --tb=short
-pytest Tests/MongoDB_Agent_Add_Record/ --mode Claude_Code -v --tb=short
-# pytest Tests/MongoDB_Agent_Add_Record/ --mode OpenAI_Codex -v --tb=short  # Coming soon
-```
-
-Pytest supports `and` & `or` operators too. Something like `pytest -m "one and two"` will work.
-
-**⚠️ Important: Graceful Test Interruption**
-
-The test suite now handles **Ctrl+C** gracefully! When you interrupt tests with Ctrl+C:
-- ✅ **All resources are cleaned up** (databases, containers, cloud resources)
-- ✅ **No orphaned resources** are left behind
-- ✅ **Fixture teardown runs** automatically
-- ✅ **Temp files are removed**
-
-You can safely interrupt long-running tests without worrying about cleanup! DO NOT SPAM CONTROL C though
-
-6. Configure your tools and permissions:
+Configure your tools and permissions:
 
 MongoDB:
 - Required Role: dbAdmin
@@ -286,19 +261,51 @@ Snowflake:
   - COPY INTO (for S3 loading)
 - AWS S3 Access: Ensure AWS credentials have S3 read permissions for parquet files
 
-7. A lot of the tests run on tools or frameworks. We've set up a clean .env file with all the necessary variables needed. We've tried to optimize the setup of all the tests but it will likely charge some credits through the tools. Keep that in mind.
+## 📝 **Important Notes**
 
+**Cost Awareness**: Many tests use cloud services that may incur charges. Monitor your usage across:
+- Database services (MongoDB Atlas, AWS RDS, Snowflake)
+- Airflow/Astronomer deployments 
+- AWS S3 and other cloud resources
 
+**Service-Specific Requirements**:
+- **MongoDB**: Must have permissions to create and drop collections and databases
+- **Airflow**: Must be set up with git sync enabled to your repository
+- **MySQL**: Check credentials regularly (AWS RDS defaults rotate weekly)
+- **PostgreSQL**: Must have the default `postgres` database available
+- **Tigerbeetle**: Must be set up with VOPR for testing (if used)
 
-Notes:
+**AI Mode Requirements**:
+- **Claude_Code**: Requires AWS Bedrock access and Azure Kubernetes Service setup
+- **OpenAI_Codex**: Requires valid OpenAI API key and Azure Kubernetes Service setup
 
--Tigerbeetle must be set up with VOPR for testing.
--Mongo must have permisions to create and drop collections and databases
--Airflow must be set up with git sync enabled to the repo you provide
--make sure your mySQL password and username are up to date. AWS sets defaults to rotate once a week...
--Postgres must have the postgres db in it to function (i mean u shouldn't have deleted this anyway)
+## 🔍 **Test Discovery & Debugging**
 
-## Common Errors
+### Viewing Available Tests
+```bash
+# See all available tests
+python run_braintrust_eval.py --help
+
+# Tests are automatically discovered from Tests/ directory
+# Each test must follow the standard pattern (see Tests/TESTS.md)
+```
+
+### Debugging Failed Tests
+```bash
+# Use verbose mode for detailed error information
+python run_braintrust_eval.py --filter "Test_Name" --verbose Ardent
+
+# Check Braintrust dashboard for detailed execution logs
+# URL will be provided in the output
+```
+
+### Test Development
+- See **[Tests/TESTS.md](Tests/TESTS.md)** for the complete development guide
+- All tests use the unified `DEBenchFixture` pattern
+- Resources are automatically set up and cleaned up
+- Validation includes detailed test steps for debugging
+
+## ⚠️ **Common Errors**
 
 ### **Astronomer Token Expired**
 ```
@@ -306,10 +313,42 @@ subprocess.CalledProcessError: Command '['astro', 'login', '--token-login', 'eyJ
 ```
 **Solution:** Your `ASTRO_ACCESS_TOKEN` has expired. Generate a new token from your Astronomer account and update your `.env` file.
 
-
 ### **Database Connection Errors**
 ```
 psycopg2.OperationalError: could not connect to server
 mysql.connector.errors.DatabaseError: Can't connect to MySQL server
 ```
 **Solution:** Check your database credentials in the `.env` file. For AWS RDS, credentials may rotate weekly - update them as needed.
+
+### **Test Discovery Issues**
+```
+❌ Test 'Test_Name' does not match pattern: missing 'get_fixtures'
+```
+**Solution:** Test doesn't follow the new pattern. See [Tests/TESTS.md](Tests/TESTS.md) for conversion guide. Tests must have `get_fixtures()`, `create_model_inputs()`, and `validate_test()` functions.
+
+### **Resource Setup Failures**
+```
+Exception: MongoDB resource data not available - ensure test_setup was called
+```
+**Solution:** Fixture setup failed. Check environment variables for the specific service and ensure credentials are correct.
+
+### **Configuration Validation Errors**
+```
+ardent.exceptions.ArdentValidationError: Invalid type at user. Expected str, got NoneType
+```
+**Solution:** Environment variable is missing or None. Check your `.env` file for the required service credentials.
+
+---
+
+## 🎯 **Framework Benefits**
+
+This new DE-Bench framework provides:
+
+- **🔄 Unified Testing**: All tests follow the same pattern for consistency
+- **🛡️ Robust Resource Management**: Automatic setup and cleanup of databases, services
+- **📊 Detailed Validation**: Test steps provide granular pass/fail information  
+- **⚡ Parallel Execution**: Tests run efficiently with proper resource isolation
+- **🔍 Easy Debugging**: Clear error messages and Braintrust integration
+- **📚 Comprehensive Documentation**: Complete guides in [Tests/TESTS.md](Tests/TESTS.md)
+
+For detailed test development, patterns, and examples, see **[Tests/TESTS.md](Tests/TESTS.md)**.
