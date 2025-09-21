@@ -326,18 +326,28 @@ def validate_test(model_result, fixtures=None):
             ] = f"❌ Error with PR creation/merge: {str(e)}"
             return {"score": 0.0, "metadata": {"test_steps": test_steps}}
 
-        # Step 4: Check if GitHub action completed
+        # Step 4: Check GitHub action status with failure details
         print(f"🔍 Waiting for GitHub action to complete...")
         try:
-            if not github_manager.check_if_action_is_complete(pr_title=pr_title):
+            action_status = github_manager.check_if_action_is_complete(pr_title=pr_title, return_details=True)
+            
+            if not action_status["completed"]:
                 test_steps[3]["status"] = "failed"
-                test_steps[3][
-                    "Result_Message"
-                ] = "❌ GitHub action did not complete successfully"
+                test_steps[3]["Result_Message"] = f"❌ GitHub action timed out (status: {action_status['status']})"
+                test_steps[3]["action_status"] = action_status
                 return {"score": 0.0, "metadata": {"test_steps": test_steps}}
-
-            test_steps[3]["status"] = "passed"
-            test_steps[3]["Result_Message"] = "✅ GitHub action completed successfully"
+            elif not action_status["success"]:
+                test_steps[3]["status"] = "failed"
+                test_steps[3]["Result_Message"] = f"❌ GitHub action failed (conclusion: {action_status['conclusion']})"
+                test_steps[3]["action_status"] = action_status
+                # CI failure details are already included in action_status["ci_failure_details"]
+                if "ci_failure_details" in action_status:
+                    print(f"📋 CI failure details captured: {len(action_status['ci_failure_details'].get('jobs', []))} jobs analyzed")
+                return {"score": 0.0, "metadata": {"test_steps": test_steps}}
+            else:
+                test_steps[3]["status"] = "passed"
+                test_steps[3]["Result_Message"] = "✅ GitHub action completed successfully"
+                test_steps[3]["action_status"] = action_status
 
         except Exception as e:
             test_steps[3]["status"] = "failed"

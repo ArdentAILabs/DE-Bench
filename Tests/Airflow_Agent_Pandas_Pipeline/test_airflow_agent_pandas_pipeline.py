@@ -300,14 +300,29 @@ def validate_test(model_result, fixtures=None):
         test_steps[2]["Result_Message"] = f"✅ PR '{pr_title}' created and merged successfully"
 
 
-        # GitHub action completion
-        if not github_manager.check_if_action_is_complete(pr_title=pr_title):
+        # GitHub action completion with CI failure details
+        action_status = github_manager.check_if_action_is_complete(pr_title=pr_title, return_details=True)
+        
+        if not action_status["completed"]:
             test_steps[3]["status"] = "failed"
-            test_steps[3]["Result_Message"] = "❌ GitHub action did not complete successfully"
+            test_steps[3]["Result_Message"] = f"❌ GitHub action timed out (status: {action_status['status']})"
+            test_steps[3]["action_status"] = action_status
             return {"score": 0.0, "metadata": {"test_steps": test_steps}}
-
-        test_steps[3]["status"] = "passed"
-        test_steps[3]["Result_Message"] = "✅ GitHub action completed successfully"
+        elif not action_status["success"]:
+            test_steps[3]["status"] = "failed"
+            test_steps[3]["Result_Message"] = f"❌ GitHub action failed (conclusion: {action_status['conclusion']})"
+            test_steps[3]["action_status"] = action_status
+            # CI details are automatically included in action_status["ci_details"]
+            if "ci_details" in action_status:
+                print(f"📋 CI details captured: {len(action_status['ci_details'].get('jobs', []))} jobs analyzed")
+            return {"score": 0.0, "metadata": {"test_steps": test_steps}}
+        else:
+            test_steps[3]["status"] = "passed"
+            test_steps[3]["Result_Message"] = "✅ GitHub action completed successfully"
+            test_steps[3]["action_status"] = action_status
+            # TESTING: Show CI details even for successful runs
+            if "ci_details" in action_status:
+                print(f"📋 CI details captured for successful run: {len(action_status['ci_details'].get('jobs', []))} jobs analyzed")
 
         # Airflow redeployment
         if not airflow_instance.wait_for_airflow_to_be_ready():

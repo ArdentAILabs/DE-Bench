@@ -3,9 +3,12 @@ This module provides a class for managing GitHub operations.
 """
 
 import os
+import re
+import random
 import time
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, Union
 import datetime
+import requests
 
 import github
 from github import Github, Repository
@@ -71,7 +74,6 @@ class GitHubManager:
         :return: Modified user input string with merge step
         :rtype: str
         """
-        import re
         numbers = [int(n) for n in re.findall(r'\d+', user_input)]
         last_number = max(numbers) if numbers else 0
         # add the test name to the user input
@@ -398,7 +400,6 @@ class GitHubManager:
                 
                 if is_conflict and merge_attempt < merge_retries - 1:
                     # Wait with exponential backoff and jitter for parallel execution conflicts
-                    import random
                     wait_time = (2 ** merge_attempt) + random.uniform(1, 3)  # 1-3s, 3-5s, 5-7s, etc.
                     print(f"⚠️ Merge conflict detected (attempt {merge_attempt + 1}): {e}")
                     print(f"⏳ Waiting {wait_time:.1f}s before retry...")
@@ -559,35 +560,171 @@ class GitHubManager:
         except Exception as e:
             print(f"Error resetting repository state: {e}")
     
-    def check_if_action_is_complete(self, pr_title: str, wait_before_checking: Optional[int] = 60, max_retries: Optional[int] = 10, branch_name: Optional[str] = None) -> bool:
+    def check_if_action_is_complete(self, pr_title: str, wait_before_checking: Optional[int] = 60, max_retries: Optional[int] = 10, branch_name: Optional[str] = None, return_details: bool = False) -> Union[bool, Dict[str, Any]]:
         """
-        Check if an action is complete.
+        Check if GitHub action is complete, with optional detailed status and failure info.
         
         :param str pr_title: Title of the PR to check the action for
         :param int wait_before_checking: Time to wait before checking if the action is complete, defaults to 60 seconds
         :param int max_retries: Maximum number of retries, defaults to 10
         :param str branch_name: Name of the branch to check
-        :return: True if action is complete, False otherwise
+        :param bool return_details: If True, return detailed status dict; if False, return bool
+        :return: Bool (success/failure) or Dict with detailed action status and failure info
         """
-        import time
         print(f"Waiting {wait_before_checking} seconds before checking if action is complete...")
         time.sleep(wait_before_checking)
-        print(f"Checking if action is complete...")
+        print(f"Checking GitHub action status...")
         if not branch_name:
             branch_name = self.branch_name
+            
         for retry in range(max_retries):
             workflow_runs = self.repo.get_workflow_runs(branch=branch_name)  # type: ignore
             if workflow_runs.totalCount > 0:
                 if filtered_runs := [run for run in workflow_runs if run.display_title.lower() == pr_title.lower()]:
-                    # check the first run in the list
-                    if filtered_runs[0].status == "completed":
-                        print(f"✓ Action is complete")
-                        return True
-                print(f"✗ Action is not complete")
+                    run = filtered_runs[0]
+                    
+                    if run.status == "completed":
+                        result = {
+                            "completed": True,
+                            "success": run.conclusion == "success",
+                            "status": run.status,
+                            "conclusion": run.conclusion,
+                            "url": run.html_url,
+                            "run_id": run.id,
+                            "display_title": run.display_title
+                        }
+                        
+                        # TESTING: Always capture CI details regardless of success/failure
+                        print(f"📋 Action completed - capturing CI details for testing...")
+                        try:
+                            ci_details = self.get_ci_failure_details(run)
+                            result["ci_details"] = ci_details
+                            print(f"📋 Captured CI details: {len(ci_details.get('jobs', []))} jobs analyzed")
+                        except Exception as e:
+                            print(f"⚠️ Could not capture CI details: {e}")
+                            result["ci_details_error"] = str(e)
+                        
+                        print(f"✓ Action completed with status: {run.status}/{run.conclusion}")
+                        
+                        # Return based on return_details flag
+                        if return_details:
+                            return result
+                        else:
+                            return result.get("success", False)
+                        
+                print(f"✗ Action is not complete (status: {run.status if 'run' in locals() else 'unknown'})")
+            else:
+                print(f"✗ No workflow runs found")
+                
             print(f"Waiting 60 seconds before checking again...{retry + 1} of {max_retries}")
             time.sleep(60)
-        print(f"✗ Action is not complete after {max_retries} retries")
-        return False
+            
+        print(f"✗ Action did not complete after {max_retries} retries")
+        timeout_result = {
+            "completed": False,
+            "success": False,
+            "status": "timeout",
+            "conclusion": "timeout",
+            "timeout_after_retries": max_retries
+        }
+        
+        # Return based on return_details flag
+        if return_details:
+            return timeout_result
+        else:
+            return timeout_result.get("success", False)
+    
+    def get_ci_failure_details(self, workflow_run) -> Dict[str, Any]:
+        """
+        Get detailed CI failure information from a workflow run object.
+        
+        :param workflow_run: GitHub workflow run object
+        :return: Dictionary containing failure information
+        """
+        try:
+            failure_info = {
+                "workflow_run": {
+                    "id": workflow_run.id,
+                    "name": workflow_run.name,
+                    "display_title": workflow_run.display_title,
+                    "status": workflow_run.status,
+                    "conclusion": workflow_run.conclusion,
+                    "url": workflow_run.html_url,
+                    "created_at": workflow_run.created_at.isoformat() if workflow_run.created_at else None,
+                    "updated_at": workflow_run.updated_at.isoformat() if workflow_run.updated_at else None,
+                    "head_branch": workflow_run.head_branch,
+                    "head_sha": workflow_run.head_sha,
+                },
+                "jobs": [],
+                "summary": f"{'✅' if workflow_run.conclusion == 'success' else '❌'} Workflow '{workflow_run.name}' {workflow_run.conclusion} (status: {workflow_run.status})"
+            }
+            
+            # Get job details for workflow run
+            print(f"🔧 Fetching job details for workflow run...")
+            try:
+                for job in workflow_run.jobs():
+                    job_info = {
+                        "id": job.id,
+                        "name": job.name,
+                        "status": job.status,
+                        "conclusion": job.conclusion,
+                        "url": job.html_url,
+                        "started_at": job.started_at.isoformat() if job.started_at else None,
+                        "completed_at": job.completed_at.isoformat() if job.completed_at else None,
+                    }
+                    
+                    # Add step details for all jobs (for testing - we can filter later)
+                    job_info["steps"] = []
+                    for step in job.steps:
+                        step_info = {
+                            "name": step.name,
+                            "status": step.status,
+                            "conclusion": step.conclusion,
+                            "number": step.number,
+                            "started_at": step.started_at.isoformat() if step.started_at else None,
+                            "completed_at": step.completed_at.isoformat() if step.completed_at else None,
+                        }
+                        job_info["steps"].append(step_info)
+                    
+                    # Capture full logs only on failure, steps always captured
+                    if job.conclusion == 'failure':
+                        print(f"📋 Job failed - fetching full logs for: {job.name} (ID: {job.id})")
+                        try:
+                            # Parse owner and repo name from self.repo_name (format: "owner/repo")
+                            owner, repo_name = self.repo_name.split("/")
+                            
+                            url = f"https://api.github.com/repos/{owner}/{repo_name}/actions/jobs/{job.id}/logs"
+                            
+                            headers = {
+                                "Authorization": f"token {self.access_token}",
+                                "Accept": "application/vnd.github.v3+json"
+                            }
+                            
+                            response = requests.get(url, headers=headers)
+                            response.raise_for_status()
+                            job_logs = response.text
+                            
+                            job_info["logs"] = job_logs
+                            print(f"✅ Fetched {len(job_logs)} characters of failure logs for job {job.name}")
+                        except Exception as e:
+                            print(f"⚠️ Could not fetch failure logs for job {job.id}: {e}")
+                            job_info["logs"] = None
+                            job_info["logs_error"] = str(e)
+                    else:
+                        print(f"📋 Job succeeded - skipping logs for: {job.name} (steps still captured)")
+                        job_info["logs"] = None
+                    
+                    failure_info["jobs"].append(job_info)
+                    
+            except Exception as e:
+                print(f"⚠️ Could not fetch job details: {e}")
+                failure_info["job_fetch_error"] = str(e)
+            
+            return failure_info
+            
+        except Exception as e:
+            print(f"⚠️ Error getting CI failure details: {e}")
+            return {"error": "Failed to get CI details", "details": str(e)}
     
     def cleanup_requirements(self, requirements_path: str = "Requirements/") -> None:
         """
