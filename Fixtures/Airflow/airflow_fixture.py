@@ -146,11 +146,10 @@ class AirflowFixture(
         # since they're managed by the Astronomer platform
         print("✅ Airflow session cleanup complete")
 
-    #commented out because it causes CLI conflicts as it runs in every process and causes everything to explode
-    """def _switch_to_correct_workspace(self) -> None:
-        """
-        Switch to the correct workspace.
-        """
+    # commented out because it causes CLI conflicts as it runs in every process and causes everything to explode
+    """
+    def _switch_to_correct_workspace(self) -> None:
+        # Switch to the correct workspace.
         print(f"⚙️ Switching to astro workspace: {os.getenv('ASTRO_WORKSPACE_ID')}")
         _run_and_validate_subprocess(
             ["astro", "workspace", "switch", os.getenv("ASTRO_WORKSPACE_ID")],
