@@ -105,6 +105,9 @@ class AirflowFixture(
                 f"Missing required environment variables: {missing_envars}"
             )
 
+        # switch to the correct workspace
+        self._switch_to_correct_workspace()
+
         # make sure either ASTRO_ACCESS_TOKEN or ASTRO_API_TOKEN is set
         if not os.getenv("ASTRO_ACCESS_TOKEN") and not os.getenv("ASTRO_API_TOKEN"):
             raise ValueError("Either ASTRO_ACCESS_TOKEN or ASTRO_API_TOKEN must be set")
@@ -143,16 +146,32 @@ class AirflowFixture(
         # since they're managed by the Astronomer platform
         print("✅ Airflow session cleanup complete")
 
-    def _test_setup(self, resource_config: Optional[AirflowResourceConfig] = None) -> AirflowResourceData:
+    def _switch_to_correct_workspace(self) -> None:
+        """
+        Switch to the correct workspace.
+        """
+        print(f"⚙️ Switching to astro workspace: {os.getenv('ASTRO_WORKSPACE_ID')}")
+        _run_and_validate_subprocess(
+            ["astro", "workspace", "switch", os.getenv("ASTRO_WORKSPACE_ID")],
+            "switch to the correct workspace",
+            check=True,
+        )
+        print(f"✅ Switched to astro workspace: {os.getenv('ASTRO_WORKSPACE_ID')}")
+
+    def _test_setup(
+        self, resource_config: Optional[AirflowResourceConfig] = None
+    ) -> AirflowResourceData:
         """
         Set up the resource and ensure _resource_data is set.
         """
         from braintrust import traced
-        
+
         @traced(name=f"{self.get_resource_type()}.test_setup")
-        def inner_test_setup(resource_config: Optional[AirflowResourceConfig] = None) -> AirflowResourceData:
+        def inner_test_setup(
+            resource_config: Optional[AirflowResourceConfig] = None,
+        ) -> AirflowResourceData:
             return self.test_setup(resource_config)
-        
+
         resource_data = inner_test_setup(resource_config)
         self._resource_data = resource_data
         return resource_data
@@ -304,16 +323,18 @@ class AirflowFixture(
         Clean up the resource and ensure proper teardown.
         """
         from braintrust import traced
-        
+
         @traced(name=f"{self.get_resource_type()}.test_teardown")
         def inner_test_teardown(resource_data: AirflowResourceData) -> None:
             return self.test_teardown(resource_data)
-        
+
         # Check if _resource_data exists before trying to use it
-        if hasattr(self, '_resource_data') and self._resource_data:
+        if hasattr(self, "_resource_data") and self._resource_data:
             inner_test_teardown(self._resource_data)
         else:
-            print(f"⚠️ No _resource_data found for {self.get_resource_type()}, skipping teardown")
+            print(
+                f"⚠️ No _resource_data found for {self.get_resource_type()}, skipping teardown"
+            )
 
     def test_teardown(self, resource_data: AirflowResourceData) -> None:
         """Clean up individual Airflow resource"""

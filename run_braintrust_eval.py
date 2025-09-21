@@ -27,7 +27,7 @@ from utils import map_func
 # Note: set_up_model_configs and cleanup_model_artifacts are now used inside run_de_bench_task
 
 # Load environment variables
-load_dotenv()
+load_dotenv(override=True)
 
 # Global cleanup flag to prevent double cleanup
 cleanup_already_run = False
