@@ -389,21 +389,26 @@ def validate_test(model_result, fixtures=None):
         # Step 4: Check if GitHub action completed
         print(f"🔍 Waiting for GitHub action to complete...")
         try:
-            if not github_manager.check_if_action_is_complete(pr_title=pr_title):
-                test_steps[3]["status"] = "failed"
-                test_steps[3][
-                    "Result_Message"
-                ] = "❌ GitHub action did not complete successfully"
-                return {"score": 0.0, "metadata": {"test_steps": test_steps}}
+            action_status = github_manager.check_if_action_is_complete(pr_title=pr_title, return_details=True)
 
-            test_steps[3]["status"] = "passed"
-            test_steps[3]["Result_Message"] = "✅ GitHub action completed successfully"
+            if not action_status["completed"]:
+                test_steps[3]["status"] = "failed"
+                test_steps[3]["Result_Message"] = f"❌ GitHub action timed out (status: {action_status['status']})"
+                test_steps[3]["action_status"] = action_status
+                return {"score": 0.0, "metadata": {"test_steps": test_steps}}
+            elif not action_status["success"]:
+                test_steps[3]["status"] = "failed"
+                test_steps[3]["Result_Message"] = f"❌ GitHub action failed (conclusion: {action_status['conclusion']})"
+                test_steps[3]["action_status"] = action_status
+                return {"score": 0.0, "metadata": {"test_steps": test_steps}}
+            else:
+                test_steps[3]["status"] = "passed"
+                test_steps[3]["Result_Message"] = "✅ GitHub action completed successfully"
+                test_steps[3]["action_status"] = action_status
 
         except Exception as e:
             test_steps[3]["status"] = "failed"
-            test_steps[3][
-                "Result_Message"
-            ] = f"❌ Error checking GitHub action: {str(e)}"
+            test_steps[3]["Result_Message"] = f"❌ Error checking GitHub action: {str(e)}"
             return {"score": 0.0, "metadata": {"test_steps": test_steps}}
 
         # Step 5: Verify Airflow redeployment
