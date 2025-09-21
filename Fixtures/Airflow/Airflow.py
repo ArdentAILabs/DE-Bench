@@ -113,15 +113,15 @@ class Airflow_Local:
             if attempt == max_retries - 1:
                 # Final attempt - list all DAGs for debugging
                 print(
-                    f"❌ DAG '{dag_id}' not found after {max_retries} attempts ({max_retries * wait_time / 60:.1f} minutes)"
+                    f"❌ DAG '{dag_id}' not found after {max_retries} attempts ({max_retries * wait_time_seconds / 60:.1f} minutes)"
                 )
                 self._list_available_dags()
                 raise Exception(
                     f"DAG '{dag_id}' not found after max retries. Check DAG deployment and syntax."
                 )
 
-            print(f"Waiting {wait_time} seconds before next attempt...")
-            time.sleep(wait_time)
+            print(f"Waiting {wait_time_seconds} seconds before next attempt...")
+            time.sleep(wait_time_seconds)
 
         return False
 
