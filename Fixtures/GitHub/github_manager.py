@@ -5,6 +5,7 @@ This module provides a class for managing GitHub operations.
 import os
 import time
 from typing import Any, Dict, List, Optional, Tuple
+import datetime
 
 import github
 from github import Github, Repository
@@ -108,130 +109,147 @@ class GitHubManager:
                 else:
                     raise e
     
-    def get_file_content(self, file_path: str, branch: str = "main") -> Optional[str]:
-        """
-        Get the content of a file from the repository.
-        
-        :param str file_path: Path to the file in the repository
-        :param str branch: Branch to get the file from (default: main)
-        :return: File content as string, or None if file doesn't exist
-        :rtype: Optional[str]
-        """
-        try:
-            file_content = self.repo.get_contents(file_path, ref=branch)
-            if isinstance(file_content, list):
-                # If it's a directory, return None
-                return None
-            # Decode the content from base64
-            return file_content.decoded_content.decode('utf-8')
-        except github.GithubException as e:
-            if e.status == 404:
-                print(f"📄 File not found: {file_path}")
-                return None
-            else:
-                print(f"❌ Error getting file content for {file_path}: {e}")
-                raise e
 
-    def get_all_dag_files(self, branch: str = None) -> dict:
+
+    def get_multiple_file_contents_from_branch(self, branch_name: str, paths_to_capture: List[str]) -> Dict[str, Any]:
         """
-        Get all DAG files from the dags folder.
+        Get multiple file/folder contents from a specific branch.
         
-        :param str branch: Branch to get files from (default: uses current branch or main)
-        :return: Dictionary mapping filename to content
-        :rtype: dict
+        This function captures code snapshots from the agent's work, allowing flexible
+        specification of files and folders to capture. Useful for debugging agent failures
+        by getting exact code state regardless of PR success/failure.
+        
+        :param str branch_name: Name of the branch to capture content from
+        :param List[str] paths_to_capture: List of file paths or folder paths to capture
+                                          - Paths ending with '/' are treated as folders (captures all files)
+                                          - Other paths are treated as individual files
+        :return: Dictionary containing captured content, metadata, and any errors
+        :rtype: Dict[str, Any]
+        
+        Example:
+            >>> snapshot = github_manager.get_multiple_file_contents_from_branch(
+            ...     branch_name="feature/my-branch",
+            ...     paths_to_capture=["dags/", "requirements.txt", "models/"]
+            ... )
         """
-        dag_files = {}
         
-        # Use current branch if no branch specified
-        if branch is None:
-            branch = getattr(self, 'branch_name', 'main')
+        result = {
+            "branch_name": branch_name,
+            "capture_timestamp": datetime.datetime.utcnow().isoformat(),
+            "captured_files": {},
+            "captured_folders": {},
+            "errors": [],
+            "summary": {
+                "total_files": 0,
+                "total_size_bytes": 0,
+                "folders_captured": 0,
+                "files_captured": 0
+            }
+        }
         
-        print(f"🔍 Looking for DAG files in branch: {branch}")
+        print(f"📸 Capturing code snapshot from branch: {branch_name}")
+        print(f"🔍 DEBUG: Starting capture with paths: {paths_to_capture}")
         
-        # Try current branch first, then main as fallback
-        branches_to_try = [branch] if branch != 'main' else ['main']
-        if branch != 'main':
-            branches_to_try.append('main')
-            
-        for try_branch in branches_to_try:
+        for path in paths_to_capture:
             try:
-                print(f"📁 Checking dags folder in branch: {try_branch}")
-                # Get contents of dags folder
-                dags_contents = self.repo.get_contents("dags", ref=try_branch)
-                
-                for content in dags_contents:
-                    if content.type == "file" and content.name.endswith('.py'):
-                        file_content = self.get_file_content(content.path, try_branch)
-                        if file_content:
-                            dag_files[content.name] = {
-                                "path": content.path,
-                                "content": file_content,
-                                "size": content.size,
-                                "sha": content.sha,
-                                "branch": try_branch
-                            }
-                            print(f"✅ Found DAG file: {content.name} ({content.size} bytes)")
-                
-                # If we found files, break out of the loop
-                if dag_files:
-                    print(f"📄 Retrieved {len(dag_files)} DAG files from branch: {try_branch}")
-                    break
+                if path.endswith('/'):
+                    # Treat as folder - capture all files in it
+                    folder_name = path.rstrip('/')
+                    print(f"📁 Capturing folder: {folder_name}")
                     
-            except github.GithubException as e:
-                if e.status == 404:
-                    print(f"📁 Dags folder not found in branch: {try_branch}")
-                else:
-                    print(f"❌ Error getting DAG files from {try_branch}: {e}")
-                continue
+                    try:
+                        folder_contents = self.repo.get_contents(folder_name, ref=branch_name)
+                        folder_files = {}
+                        
+                        # Handle both single file and list of files
+                        if not isinstance(folder_contents, list):
+                            folder_contents = [folder_contents]
+                        
+                        for content in folder_contents:
+                            if content.type == "file":
+                                file_content = content.decoded_content.decode('utf-8')
+                                folder_files[content.name] = {
+                                    "path": content.path,
+                                    "content": file_content,
+                                    "size": content.size,
+                                    "sha": content.sha
+                                }
+                                result["summary"]["total_files"] += 1
+                                result["summary"]["total_size_bytes"] += content.size
+                                print(f"  ✅ {content.name} ({content.size} bytes)")
+                                print(f"🔍 DEBUG: File content preview (first 100 chars): {file_content[:100]}")
+                        
+                        if folder_files:
+                            result["captured_folders"][folder_name] = folder_files
+                            result["summary"]["folders_captured"] += 1
+                            print(f"📁 Captured {len(folder_files)} files from {folder_name}")
+                        else:
+                            print(f"📁 No files found in {folder_name}")
+                            
+                    except github.GithubException as e:
+                        if e.status == 404:
+                            error_msg = f"Folder not found: {folder_name}"
+                            result["errors"].append(error_msg)
+                            print(f"⚠️ {error_msg}")
+                        else:
+                            error_msg = f"Error accessing folder {folder_name}: {e}"
+                            result["errors"].append(error_msg)
+                            print(f"❌ {error_msg}")
                 
-        return dag_files
+                else:
+                    # Treat as individual file
+                    print(f"📄 Capturing file: {path}")
+                    
+                    try:
+                        file_content_obj = self.repo.get_contents(path, ref=branch_name)
+                        if isinstance(file_content_obj, list):
+                            # This shouldn't happen for individual files, but handle it
+                            error_msg = f"Expected file but got directory: {path}"
+                            result["errors"].append(error_msg)
+                            print(f"❌ {error_msg}")
+                            continue
+                        
+                        file_content = file_content_obj.decoded_content.decode('utf-8')
+                        result["captured_files"][path] = {
+                            "path": path,
+                            "content": file_content,
+                            "size": file_content_obj.size,
+                            "sha": file_content_obj.sha
+                        }
+                        result["summary"]["total_files"] += 1
+                        result["summary"]["total_size_bytes"] += file_content_obj.size
+                        result["summary"]["files_captured"] += 1
+                        print(f"  ✅ {path} ({file_content_obj.size} bytes)")
+                        print(f"🔍 DEBUG: File content preview (first 100 chars): {file_content[:100]}")
+                        
+                    except github.GithubException as e:
+                        if e.status == 404:
+                            error_msg = f"File not found: {path}"
+                            result["errors"].append(error_msg)
+                            print(f"⚠️ {error_msg}")
+                        else:
+                            error_msg = f"Error accessing file {path}: {e}"
+                            result["errors"].append(error_msg)
+                            print(f"❌ {error_msg}")
+            
+            except Exception as e:
+                error_msg = f"Unexpected error processing {path}: {e}"
+                result["errors"].append(error_msg)
+                print(f"❌ {error_msg}")
+        
+        # Final summary
+        print(f"📸 Snapshot complete: {result['summary']['total_files']} files, "
+              f"{result['summary']['total_size_bytes']} bytes, {len(result['errors'])} errors")
+        
+        # Debug: Show result structure
+        print(f"🔍 DEBUG: Final result structure:")
+        print(f"  - captured_folders keys: {list(result['captured_folders'].keys())}")
+        print(f"  - captured_files keys: {list(result['captured_files'].keys())}")
+        print(f"  - errors: {result['errors']}")
+        
+        return result
 
-    def get_requirements_text(self, branch: Optional[str] = None) -> Optional[Dict[str, str]]:
-        """
-        Retrieve the contents of requirements.txt from the repository for a given branch.
 
-        Tries common locations in order:
-          1) Requirements/requirements.txt
-          2) requirements.txt (repo root)
-
-        :param branch: Branch name to read from (defaults to current test branch or main)
-        :return: {"path": <path>, "content": <text>} or None if not found
-        :rtype: Optional[Dict[str, str]]
-        """
-        try_branch = branch or getattr(self, 'branch_name', 'main')
-        candidate_paths = [
-            os.path.join("Requirements", "requirements.txt"),
-            "requirements.txt",
-        ]
-
-        for path in candidate_paths:
-            try:
-                file_content = self.repo.get_contents(path, ref=try_branch)
-                if isinstance(file_content, list):
-                    continue
-                content_text = file_content.decoded_content.decode("utf-8")
-                return {"path": path, "content": content_text}
-            except github.GithubException as e:
-                if getattr(e, "status", None) == 404:
-                    continue
-                # Surface unexpected errors
-                raise e
-
-        # Not found in the target branch; try main as a last resort if different
-        if try_branch != "main":
-            for path in candidate_paths:
-                try:
-                    file_content = self.repo.get_contents(path, ref="main")
-                    if isinstance(file_content, list):
-                        continue
-                    content_text = file_content.decoded_content.decode("utf-8")
-                    return {"path": path, "content": content_text}
-                except github.GithubException as e:
-                    if getattr(e, "status", None) == 404:
-                        continue
-                    raise e
-
-        return None
 
     def clear_folder(self, folder_name: str, keep_file_names: Optional[list[str]] = None) -> None:
         """
