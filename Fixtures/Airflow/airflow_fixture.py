@@ -13,10 +13,8 @@ from pathlib import Path
 
 from Fixtures.base_fixture import DEBenchFixture
 from Fixtures.Airflow.Airflow import Airflow_Local
-from Fixtures.Databricks.cache_manager import CacheManager
 from Fixtures.Airflow.airflow_resources import (
     _ensure_astro_login,
-    _ensure_cache_manager_initialized,
     _create_dir_and_astro_project,
     _create_deployment_in_astronomer,
     _wake_up_deployment,
@@ -26,8 +24,12 @@ from Fixtures.Airflow.airflow_resources import (
     _create_variables_in_airflow_deployment,
     _check_and_update_gh_secrets,
     _run_and_validate_subprocess,
+    _find_and_allocate_hibernating_deployment,
+    _release_deployment,
     cleanup_airflow_resource,
+    fetch_astro_deployments,
 )
+from utils import map_func
 
 from braintrust import traced
 
@@ -59,7 +61,6 @@ class AirflowResourceData(TypedDict):
 
 
 class AirflowSessionData(TypedDict):
-    cache_manager: CacheManager
     astro_logged_in: bool
     available_deployments: List[Dict[str, str]]
 
@@ -113,19 +114,15 @@ class AirflowFixture(
         print("🔐 Ensuring Astro CLI login...")
         _ensure_astro_login()
 
-        # 2. Initialize cache manager
-        print("💾 Initializing deployment cache manager...")
-        cache_manager = _ensure_cache_manager_initialized()
-
-        # 3. Get available deployments
-        available_deployments = cache_manager.get_all_astronomer_deployments()
+        # 2. Get available deployments directly from Astro
+        print("💾 Fetching available deployments...")
+        available_deployments = fetch_astro_deployments()
 
         print(
-            f"✅ Airflow session setup complete! Found {len(available_deployments)} deployments in cache"
+            f"✅ Airflow session setup complete! Found {len(available_deployments)} deployments"
         )
 
         return AirflowSessionData(
-            cache_manager=cache_manager,
             astro_logged_in=True,
             available_deployments=available_deployments,
         )
@@ -139,20 +136,24 @@ class AirflowFixture(
 
         print("🧹 Cleaning up Airflow session-level resources...")
 
-        # The cache manager and deployments will be cleaned up naturally
-        # since they're managed by the Astronomer platform
+        # Deployments will be cleaned up naturally since they're managed by the Astronomer platform
+        # and individual deployments release their claims during test teardown
         print("✅ Airflow session cleanup complete")
 
-    def _test_setup(self, resource_config: Optional[AirflowResourceConfig] = None) -> AirflowResourceData:
+    def _test_setup(
+        self, resource_config: Optional[AirflowResourceConfig] = None
+    ) -> AirflowResourceData:
         """
         Set up the resource and ensure _resource_data is set.
         """
         from braintrust import traced
-        
+
         @traced(name=f"{self.get_resource_type()}.test_setup")
-        def inner_test_setup(resource_config: Optional[AirflowResourceConfig] = None) -> AirflowResourceData:
+        def inner_test_setup(
+            resource_config: Optional[AirflowResourceConfig] = None,
+        ) -> AirflowResourceData:
             return self.test_setup(resource_config)
-        
+
         resource_data = inner_test_setup(resource_config)
         self._resource_data = resource_data
         return resource_data
@@ -184,17 +185,17 @@ class AirflowFixture(
                 "Session data not available - session setup may have failed"
             )
 
-        cache_manager = session_data["cache_manager"]
-
         # Create test directory and Astro project
         test_dir = _create_dir_and_astro_project(resource_id)
 
         try:
-            # Try to allocate a hibernating deployment from session cache
-            print(f"🔄 Attempting to allocate deployment for {resource_id}...")
+            # Try to allocate a hibernating deployment directly
+            print(
+                f"🔄 Attempting to allocate hibernating deployment for {resource_id}..."
+            )
 
-            if deployment_info := cache_manager.allocate_astronomer_deployment(
-                resource_id, os.getpid()
+            if deployment_info := _find_and_allocate_hibernating_deployment(
+                resource_id
             ):
                 # Got an existing hibernating deployment
                 astro_deployment_id = deployment_info["deployment_id"]
@@ -299,22 +300,6 @@ class AirflowFixture(
                 shutil.rmtree(test_dir)
             raise
 
-    def _test_teardown(self) -> None:
-        """
-        Clean up the resource and ensure proper teardown.
-        """
-        from braintrust import traced
-        
-        @traced(name=f"{self.get_resource_type()}.test_teardown")
-        def inner_test_teardown(resource_data: AirflowResourceData) -> None:
-            return self.test_teardown(resource_data)
-        
-        # Check if _resource_data exists before trying to use it
-        if hasattr(self, '_resource_data') and self._resource_data:
-            inner_test_teardown(self._resource_data)
-        else:
-            print(f"⚠️ No _resource_data found for {self.get_resource_type()}, skipping teardown")
-
     def test_teardown(self, resource_data: AirflowResourceData) -> None:
         """Clean up individual Airflow resource"""
         resource_id = resource_data["resource_id"]
@@ -324,18 +309,35 @@ class AirflowFixture(
         print(f"🧹 Cleaning up Airflow resource: {resource_id}")
 
         try:
-            # Get session data for cache manager
-            session_data = self.session_data
-            cache_manager = session_data["cache_manager"] if session_data else None
+            # Clean up temp directory first
+            if test_dir and test_dir.exists():
+                import shutil
 
-            # Clean up using existing logic
-            test_resources = [(deployment_name, cache_manager)] if cache_manager else []
-            cleanup_airflow_resource(resource_id, test_resources, test_dir)
+                shutil.rmtree(test_dir)
+                print(f"🗂️ Removed temp directory: {test_dir}")
 
-            print(f"✅ Airflow resource {resource_id} cleaned up")
+            # Hibernate the deployment so it can be reused
+            print(f"💤 Hibernating deployment {deployment_name} for reuse...")
+            _hibernate_deployment(deployment_name)
+
+            # Release the deployment claim after hibernation
+            print(f"🔓 Releasing deployment claim for {deployment_name}...")
+            _release_deployment(deployment_name)
+
+            print(
+                f"✅ Airflow resource {resource_id} cleaned up and deployment ready for reuse"
+            )
 
         except Exception as e:
             print(f"❌ Error cleaning up Airflow resource {resource_id}: {e}")
+            # Try to release deployment even if cleanup fails
+            try:
+                _release_deployment(deployment_name)
+                print(f"🔓 Released deployment claim despite cleanup error")
+            except Exception as release_error:
+                print(
+                    f"❌ Error releasing deployment {deployment_name}: {release_error}"
+                )
 
     @classmethod
     def get_resource_type(cls) -> str:

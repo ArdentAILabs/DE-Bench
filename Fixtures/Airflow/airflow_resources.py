@@ -11,7 +11,7 @@ import subprocess
 import tempfile
 import time
 from pathlib import Path
-from typing import Optional, Union
+from typing import Dict, Optional, Union
 
 import github
 import pytest
@@ -22,6 +22,9 @@ from Fixtures import parse_test_name
 from Fixtures.Airflow.Airflow import Airflow_Local
 from Fixtures.Databricks.cache_manager import CacheManager
 from braintrust import traced
+import json
+from datetime import datetime, timedelta
+from utils import map_func
 
 VALIDATE_ASTRO_INSTALL = "Please check if the Astro CLI is installed and in PATH."
 load_dotenv()
@@ -102,7 +105,13 @@ def _ensure_astro_login() -> None:
             try:
                 # Try a simple command that requires authentication
                 result = subprocess.run(
-                    ["astro", "deployment", "list", "--workspace-id", os.getenv("ASTRO_WORKSPACE_ID")],
+                    [
+                        "astro",
+                        "deployment",
+                        "list",
+                        "--workspace-id",
+                        os.getenv("ASTRO_WORKSPACE_ID"),
+                    ],
                     capture_output=True,
                     text=True,
                     timeout=10,
@@ -648,7 +657,13 @@ def fetch_astro_deployments() -> list[dict[str, str]]:
     astro_deployments: list[dict[str, str]] = []
     # get all deployments
     deployment_command_output = _run_and_validate_subprocess(
-        ["astro", "deployment", "list", "--workspace-id", os.getenv("ASTRO_WORKSPACE_ID")],
+        [
+            "astro",
+            "deployment",
+            "list",
+            "--workspace-id",
+            os.getenv("ASTRO_WORKSPACE_ID"),
+        ],
         "listing deployments in Astronomer",
         return_output=True,
     )
@@ -667,14 +682,16 @@ def fetch_astro_deployments() -> list[dict[str, str]]:
         if len(deployment) > 5 and deployment[0] != "NAME"
     ]
     deployments = {deployment[0]: deployment[5] for deployment in deployments}
-    for deployment_name, deployment_id in deployments.items():
-        astro_deployments.append(
-            {
-                "deployment_name": deployment_name,
-                "deployment_id": deployment_id,
-                "status": _check_deployment_status(deployment_name),
-            }
-        )
+    deployment_infos = map_func(
+        lambda deployment_name_id: {
+            "deployment_name": deployment_name_id[0],
+            "deployment_id": deployment_name_id[1],
+            "status": _check_deployment_status(deployment_name_id[0]),
+        },
+        deployments.items(),
+    )
+    astro_deployments.extend(deployment_infos)
+
     # no hibernating deployment found, create a new one
     print(f"Worker {os.getpid()}: found {len(deployments)} deployments.")
     return astro_deployments
@@ -903,6 +920,304 @@ def _create_variables_in_airflow_deployment(deployment_name: str) -> None:
                             f"Worker {os.getpid()}: Failed to update variable {variable_name}: {update_error}"
                         )
                         # Continue with other variables rather than failing completely
+
+
+@traced(name="_get_deployment_variables")
+@retry_astro_command(max_retries=3)
+def _get_deployment_variables(deployment_name: str) -> Dict[str, str]:
+    """
+    Get all environment variables for a deployment.
+
+    :param str deployment_name: The name of the deployment.
+    :return: Dictionary of environment variables.
+    :rtype: Dict[str, str]
+    """
+    try:
+        variables_output = _run_and_validate_subprocess(
+            [
+                "astro",
+                "deployment",
+                "variable",
+                "list",
+                "--deployment-name",
+                deployment_name,
+            ],
+            "getting deployment variables",
+            return_output=True,
+        )
+
+        variables = {}
+        lines = variables_output.strip().split("\n")
+
+        # Skip header lines and parse each variable line
+        for line in lines:
+            line = line.strip()
+            if (
+                "=" in line
+                and not line.startswith("NAME")
+                and not line.startswith("----")
+            ):
+                # Parse the line format: NAME=VALUE or NAME=VALUE (secret)
+                if "\t" in line or "  " in line:
+                    # Split on whitespace to separate name=value from other columns
+                    parts = line.split()
+                    if parts and "=" in parts[0]:
+                        name_value = parts[0]
+                        name, value = name_value.split("=", 1)
+                        variables[name] = value
+
+        return variables
+    except Exception as e:
+        print(
+            f"Worker {os.getpid()}: Error getting deployment variables for {deployment_name}: {e}"
+        )
+        return {}
+
+
+@traced(name="_set_deployment_variable")
+@retry_astro_command(max_retries=3)
+def _set_deployment_variable(
+    deployment_name: str, variable_name: str, variable_value: str
+) -> bool:
+    """
+    Set an environment variable for a deployment.
+
+    :param str deployment_name: The name of the deployment.
+    :param str variable_name: The name of the variable.
+    :param str variable_value: The value of the variable.
+    :return: True if successful, False otherwise.
+    :rtype: bool
+    """
+    try:
+        # First try to create the variable
+        try:
+            _run_and_validate_subprocess(
+                [
+                    "astro",
+                    "deployment",
+                    "variable",
+                    "create",
+                    f"{variable_name}={variable_value}",
+                    "--deployment-name",
+                    deployment_name,
+                ],
+                f"creating variable {variable_name}",
+            )
+            print(
+                f"Worker {os.getpid()}: Successfully created variable {variable_name} for {deployment_name}"
+            )
+            return True
+        except subprocess.CalledProcessError:
+            # If creation fails, try to update it instead
+            _run_and_validate_subprocess(
+                [
+                    "astro",
+                    "deployment",
+                    "variable",
+                    "update",
+                    f"{variable_name}={variable_value}",
+                    "--deployment-name",
+                    deployment_name,
+                ],
+                f"updating variable {variable_name}",
+            )
+            print(
+                f"Worker {os.getpid()}: Successfully updated variable {variable_name} for {deployment_name}"
+            )
+            return True
+    except Exception as e:
+        print(
+            f"Worker {os.getpid()}: Error setting variable {variable_name} for {deployment_name}: {e}"
+        )
+        return False
+
+
+@traced(name="_remove_deployment_variable")
+@retry_astro_command(max_retries=3)
+def _remove_deployment_variable(deployment_name: str, variable_name: str) -> bool:
+    """
+    Remove an environment variable from a deployment.
+
+    :param str deployment_name: The name of the deployment.
+    :param str variable_name: The name of the variable.
+    :return: True if successful, False otherwise.
+    :rtype: bool
+    """
+    try:
+        _run_and_validate_subprocess(
+            [
+                "astro",
+                "deployment",
+                "variable",
+                "delete",
+                variable_name,
+                "--deployment-name",
+                deployment_name,
+                "-f",
+            ],
+            f"deleting variable {variable_name}",
+        )
+        print(
+            f"Worker {os.getpid()}: Successfully removed variable {variable_name} from {deployment_name}"
+        )
+        return True
+    except Exception as e:
+        print(
+            f"Worker {os.getpid()}: Error removing variable {variable_name} from {deployment_name}: {e}"
+        )
+        return False
+
+
+@traced(name="_check_deployment_claim_status")
+def _check_deployment_claim_status(
+    deployment_name: str, max_claim_age_minutes: int = 10
+) -> bool:
+    """
+    Check if a deployment is available for claiming (not claimed or claim is stale).
+
+    :param str deployment_name: The name of the deployment.
+    :param int max_claim_age_minutes: Maximum age of a claim in minutes before it's considered stale.
+    :return: True if deployment is available for claiming, False otherwise.
+    :rtype: bool
+    """
+    variables = _get_deployment_variables(deployment_name)
+
+    claim_timestamp = variables.get("DE_BENCH_CLAIMED_AT")
+    if not claim_timestamp:
+        # No claim timestamp, deployment is available
+        return True
+
+    try:
+        # Parse the claim timestamp
+        claimed_at = datetime.fromisoformat(claim_timestamp)
+        current_time = datetime.now()
+
+        # Check if claim is stale (older than max_claim_age_minutes)
+        if current_time - claimed_at > timedelta(minutes=max_claim_age_minutes):
+            print(
+                f"Worker {os.getpid()}: Deployment {deployment_name} claim is stale ({claim_timestamp}), can be reclaimed"
+            )
+            return True
+        else:
+            print(
+                f"Worker {os.getpid()}: Deployment {deployment_name} is recently claimed ({claim_timestamp})"
+            )
+            return False
+    except ValueError:
+        # Invalid timestamp format, consider it stale
+        print(
+            f"Worker {os.getpid()}: Deployment {deployment_name} has invalid claim timestamp ({claim_timestamp}), can be reclaimed"
+        )
+        return True
+
+
+@traced(name="_claim_deployment")
+def _claim_deployment(deployment_name: str, resource_id: str) -> bool:
+    """
+    Claim a deployment by setting the DE_BENCH_CLAIMED_AT environment variable.
+
+    :param str deployment_name: The name of the deployment.
+    :param str resource_id: The resource ID claiming the deployment.
+    :return: True if successfully claimed, False otherwise.
+    :rtype: bool
+    """
+    current_time = datetime.now().isoformat()
+
+    # Set both claim timestamp and resource ID
+    claim_success = _set_deployment_variable(
+        deployment_name, "DE_BENCH_CLAIMED_AT", current_time
+    )
+    resource_success = _set_deployment_variable(
+        deployment_name, "DE_BENCH_CLAIMED_BY", resource_id
+    )
+
+    if claim_success and resource_success:
+        print(
+            f"Worker {os.getpid()}: Successfully claimed deployment {deployment_name} for {resource_id}"
+        )
+        return True
+    else:
+        print(
+            f"Worker {os.getpid()}: Failed to claim deployment {deployment_name} for {resource_id}"
+        )
+        return False
+
+
+@traced(name="_release_deployment")
+def _release_deployment(deployment_name: str) -> bool:
+    """
+    Release a deployment by removing the claim environment variables.
+
+    :param str deployment_name: The name of the deployment.
+    :return: True if successfully released, False otherwise.
+    :rtype: bool
+    """
+    claim_removed = _remove_deployment_variable(deployment_name, "DE_BENCH_CLAIMED_AT")
+    resource_removed = _remove_deployment_variable(
+        deployment_name, "DE_BENCH_CLAIMED_BY"
+    )
+
+    if claim_removed and resource_removed:
+        print(
+            f"Worker {os.getpid()}: Successfully released deployment {deployment_name}"
+        )
+        return True
+    else:
+        print(f"Worker {os.getpid()}: Partially released deployment {deployment_name}")
+        return True  # Consider partial success as success
+
+
+@traced(name="_find_and_allocate_hibernating_deployment")
+def _find_and_allocate_hibernating_deployment(
+    resource_id: str,
+) -> Optional[Dict[str, str]]:
+    """
+    Find and allocate an available hibernating deployment.
+
+    :param str resource_id: The resource ID requesting the deployment.
+    :return: Dictionary with deployment info if found, None otherwise.
+    :rtype: Optional[Dict[str, str]]
+    """
+    try:
+        deployments = fetch_astro_deployments()
+
+        for deployment in deployments:
+            deployment_name = deployment.get("deployment_name")
+            deployment_id = deployment.get("deployment_id")
+            status = deployment.get("status", "").upper()
+
+            if not deployment_name or not deployment_id:
+                continue
+
+            # Check if deployment is hibernating
+            if status != "HIBERNATING":
+                continue
+
+            # Check if deployment is available for claiming
+            if not _check_deployment_claim_status(deployment_name):
+                continue
+
+            # Try to claim the deployment
+            if _claim_deployment(deployment_name, resource_id):
+                print(
+                    f"Worker {os.getpid()}: Allocated hibernating deployment {deployment_name} for {resource_id}"
+                )
+                return {
+                    "deployment_id": deployment_id,
+                    "deployment_name": deployment_name,
+                    "status": status,
+                }
+
+        print(
+            f"Worker {os.getpid()}: No available hibernating deployments found for {resource_id}"
+        )
+        return None
+
+    except Exception as e:
+        print(
+            f"Worker {os.getpid()}: Error finding hibernating deployment for {resource_id}: {e}"
+        )
+        return None
 
 
 @traced(name="cleanup_airflow_resource")

@@ -89,6 +89,12 @@ class DEBenchFixture(ABC, Generic[ConfigT, ResourceT, SessionT]):
         Clean up and destroy the resource.
         """
 
+        if not hasattr(self, "_resource_data"):
+            print(
+                f"⚠️ No _resource_data found for {self.get_resource_type()}, skipping teardown"
+            )
+            return
+
         @traced(name=f"{self.get_resource_type()}.test_teardown")
         def inner_test_teardown(resource_data: ResourceT) -> None:
             """
