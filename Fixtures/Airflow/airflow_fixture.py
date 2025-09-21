@@ -106,7 +106,7 @@ class AirflowFixture(
             )
 
         # switch to the correct workspace
-        self._switch_to_correct_workspace()
+        # self._switch_to_correct_workspace()  # COMMENTED OUT - causing concurrent CLI conflicts
 
         # make sure either ASTRO_ACCESS_TOKEN or ASTRO_API_TOKEN is set
         if not os.getenv("ASTRO_ACCESS_TOKEN") and not os.getenv("ASTRO_API_TOKEN"):
@@ -146,7 +146,8 @@ class AirflowFixture(
         # since they're managed by the Astronomer platform
         print("✅ Airflow session cleanup complete")
 
-    def _switch_to_correct_workspace(self) -> None:
+    #commented out because it causes CLI conflicts as it runs in every process and causes everything to explode
+    """def _switch_to_correct_workspace(self) -> None:
         """
         Switch to the correct workspace.
         """
@@ -157,7 +158,7 @@ class AirflowFixture(
             check=True,
         )
         print(f"✅ Switched to astro workspace: {os.getenv('ASTRO_WORKSPACE_ID')}")
-
+    """
     def _test_setup(
         self, resource_config: Optional[AirflowResourceConfig] = None
     ) -> AirflowResourceData:
