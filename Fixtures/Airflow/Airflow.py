@@ -77,7 +77,8 @@ class Airflow_Local:
         Verify if a DAG exists using the dag_id in Airflow via API call.
         Extended timeout for DAG synchronization after GitHub Actions deployment.
 
-        :param dag_id: The ID of the DAG to check for.
+        :param str dag_id: The ID of the DAG to check for.
+        :param Optional[int] max_wait_minutes: Maximum time to wait for the DAG to appear, defaults to 8 minutes
         :return: True if the DAG exists, False otherwise.
         :rtype: bool
         """
@@ -113,15 +114,15 @@ class Airflow_Local:
             if attempt == max_retries - 1:
                 # Final attempt - list all DAGs for debugging
                 print(
-                    f"❌ DAG '{dag_id}' not found after {max_retries} attempts ({max_retries * wait_time / 60:.1f} minutes)"
+                    f"❌ DAG '{dag_id}' not found after {max_retries} attempts ({max_retries * max_wait_seconds / 60:.1f} minutes)"
                 )
                 self._list_available_dags()
                 raise Exception(
                     f"DAG '{dag_id}' not found after max retries. Check DAG deployment and syntax."
                 )
 
-            print(f"Waiting {wait_time} seconds before next attempt...")
-            time.sleep(wait_time)
+            print(f"Waiting {max_wait_seconds} seconds before next attempt...")
+            time.sleep(max_wait_seconds)
 
         return False
 
