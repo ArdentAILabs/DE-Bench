@@ -429,6 +429,8 @@ def discover_available_tests(
     if filter_patterns:
         filtered_tests = []
         for test_name in available_tests:
+            if isinstance(filter_patterns, str):
+                filter_patterns = [filter_patterns]
             for pattern in filter_patterns:
                 try:
                     if re.search(pattern, test_name, re.IGNORECASE):
