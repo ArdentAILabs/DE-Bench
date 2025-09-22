@@ -1,5 +1,5 @@
 """
-Helper class for managing Databricks cluster cache and Astronomer deployment cache using SQLite database, stored in the Environment/Databricks directory.
+Helper class for managing Databricks cluster cache using SQLite database and Astronomer deployment cache using distributed locking mechanism.
 """
 
 import os
@@ -9,10 +9,24 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Optional
 
+# Import distributed locking mechanism
+# TODO: import should work from Environment.DEBenchDatabase...
+import sys
+
+sys.path.append(
+    os.path.join(
+        os.path.dirname(__file__), "..", "..", "Environment", "DEBenchDatabase"
+    )
+)
+from DistributedLock import DistributedLock
+
 
 class CacheManager:
     """
-    A class to manage Databricks cluster cache and Astronomer deployment cache using SQLite database, which is used to store cluster and deployment information.
+    A class to manage Databricks cluster cache using SQLite database and Astronomer deployment cache using distributed locking mechanism.
+
+    - Databricks clusters: Stored in SQLite for persistence across processes
+    - Astronomer deployments: Stored in memory with distributed locking for coordination across processes
 
     :param Optional[int] default_expiry_hours: Default expiry time for cached clusters, defaults to 1 hour.
     """
@@ -22,10 +36,23 @@ class CacheManager:
         default_expiry_hours: Optional[int] = 1,
     ):
         self.default_expiry_hours: int = default_expiry_hours
-        self.expiry_time: str = (datetime.now() + timedelta(hours=default_expiry_hours)).isoformat()
+        self.expiry_time: str = (
+            datetime.now() + timedelta(hours=default_expiry_hours)
+        ).isoformat()
         self.db_path = self.validate_cache_directory_exists()
         self._init_database()
-    
+
+        # Initialize distributed locking for astronomer deployments
+        self.distributed_lock = DistributedLock()
+
+        # Generate unique identifier for this CacheManager instance
+        import uuid
+
+        self.instance_id = str(uuid.uuid4())[:8]  # Short unique ID
+
+        # In-memory storage for astronomer deployments
+        self.astronomer_deployments: dict[str, dict[str, Any]] = {}
+
     @staticmethod
     def validate_cache_directory_exists() -> str:
         """
@@ -50,9 +77,10 @@ class CacheManager:
         try:
             with sqlite3.connect(self.db_path) as conn:
                 cursor = conn.cursor()
-                
+
                 # Create clusters table
-                cursor.execute("""
+                cursor.execute(
+                    """
                     CREATE TABLE IF NOT EXISTS clusters (
                         id INTEGER PRIMARY KEY AUTOINCREMENT,
                         cluster_id TEXT UNIQUE NOT NULL,
@@ -67,21 +95,29 @@ class CacheManager:
                         is_active BOOLEAN DEFAULT 1,
                         is_shared BOOLEAN DEFAULT 0
                     )
-                """)
+                """
+                )
 
                 # Create index for faster lookups
-                cursor.execute("""
+                cursor.execute(
+                    """
                     CREATE INDEX IF NOT EXISTS idx_cluster_id ON clusters(cluster_id)
-                """)
-                cursor.execute("""
+                """
+                )
+                cursor.execute(
+                    """
                     CREATE INDEX IF NOT EXISTS idx_expiry_time ON clusters(expiry_time)
-                """)
-                cursor.execute("""
+                """
+                )
+                cursor.execute(
+                    """
                     CREATE INDEX IF NOT EXISTS idx_is_active ON clusters(is_active)
-                """)
-                
+                """
+                )
+
                 # Create shared cluster coordination table
-                cursor.execute("""
+                cursor.execute(
+                    """
                     CREATE TABLE IF NOT EXISTS shared_cluster_registry (
                         id INTEGER PRIMARY KEY AUTOINCREMENT,
                         config_hash TEXT UNIQUE NOT NULL,
@@ -93,50 +129,28 @@ class CacheManager:
                         error_message TEXT,
                         FOREIGN KEY (cluster_id) REFERENCES clusters(cluster_id)
                     )
-                """)
-                
-                # Create Astronomer deployments table
-                cursor.execute("""
-                    CREATE TABLE IF NOT EXISTS astronomer_deployments (
-                        id INTEGER PRIMARY KEY AUTOINCREMENT,
-                        deployment_id TEXT UNIQUE NOT NULL,
-                        deployment_name TEXT UNIQUE NOT NULL,
-                        status TEXT DEFAULT 'HEALTHY',
-                        worker_pid INTEGER,
-                        in_use BOOLEAN DEFAULT 0,
-                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                        last_accessed TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                        test_name TEXT
-                    )
-                """)
-                
+                """
+                )
+
                 # Create indexes for shared cluster registry
-                cursor.execute("""
+                cursor.execute(
+                    """
                     CREATE INDEX IF NOT EXISTS idx_config_hash ON shared_cluster_registry(config_hash)
-                """)
-                cursor.execute("""
+                """
+                )
+                cursor.execute(
+                    """
                     CREATE INDEX IF NOT EXISTS idx_registry_status ON shared_cluster_registry(status)
-                """)
-                cursor.execute("""
+                """
+                )
+                cursor.execute(
+                    """
                     CREATE INDEX IF NOT EXISTS idx_registry_usage_count ON shared_cluster_registry(usage_count)
-                """)
-                
-                # Create indexes for astronomer deployments
-                cursor.execute("""
-                    CREATE INDEX IF NOT EXISTS idx_deployment_id ON astronomer_deployments(deployment_id)
-                """)
-                cursor.execute("""
-                    CREATE INDEX IF NOT EXISTS idx_deployment_status ON astronomer_deployments(status)
-                """)
-                cursor.execute("""
-                    CREATE INDEX IF NOT EXISTS idx_deployment_in_use ON astronomer_deployments(in_use)
-                """)
-                cursor.execute("""
-                    CREATE INDEX IF NOT EXISTS idx_deployment_name ON astronomer_deployments(deployment_name)
-                """)
-                
+                """
+                )
+
                 conn.commit()
-                
+
         except sqlite3.Error as e:
             print(f"Warning: Could not initialize cache database: {e}")
 
@@ -150,16 +164,20 @@ class CacheManager:
         conn = sqlite3.connect(
             self.db_path,
             timeout=30.0,  # 30 second timeout for busy database
-            check_same_thread=False  # Allow cross-thread access
+            check_same_thread=False,  # Allow cross-thread access
         )
         conn.row_factory = sqlite3.Row  # Enable dict-like access to rows
-        
+
         # Configure for better concurrent access
-        conn.execute("PRAGMA journal_mode=WAL")  # Write-Ahead Logging for better concurrency
-        conn.execute("PRAGMA synchronous=NORMAL")  # Balance between safety and performance
+        conn.execute(
+            "PRAGMA journal_mode=WAL"
+        )  # Write-Ahead Logging for better concurrency
+        conn.execute(
+            "PRAGMA synchronous=NORMAL"
+        )  # Balance between safety and performance
         conn.execute("PRAGMA cache_size=10000")  # Increase cache size
         conn.execute("PRAGMA temp_store=MEMORY")  # Store temp tables in memory
-        
+
         return conn
 
     def load_cluster_cache(self) -> dict[str, Any]:
@@ -172,19 +190,21 @@ class CacheManager:
         try:
             with self._get_connection() as conn:
                 cursor = conn.cursor()
-                
+
                 # Get the most recent active cluster
-                cursor.execute("""
+                cursor.execute(
+                    """
                     SELECT * FROM clusters 
                     WHERE is_active = 1 AND expiry_time > datetime('now')
                     ORDER BY created_at DESC 
                     LIMIT 1
-                """)
-                
+                """
+                )
+
                 if row := cursor.fetchone():
                     return dict(row)
                 return {}
-                
+
         except sqlite3.Error as e:
             print(f"Warning: Could not load cluster cache: {e}")
             return {}
@@ -198,50 +218,59 @@ class CacheManager:
         """
         max_retries = 3
         retry_delay = 1.0  # seconds
-        
+
         for attempt in range(max_retries):
             try:
                 with self._get_connection() as conn:
                     cursor = conn.cursor()
-                    
+
                     # Use a transaction to make this atomic
                     cursor.execute("BEGIN TRANSACTION")
-                    
+
                     try:
                         # Deactivate all existing clusters first
                         cursor.execute("UPDATE clusters SET is_active = 0")
-                        
+
                         # Insert new cluster data with explicit is_active = 1
-                        cursor.execute("""
+                        cursor.execute(
+                            """
                             INSERT OR REPLACE INTO clusters (
                                 cluster_id, cluster_name, host, num_workers, status, created_at, expiry_time, is_shared, is_active
                             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)
-                        """, (
-                            cache_data.get("cluster_id"),
-                            cache_data.get("cluster_name"),
-                            cache_data.get("host"),
-                            cache_data.get("num_workers", 1),
-                            cache_data.get("status", "RUNNING"),
-                            cache_data.get("created_at", datetime.now().isoformat()),
-                            cache_data.get("expiry_time", self.expiry_time),
-                            cache_data.get("is_shared", 0)
-                        ))
-                        
+                        """,
+                            (
+                                cache_data.get("cluster_id"),
+                                cache_data.get("cluster_name"),
+                                cache_data.get("host"),
+                                cache_data.get("num_workers", 1),
+                                cache_data.get("status", "RUNNING"),
+                                cache_data.get(
+                                    "created_at", datetime.now().isoformat()
+                                ),
+                                cache_data.get("expiry_time", self.expiry_time),
+                                cache_data.get("is_shared", 0),
+                            ),
+                        )
+
                         cursor.execute("COMMIT")
                         return  # Success, exit retry loop
-                        
+
                     except Exception as e:
                         cursor.execute("ROLLBACK")
                         raise e
-                    
+
             except sqlite3.OperationalError as e:
                 if "database is locked" in str(e).lower() and attempt < max_retries - 1:
-                    print(f"Database locked, retrying in {retry_delay}s (attempt {attempt + 1}/{max_retries})")
+                    print(
+                        f"Database locked, retrying in {retry_delay}s (attempt {attempt + 1}/{max_retries})"
+                    )
                     time.sleep(retry_delay)
                     retry_delay *= 2  # Exponential backoff
                     continue
                 else:
-                    print(f"Warning: Could not save cluster cache after {max_retries} attempts: {e}")
+                    print(
+                        f"Warning: Could not save cluster cache after {max_retries} attempts: {e}"
+                    )
                     break
             except sqlite3.Error as e:
                 print(f"Warning: Could not save cluster cache: {e}")
@@ -256,7 +285,11 @@ class CacheManager:
         :return: True if cache data is still valid, False otherwise.
         :rtype: bool
         """
-        if not cache_data or "cluster_id" not in cache_data or "expiry_time" not in cache_data:
+        if (
+            not cache_data
+            or "cluster_id" not in cache_data
+            or "expiry_time" not in cache_data
+        ):
             return False
 
         try:
@@ -264,7 +297,7 @@ class CacheManager:
             return datetime.now() < expiry_time
         except (ValueError, TypeError):
             return False
-        
+
     def remove_terminated_cluster(self, cluster_id: str) -> None:
         """
         Remove a terminated cluster from the cache.
@@ -275,12 +308,14 @@ class CacheManager:
         try:
             with self._get_connection() as conn:
                 cursor = conn.cursor()
-                cursor.execute("DELETE FROM clusters WHERE cluster_id = ?", (cluster_id,))
+                cursor.execute(
+                    "DELETE FROM clusters WHERE cluster_id = ?", (cluster_id,)
+                )
                 conn.commit()
                 print(f"Removed terminated cluster: {cluster_id}")
         except sqlite3.Error as e:
             print(f"Unable to remove terminated cluster {cluster_id} from cache: {e}")
-    
+
     def clear_cluster_cache(self) -> None:
         """
         Clear the cluster cache (for testing or manual cleanup).
@@ -306,7 +341,7 @@ class CacheManager:
         cache_data = self.load_cluster_cache()
         if not cache_data:
             return None
-        
+
         return {
             "cluster_id": cache_data.get("cluster_id"),
             "expiry_time": cache_data.get("expiry_time"),
@@ -314,10 +349,12 @@ class CacheManager:
             "is_valid": self.is_cluster_cache_valid(cache_data),
             "access_count": cache_data.get("access_count", 0),
             "last_accessed": cache_data.get("last_accessed"),
-            "is_shared": cache_data.get("is_shared", False)
+            "is_shared": cache_data.get("is_shared", False),
         }
 
-    def cache_new_cluster(self, cluster_id: str, cluster_config: Optional[dict[str, Any]] = None) -> None:
+    def cache_new_cluster(
+        self, cluster_id: str, cluster_config: Optional[dict[str, Any]] = None
+    ) -> None:
         """
         Cache a new cluster with expiry time and optional configuration details.
 
@@ -326,25 +363,29 @@ class CacheManager:
         :rtype: None
         """
         expiry_time = datetime.now() + timedelta(hours=self.default_expiry_hours)
-        
+
         cache_data = {
             "cluster_id": cluster_id,
             "expiry_time": expiry_time.isoformat(),
-            "created_at": datetime.now().isoformat()
+            "created_at": datetime.now().isoformat(),
         }
-        
+
         # Add cluster configuration if provided
         if cluster_config:
-            cache_data.update({
-                "cluster_name": cluster_config.get("cluster_name"),
-                "host": cluster_config.get("host"),
-                "node_type_id": cluster_config.get("node_type_id"),
-                "spark_version": cluster_config.get("spark_version"),
-                "num_workers": cluster_config.get("num_workers"),
-                "autotermination_minutes": cluster_config.get("autotermination_minutes"),
-                "is_shared": cluster_config.get("is_shared", False)
-            })
-        
+            cache_data.update(
+                {
+                    "cluster_name": cluster_config.get("cluster_name"),
+                    "host": cluster_config.get("host"),
+                    "node_type_id": cluster_config.get("node_type_id"),
+                    "spark_version": cluster_config.get("spark_version"),
+                    "num_workers": cluster_config.get("num_workers"),
+                    "autotermination_minutes": cluster_config.get(
+                        "autotermination_minutes"
+                    ),
+                    "is_shared": cluster_config.get("is_shared", False),
+                }
+            )
+
         self.save_cluster_cache(cache_data)
         print(f"Cached cluster {cluster_id} until {expiry_time}")
 
@@ -357,33 +398,42 @@ class CacheManager:
         """
         max_retries = 3
         retry_delay = 0.5  # seconds
-        
+
         for attempt in range(max_retries):
             try:
                 with self._get_connection() as conn:
                     cursor = conn.cursor()
-                    cursor.execute("""
+                    cursor.execute(
+                        """
                         UPDATE clusters 
                         SET last_accessed = datetime('now'), access_count = access_count + 1
                         WHERE cluster_id = ? AND is_active = 1
-                    """, (cluster_id,))
+                    """,
+                        (cluster_id,),
+                    )
                     conn.commit()
                     return  # Success, exit retry loop
-                    
+
             except sqlite3.OperationalError as e:
                 if "database is locked" in str(e).lower() and attempt < max_retries - 1:
-                    print(f"Database locked during access update, retrying in {retry_delay}s (attempt {attempt + 1}/{max_retries})")
+                    print(
+                        f"Database locked during access update, retrying in {retry_delay}s (attempt {attempt + 1}/{max_retries})"
+                    )
                     time.sleep(retry_delay)
                     retry_delay *= 2  # Exponential backoff
                     continue
                 else:
-                    print(f"Warning: Could not update cluster access after {max_retries} attempts: {e}")
+                    print(
+                        f"Warning: Could not update cluster access after {max_retries} attempts: {e}"
+                    )
                     break
             except sqlite3.Error as e:
                 print(f"Warning: Could not update cluster access: {e}")
                 break
 
-    def get_all_clusters(self, where_clause: Optional[str] = None) -> list[dict[str, Any]]:
+    def get_all_clusters(
+        self, where_clause: Optional[str] = None
+    ) -> list[dict[str, Any]]:
         """
         Get all clusters in the cache (for debugging and monitoring).
 
@@ -394,17 +444,17 @@ class CacheManager:
         try:
             with self._get_connection() as conn:
                 cursor = conn.cursor()
-                
+
                 if where_clause:
                     query = f"SELECT * FROM clusters WHERE {where_clause} ORDER BY created_at DESC"
                 else:
                     query = "SELECT * FROM clusters ORDER BY created_at DESC"
-                
+
                 cursor.execute(query)
                 rows = cursor.fetchall()
-                
+
                 return [dict(row) for row in rows]
-                
+
         except sqlite3.Error as e:
             print(f"Warning: Could not get all clusters: {e}")
             return []
@@ -419,14 +469,16 @@ class CacheManager:
         try:
             with self._get_connection() as conn:
                 cursor = conn.cursor()
-                cursor.execute("""
+                cursor.execute(
+                    """
                     DELETE FROM clusters 
                     WHERE expiry_time <= datetime('now')
-                """)
+                """
+                )
                 deleted_count = cursor.rowcount
                 conn.commit()
                 return deleted_count
-                
+
         except sqlite3.Error as e:
             print(f"Warning: Could not cleanup expired clusters: {e}")
             return 0
@@ -441,19 +493,21 @@ class CacheManager:
         try:
             with self._get_connection() as conn:
                 cursor = conn.cursor()
-                
+
                 # Get total clusters
                 cursor.execute("SELECT COUNT(*) FROM clusters")
                 total_clusters = cursor.fetchone()[0]
-                
+
                 # Get active clusters
                 cursor.execute("SELECT COUNT(*) FROM clusters WHERE is_active = 1")
                 active_clusters = cursor.fetchone()[0]
-                
+
                 # Get expired clusters
-                cursor.execute("SELECT COUNT(*) FROM clusters WHERE expiry_time <= datetime('now')")
+                cursor.execute(
+                    "SELECT COUNT(*) FROM clusters WHERE expiry_time <= datetime('now')"
+                )
                 expired_clusters = cursor.fetchone()[0]
-                
+
                 # Get total access count
                 cursor.execute("SELECT SUM(access_count) FROM clusters")
                 total_accesses = cursor.fetchone()[0] or 0
@@ -461,16 +515,20 @@ class CacheManager:
                 # Get shared clusters
                 cursor.execute("SELECT COUNT(*) FROM clusters WHERE is_shared = 1")
                 shared_clusters = cursor.fetchone()[0] or 0
-                
+
                 return {
                     "total_clusters": total_clusters,
                     "active_clusters": active_clusters,
                     "expired_clusters": expired_clusters,
                     "total_accesses": total_accesses,
                     "shared_clusters": shared_clusters,
-                    "cache_file_size": os.path.getsize(self.db_path) if os.path.exists(self.db_path) else 0
+                    "cache_file_size": (
+                        os.path.getsize(self.db_path)
+                        if os.path.exists(self.db_path)
+                        else 0
+                    ),
                 }
-                
+
         except sqlite3.Error as e:
             print(f"Warning: Could not get cache statistics: {e}")
             return {}
@@ -484,19 +542,19 @@ class CacheManager:
         try:
             with self._get_connection() as conn:
                 cursor = conn.cursor()
-                
+
                 # Run VACUUM to optimize the database
                 cursor.execute("VACUUM")
-                
+
                 # Analyze tables for better query planning
                 cursor.execute("ANALYZE")
-                
+
                 # Clean up WAL files
                 cursor.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-                
+
                 conn.commit()
                 print("Database optimized successfully")
-                
+
         except sqlite3.Error as e:
             print(f"Warning: Could not optimize database: {e}")
 
@@ -514,28 +572,30 @@ class CacheManager:
             "wal_exists": False,
             "wal_size": 0,
             "shm_exists": False,
-            "shm_size": 0
+            "shm_size": 0,
         }
-        
+
         if info["database_exists"]:
             info["database_size"] = os.path.getsize(self.db_path)
-            
+
             # Check for WAL file
             wal_path = f"{self.db_path}-wal"
             if os.path.exists(wal_path):
                 info["wal_exists"] = True
                 info["wal_size"] = os.path.getsize(wal_path)
-            
+
             # Check for shared memory file
             shm_path = f"{self.db_path}-shm"
             if os.path.exists(shm_path):
                 info["shm_exists"] = True
                 info["shm_size"] = os.path.getsize(shm_path)
-        
+
         return info
 
     # Shared Cluster Coordination Methods
-    def register_shared_cluster_creation(self, config_hash: str, worker_pid: int) -> bool:
+    def register_shared_cluster_creation(
+        self, config_hash: str, worker_pid: int
+    ) -> bool:
         """
         Register that a worker is creating a shared cluster.
 
@@ -547,16 +607,19 @@ class CacheManager:
         try:
             with self._get_connection() as conn:
                 cursor = conn.cursor()
-                
+
                 # Try to insert a new registry entry
-                cursor.execute("""
+                cursor.execute(
+                    """
                     INSERT INTO shared_cluster_registry (config_hash, worker_pid, status, usage_count)
                     VALUES (?, ?, 'creating', 1)
-                """, (config_hash, worker_pid))
-                
+                """,
+                    (config_hash, worker_pid),
+                )
+
                 conn.commit()
                 return True
-                
+
         except sqlite3.IntegrityError:
             # Entry already exists, check if we can join
             return self.can_join_shared_cluster_creation(config_hash)
@@ -575,21 +638,30 @@ class CacheManager:
         try:
             with self._get_connection() as conn:
                 cursor = conn.cursor()
-                cursor.execute("""
+                cursor.execute(
+                    """
                     SELECT status FROM shared_cluster_registry 
                     WHERE config_hash = ?
-                """, (config_hash,))
-                
+                """,
+                    (config_hash,),
+                )
+
                 if row := cursor.fetchone():
                     status = row[0]
-                    return status in ['creating', 'ready']
+                    return status in ["creating", "ready"]
                 return False
-                
+
         except sqlite3.Error as e:
             print(f"Warning: Could not check shared cluster creation status: {e}")
             return False
 
-    def update_shared_cluster_status(self, config_hash: str, status: str, cluster_id: Optional[str] = None, error_message: Optional[str] = None) -> None:
+    def update_shared_cluster_status(
+        self,
+        config_hash: str,
+        status: str,
+        cluster_id: Optional[str] = None,
+        error_message: Optional[str] = None,
+    ) -> None:
         """
         Update the status of a shared cluster creation.
 
@@ -602,22 +674,28 @@ class CacheManager:
         try:
             with self._get_connection() as conn:
                 cursor = conn.cursor()
-                
+
                 if cluster_id:
-                    cursor.execute("""
+                    cursor.execute(
+                        """
                         UPDATE shared_cluster_registry 
                         SET status = ?, cluster_id = ?, error_message = ?
                         WHERE config_hash = ?
-                    """, (status, cluster_id, error_message, config_hash))
+                    """,
+                        (status, cluster_id, error_message, config_hash),
+                    )
                 else:
-                    cursor.execute("""
+                    cursor.execute(
+                        """
                         UPDATE shared_cluster_registry 
                         SET status = ?, error_message = ?
                         WHERE config_hash = ?
-                    """, (status, error_message, config_hash))
-                
+                    """,
+                        (status, error_message, config_hash),
+                    )
+
                 conn.commit()
-                
+
         except sqlite3.Error as e:
             print(f"Warning: Could not update shared cluster status: {e}")
 
@@ -632,15 +710,18 @@ class CacheManager:
         try:
             with self._get_connection() as conn:
                 cursor = conn.cursor()
-                cursor.execute("""
+                cursor.execute(
+                    """
                     SELECT * FROM shared_cluster_registry 
                     WHERE config_hash = ?
-                """, (config_hash,))
-                
+                """,
+                    (config_hash,),
+                )
+
                 if row := cursor.fetchone():
                     return dict(row)
                 return None
-                
+
         except sqlite3.Error as e:
             print(f"Warning: Could not get shared cluster info: {e}")
             return None
@@ -656,32 +737,38 @@ class CacheManager:
         try:
             with self._get_connection() as conn:
                 cursor = conn.cursor()
-                
+
                 # Use a transaction to ensure atomicity
                 cursor.execute("BEGIN TRANSACTION")
-                
+
                 try:
-                    cursor.execute("""
+                    cursor.execute(
+                        """
                         UPDATE shared_cluster_registry 
                         SET usage_count = usage_count + 1
                         WHERE config_hash = ?
-                    """, (config_hash,))
-                    
-                    cursor.execute("""
+                    """,
+                        (config_hash,),
+                    )
+
+                    cursor.execute(
+                        """
                         SELECT usage_count FROM shared_cluster_registry 
                         WHERE config_hash = ?
-                    """, (config_hash,))
-                    
+                    """,
+                        (config_hash,),
+                    )
+
                     row = cursor.fetchone()
                     new_count = row[0] if row else 0
-                    
+
                     cursor.execute("COMMIT")
                     return new_count
-                    
+
                 except Exception as e:
                     cursor.execute("ROLLBACK")
                     raise e
-                
+
         except sqlite3.Error as e:
             print(f"Warning: Could not increment shared cluster usage: {e}")
             return 0
@@ -697,32 +784,38 @@ class CacheManager:
         try:
             with self._get_connection() as conn:
                 cursor = conn.cursor()
-                
+
                 # Use a transaction to ensure atomicity
                 cursor.execute("BEGIN TRANSACTION")
-                
+
                 try:
-                    cursor.execute("""
+                    cursor.execute(
+                        """
                         UPDATE shared_cluster_registry 
                         SET usage_count = usage_count - 1
                         WHERE usage_count > 0 AND config_hash = ?
-                    """, (config_hash,))
-                    
-                    cursor.execute("""
+                    """,
+                        (config_hash,),
+                    )
+
+                    cursor.execute(
+                        """
                         SELECT usage_count FROM shared_cluster_registry 
                         WHERE config_hash = ?
-                    """, (config_hash,))
-                    
+                    """,
+                        (config_hash,),
+                    )
+
                     row = cursor.fetchone()
                     new_count = row[0] if row else 0
-                    
+
                     cursor.execute("COMMIT")
                     return new_count
-                    
+
                 except Exception as e:
                     cursor.execute("ROLLBACK")
                     raise e
-                
+
         except sqlite3.Error as e:
             print(f"Warning: Could not decrement shared cluster usage: {e}")
             return 0
@@ -738,14 +831,17 @@ class CacheManager:
         try:
             with self._get_connection() as conn:
                 cursor = conn.cursor()
-                cursor.execute("""
+                cursor.execute(
+                    """
                     DELETE FROM shared_cluster_registry 
                     WHERE config_hash = ?
-                """, (config_hash,))
-                
+                """,
+                    (config_hash,),
+                )
+
                 conn.commit()
                 return True
-                
+
         except sqlite3.Error as e:
             print(f"Warning: Could not cleanup shared cluster registry: {e}")
             return False
@@ -760,261 +856,232 @@ class CacheManager:
         try:
             with self._get_connection() as conn:
                 cursor = conn.cursor()
-                cursor.execute("""
+                cursor.execute(
+                    """
                     SELECT * FROM shared_cluster_registry 
                     ORDER BY creation_time DESC
-                """)
-                
+                """
+                )
+
                 return [dict(row) for row in cursor.fetchall()]
-                
+
         except sqlite3.Error as e:
             print(f"Warning: Could not get all shared clusters: {e}")
             return []
 
-    def populate_astronomer_deployments(self, deployments: list[dict[str, str]]) -> None:
+    def populate_astronomer_deployments(
+        self, deployments: list[dict[str, str]]
+    ) -> None:
         """
-        Populate the astronomer_deployments table with existing deployments.
+        Populate the astronomer_deployments in-memory storage with existing deployments using distributed locking.
 
         :param list[dict[str, Any]] deployments: List of deployment dictionaries with deployment_id, deployment_name, and status.
         :rtype: None
         """
-        max_retries = 3
-        retry_delay = 1.0
-        
-        for attempt in range(max_retries):
-            try:
-                with self._get_connection() as conn:
-                    cursor = conn.cursor()
-                    
-                    cursor.execute("BEGIN TRANSACTION")
-                    
-                    try:
-                        
-                        # Insert new deployment data
-                        for deployment in deployments:
-                            # If the deployment is in the database, update it, otherwise insert it
-                            cursor.execute("""
-                                SELECT * FROM astronomer_deployments 
-                                WHERE deployment_name = ?
-                            """, (deployment["deployment_name"],))
-                            
-                            if cursor.fetchone():
-                                # Reset in_use status for hibernating deployments to fix stuck deployments from catastrophic failures
-                                if deployment["status"] == "HIBERNATING":
-                                    cursor.execute("""
-                                        UPDATE astronomer_deployments 
-                                        SET deployment_id = ?, deployment_name = ?, status = ?, created_at = datetime('now'), 
-                                            in_use = 0, worker_pid = NULL, test_name = NULL
-                                        WHERE deployment_name = ?
-                                    """, (deployment["deployment_id"], deployment["deployment_name"], deployment["status"], deployment["deployment_name"]))
-                                    print(f"Worker {os.getpid()}: Reset stuck deployment {deployment['deployment_name']} to available state")
-                                else:
-                                    cursor.execute("""
-                                        UPDATE astronomer_deployments 
-                                        SET deployment_id = ?, deployment_name = ?, status = ?, created_at = datetime('now')
-                                        WHERE deployment_name = ?
-                                    """, (deployment["deployment_id"], deployment["deployment_name"], deployment["status"], deployment["deployment_name"]))
-                            else:
-                                # For new deployments, in_use should be 0 since no test is using them yet
-                                cursor.execute("""
-                                    INSERT INTO astronomer_deployments (
-                                        deployment_id, deployment_name, status, test_name, in_use, created_at
-                                    ) VALUES (?, ?, ?, NULL, 0, datetime('now'))
-                                """, (
-                                    deployment["deployment_id"],
-                                    deployment["deployment_name"],
-                                    deployment["status"]
-                                ))
-                        
-                        cursor.execute("COMMIT")
-                        print(f"Worker {os.getpid()}: Populated {len(deployments)} astronomer deployments")
-                        return
-                        
-                    except Exception as e:
-                        cursor.execute("ROLLBACK")
-                        raise e
-                    
-            except sqlite3.OperationalError as e:
-                if "database is locked" in str(e).lower() and attempt < max_retries - 1:
-                    print(f"Database locked, retrying in {retry_delay}s (attempt {attempt + 1}/{max_retries})")
-                    time.sleep(retry_delay)
-                    retry_delay *= 2
-                    continue
-                else:
-                    print(f"Warning: Could not populate astronomer deployments after {max_retries} attempts: {e}")
-                    break
-            except sqlite3.Error as e:
-                print(f"Warning: Could not populate astronomer deployments: {e}")
-                break
+        # Use distributed lock to coordinate deployment population for this instance
+        populate_lock_key = f"astronomer_deployments_populate_{self.instance_id}"
+        with self.distributed_lock.with_lock(populate_lock_key, timeout=30) as acquired:
+            if not acquired:
+                print(
+                    f"Worker {os.getpid()}: Could not acquire lock for populating deployments"
+                )
+                return
 
-    def allocate_astronomer_deployment(self, test_name: str, worker_pid: int) -> Optional[dict[str, Any]]:
+            try:
+                for deployment in deployments:
+                    deployment_name = deployment["deployment_name"]
+
+                    # Create deployment entry with proper structure
+                    deployment_data = {
+                        "deployment_id": deployment["deployment_id"],
+                        "deployment_name": deployment_name,
+                        "status": deployment["status"],
+                        "worker_pid": None,
+                        "in_use": False,
+                        "created_at": datetime.now().isoformat(),
+                        "last_accessed": datetime.now().isoformat(),
+                        "test_name": None,
+                    }
+
+                    # If deployment exists and is hibernating, reset it to available state
+                    if deployment_name in self.astronomer_deployments:
+                        if deployment["status"] == "HIBERNATING":
+                            deployment_data["in_use"] = False
+                            deployment_data["worker_pid"] = None
+                            deployment_data["test_name"] = None
+                            print(
+                                f"Worker {os.getpid()}: Reset stuck deployment {deployment_name} to available state"
+                            )
+
+                    # Store in memory
+                    self.astronomer_deployments[deployment_name] = deployment_data
+
+                print(
+                    f"Worker {os.getpid()}: Populated {len(deployments)} astronomer deployments in memory"
+                )
+
+            except Exception as e:
+                print(f"Warning: Could not populate astronomer deployments: {e}")
+
+    def allocate_astronomer_deployment(
+        self, test_name: str, worker_pid: int
+    ) -> Optional[dict[str, Any]]:
         """
-        Allocate an available hibernating astronomer deployment for use.
+        Allocate an available hibernating astronomer deployment for use using distributed locking.
 
         :param str test_name: Name of the test requesting the deployment.
         :param int worker_pid: Process ID of the worker requesting the deployment.
         :return: Dictionary containing deployment information, or None if no deployment available.
         :rtype: Optional[dict[str, Any]]
         """
-        max_retries = 5
-        retry_delay = 1.0
-        
-        for attempt in range(max_retries):
-            try:
-                with self._get_connection() as conn:
-                    cursor = conn.cursor()
-                    
-                    cursor.execute("BEGIN TRANSACTION")
-                    
-                    try:
-                        # Find the first available hibernating deployment
-                        # Note: in_use might be 1 due to database trigger, but we can still use hibernating deployments
-                        cursor.execute("""
-                            SELECT * FROM astronomer_deployments 
-                            WHERE status = 'HIBERNATING'
-                            ORDER BY last_accessed ASC 
-                            LIMIT 1
-                        """)
-                        
-                        row = cursor.fetchone()
-                        if not row:
-                            cursor.execute("ROLLBACK")
-                            return None
-                        
-                        deployment = dict(row)
-                        
-                        # Mark the deployment as in use
-                        cursor.execute("""
-                            UPDATE astronomer_deployments 
-                            SET in_use = 1, worker_pid = ?, test_name = ?, last_accessed = datetime('now')
-                            WHERE deployment_id = ?
-                        """, (worker_pid, test_name, deployment["deployment_id"]))
-                        
-                        cursor.execute("COMMIT")
-                        
-                        print(f"Worker {worker_pid}: Allocated deployment {deployment['deployment_name']} ({deployment['deployment_id']}) for {test_name}")
-                        return deployment
-                        
-                    except Exception as e:
-                        cursor.execute("ROLLBACK")
-                        raise e
-                    
-            except sqlite3.OperationalError as e:
-                if "database is locked" in str(e).lower() and attempt < max_retries - 1:
-                    print(f"Database locked during allocation, retrying in {retry_delay}s (attempt {attempt + 1}/{max_retries})")
-                    time.sleep(retry_delay)
-                    retry_delay *= 2
-                    continue
-                else:
-                    print(f"Warning: Could not allocate deployment after {max_retries} attempts: {e}")
-                    return None
-            except sqlite3.Error as e:
-                print(f"Warning: Could not allocate deployment: {e}")
-                return None
-        
-        return None
+        try:
+            # Find all available hibernating deployments and sort by last_accessed (oldest first)
+            available_deployments = []
 
-    def release_astronomer_deployment(self, deployment_name: str, worker_pid: int, new_id: Optional[str] = None) -> None:
+            for deployment_name, deployment in self.astronomer_deployments.items():
+                if deployment["status"] == "HIBERNATING" and not deployment["in_use"]:
+                    available_deployments.append(deployment)
+
+            if not available_deployments:
+                print(
+                    f"Worker {worker_pid}: No available hibernating deployments found"
+                )
+                return None
+
+            # Sort by last_accessed to try oldest deployments first
+            available_deployments.sort(key=lambda d: d["last_accessed"])
+
+            print(
+                f"Worker {worker_pid}: Found {len(available_deployments)} hibernating deployments, trying to acquire locks..."
+            )
+
+            # Try to acquire a lock for each deployment until we succeed
+            for deployment in available_deployments:
+                deployment_lock_key = f"deployment_{deployment['deployment_name']}"
+
+                print(
+                    f"Worker {worker_pid}: Attempting to acquire lock for deployment {deployment['deployment_name']}"
+                )
+                acquired = self.distributed_lock.acquire_lock(
+                    deployment_lock_key, timeout=10
+                )
+
+                if acquired:
+                    # Successfully acquired lock, mark deployment as in use
+                    deployment["in_use"] = True
+                    deployment["worker_pid"] = worker_pid
+                    deployment["test_name"] = test_name
+                    deployment["last_accessed"] = datetime.now().isoformat()
+
+                    print(
+                        f"Worker {worker_pid}: Successfully allocated deployment {deployment['deployment_name']} ({deployment['deployment_id']}) for {test_name}"
+                    )
+                    return (
+                        deployment.copy()
+                    )  # Return a copy to avoid external modifications
+                else:
+                    print(
+                        f"Worker {worker_pid}: Could not acquire lock for deployment {deployment['deployment_name']}, trying next..."
+                    )
+                    continue
+
+            # If we get here, we couldn't acquire a lock for any deployment
+            print(
+                f"Worker {worker_pid}: Could not acquire lock for any of the {len(available_deployments)} available deployments"
+            )
+            return None
+
+        except Exception as e:
+            print(f"Warning: Could not allocate deployment: {e}")
+            return None
+
+    def release_astronomer_deployment(
+        self, deployment_name: str, worker_pid: int, new_id: Optional[str] = None
+    ) -> None:
         """
-        Release an astronomer deployment back to hibernating state.
+        Release an astronomer deployment back to hibernating state using distributed locking.
 
         :param str deployment_name: Name of the deployment to release.
         :param int worker_pid: Process ID of the worker releasing the deployment.
         :param Optional[str] new_id: New deployment ID after recreation.
         :rtype: None
         """
-        max_retries = 3
-        retry_delay = 1.0
-        
-        for attempt in range(max_retries):
-            try:
-                with self._get_connection() as conn:
-                    cursor = conn.cursor()
-                    
-                    cursor.execute("BEGIN TRANSACTION")
-                    
-                    try:
-                        # Release the deployment - always clear in_use, worker_pid, test_name
-                        # Only update deployment_id if new_id is provided
-                        if new_id:
-                            cursor.execute("""
-                                UPDATE astronomer_deployments 
-                                SET worker_pid = NULL, test_name = NULL, status = 'HIBERNATING', in_use = 0, deployment_id = ?
-                                WHERE deployment_name = ?
-                            """, (new_id, deployment_name))
-                        else:
-                            cursor.execute("""
-                                UPDATE astronomer_deployments 
-                                SET worker_pid = NULL, test_name = NULL, status = 'HIBERNATING', in_use = 0
-                                WHERE deployment_name = ?
-                            """, (deployment_name,))
-                        
-                        cursor.execute("COMMIT")
-                        print(f"Worker {worker_pid}: Released deployment {deployment_name} and set new ID to {new_id}")
-                        return
-                        
-                    except Exception as e:
-                        cursor.execute("ROLLBACK")
-                        raise e
-                    
-            except sqlite3.OperationalError as e:
-                if "database is locked" in str(e).lower() and attempt < max_retries - 1:
-                    print(f"Database locked during release, retrying in {retry_delay}s (attempt {attempt + 1}/{max_retries})")
-                    time.sleep(retry_delay)
-                    retry_delay *= 2
-                    continue
-                else:
-                    print(f"Warning: Could not release deployment after {max_retries} attempts: {e}")
-                    break
-            except sqlite3.Error as e:
-                print(f"Warning: Could not release deployment: {e}")
-                break
+        try:
+            if deployment_name not in self.astronomer_deployments:
+                print(
+                    f"Worker {worker_pid}: Deployment {deployment_name} not found in cache"
+                )
+                return
 
-    def get_astronomer_deployment_status(self, deployment_id: str) -> Optional[dict[str, Any]]:
+            deployment = self.astronomer_deployments[deployment_name]
+
+            # Release the deployment - always clear in_use, worker_pid, test_name
+            deployment["worker_pid"] = None
+            deployment["test_name"] = None
+            deployment["status"] = "HIBERNATING"
+            deployment["in_use"] = False
+            deployment["last_accessed"] = datetime.now().isoformat()
+
+            # Only update deployment_id if new_id is provided
+            if new_id:
+                deployment["deployment_id"] = new_id
+
+            # Release the distributed lock for this deployment
+            deployment_lock_key = f"deployment_{deployment_name}"
+            released = self.distributed_lock.release_lock(deployment_lock_key)
+
+            if released:
+                print(
+                    f"Worker {worker_pid}: Released deployment {deployment_name} and set new ID to {new_id}"
+                )
+            else:
+                print(
+                    f"Worker {worker_pid}: Released deployment {deployment_name} but could not release lock (may not have been held by this process)"
+                )
+
+        except Exception as e:
+            print(f"Warning: Could not release deployment: {e}")
+
+    def get_astronomer_deployment_status(
+        self, deployment_id: str
+    ) -> Optional[dict[str, Any]]:
         """
-        Get the status of a specific astronomer deployment.
+        Get the status of a specific astronomer deployment from in-memory storage.
 
         :param str deployment_id: ID of the deployment to check.
         :return: Dictionary containing deployment status information.
         :rtype: Optional[dict[str, Any]]
         """
         try:
-            with self._get_connection() as conn:
-                cursor = conn.cursor()
-                cursor.execute("""
-                    SELECT * FROM astronomer_deployments 
-                    WHERE deployment_id = ?
-                """, (deployment_id,))
-                
-                row = cursor.fetchone()
-                return dict(row) if row else None
-                
-        except sqlite3.Error as e:
+            for deployment_name, deployment in self.astronomer_deployments.items():
+                if deployment["deployment_id"] == deployment_id:
+                    return deployment.copy()
+            return None
+
+        except Exception as e:
             print(f"Warning: Could not get deployment status: {e}")
             return None
 
-    def get_all_astronomer_deployments(self, where_clause: Optional[str] = None) -> list[dict[str, Any]]:
+    def get_all_astronomer_deployments(
+        self, status_filter: Optional[str] = None
+    ) -> list[dict[str, Any]]:
         """
-        Get all astronomer deployments (for debugging and monitoring).
+        Get all astronomer deployments from in-memory storage (for debugging and monitoring).
 
-        :param Optional[str] where_clause: Optional WHERE clause to filter deployments.
+        :param Optional[str] status_filter: Optional status to filter deployments by (e.g., 'HIBERNATING', 'HEALTHY').
         :return: List of dictionaries containing deployment data.
         :rtype: list[dict[str, Any]]
         """
         try:
-            with self._get_connection() as conn:
-                cursor = conn.cursor()
-                
-                if where_clause:
-                    query = f"SELECT * FROM astronomer_deployments WHERE {where_clause} ORDER BY created_at DESC"
-                else:
-                    query = "SELECT * FROM astronomer_deployments ORDER BY created_at DESC"
-                
-                cursor.execute(query)
-                rows = cursor.fetchall()
-                
-                return [dict(row) for row in rows]
-                
-        except sqlite3.Error as e:
+            deployments = []
+            for deployment_name, deployment in self.astronomer_deployments.items():
+                if status_filter is None or deployment["status"] == status_filter:
+                    deployments.append(deployment.copy())
+
+            # Sort by created_at descending (most recent first)
+            deployments.sort(key=lambda x: x.get("created_at", ""), reverse=True)
+            return deployments
+
+        except Exception as e:
             print(f"Warning: Could not get all astronomer deployments: {e}")
             return []

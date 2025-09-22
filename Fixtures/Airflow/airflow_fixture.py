@@ -106,6 +106,7 @@ class AirflowFixture(
         # 2. Initialize cache manager
         print("💾 Initializing deployment cache manager...")
         from Fixtures.Airflow.airflow_resources import _ensure_cache_manager_initialized
+
         cache_manager = _ensure_cache_manager_initialized()
 
         # 3. Get available deployments
@@ -134,18 +135,6 @@ class AirflowFixture(
         # since they're managed by the Astronomer platform
         print("✅ Airflow session cleanup complete")
 
-    # commented out because it causes CLI conflicts as it runs in every process and causes everything to explode
-    """
-    def _switch_to_correct_workspace(self) -> None:
-        # Switch to the correct workspace.
-        print(f"⚙️ Switching to astro workspace: {os.getenv('ASTRO_WORKSPACE_ID')}")
-        _run_and_validate_subprocess(
-            ["astro", "workspace", "switch", os.getenv("ASTRO_WORKSPACE_ID")],
-            "switch to the correct workspace",
-            check=True,
-        )
-        print(f"✅ Switched to astro workspace: {os.getenv('ASTRO_WORKSPACE_ID')}")
-    """
     def _test_setup(
         self, resource_config: Optional[AirflowResourceConfig] = None
     ) -> AirflowResourceData:
@@ -198,24 +187,26 @@ class AirflowFixture(
                 class MockNode:
                     def __init__(self, name):
                         self.name = name
-                
+
                 def __init__(self, name):
                     self.node = self.MockNode(name)
-            
+
             mock_request = MockRequest(f"test_{resource_id}")
-            
+
             # Build template for AirflowManager
             build_template = {"resource_id": resource_id}
-            
+
             # Use the unified AirflowManager to create the resource
             airflow_manager = AirflowManager.create_resource(
                 request=mock_request,
-                build_template=build_template, 
-                shared_cache_manager=cache_manager
+                build_template=build_template,
+                shared_cache_manager=cache_manager,
             )
 
             creation_end = time.time()
-            print(f"✅ Airflow resource creation took {creation_end - creation_start:.2f}s")
+            print(
+                f"✅ Airflow resource creation took {creation_end - creation_start:.2f}s"
+            )
 
             # Create resource data for backward compatibility
             resource_data = AirflowResourceData(
@@ -271,28 +262,13 @@ class AirflowFixture(
         test_dir = resource_data["test_dir"]
 
         print(f"🧹 Cleaning up Airflow resource: {resource_id}")
-
-        try:
-            # Use the stored AirflowManager instance for cleanup
-            if hasattr(self, '_airflow_manager') and self._airflow_manager:
-                self._airflow_manager.cleanup_resource(test_dir)
-                print(f"✅ Airflow resource {resource_id} cleaned up using AirflowManager")
-            else:
-                print(f"⚠️ No AirflowManager found for {resource_id}, attempting fallback cleanup")
-                # Fallback cleanup using session data
-                session_data = self.session_data
-                cache_manager = session_data["cache_manager"] if session_data else None
-                deployment_name = resource_data["deployment_name"]
-                
-                # Create a temporary manager for cleanup
-                temp_manager = AirflowManager(resource_id=resource_id, cache_manager=cache_manager)
-                temp_manager.deployment_name = deployment_name
-                temp_manager.test_resources = [(deployment_name, cache_manager)] if cache_manager else []
-                temp_manager.cleanup_resource(test_dir)
-                print(f"✅ Airflow resource {resource_id} cleaned up using fallback method")
-
-        except Exception as e:
-            print(f"❌ Error cleaning up Airflow resource {resource_id}: {e}")
+        # Use the stored AirflowManager instance for cleanup
+        if hasattr(self, "_airflow_manager") and self._airflow_manager:
+            self._airflow_manager.cleanup_resource(test_dir)
+            print(f"✅ Airflow resource {resource_id} cleaned up using AirflowManager")
+        else:
+            print(f"⚠️ No AirflowManager found for {resource_id}, skipping cleanup")
+            raise Exception(f"No AirflowManager found for {resource_id}")
 
     @classmethod
     def get_resource_type(cls) -> str:
@@ -357,5 +333,3 @@ class AirflowFixture(
 
 # Note: No global instance - each test creates its own AirflowFixture
 # with custom resource_id in get_fixtures()
-
-
