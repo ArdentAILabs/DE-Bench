@@ -207,7 +207,7 @@ npm install -g supabase
 npx supabase start
 
 # This will output your local credentials, including:
-# - API URL: http://127.0.0.1:54321
+# - API URL: http://127.0.0.1:43210
 # - Service Role Key: [copy this to DE_BENCH_DB_SERVICE_KEY in your .env]
 ```
 
