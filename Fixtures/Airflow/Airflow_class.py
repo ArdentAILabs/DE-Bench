@@ -894,21 +894,74 @@ class AirflowManager:
 
         retries = 10
         while retries > 0:
-            print(f"Checking if Airflow webserver is ready... {retries} retries left")
-            response = requests.get(
-                f"{self.host}/health",
-                headers={"Authorization": f"Bearer {self.api_token}"},
-            )
 
-            if response.status_code == 401:
-                print(
-                    f"WARNING: 401 Unauthorized Encountered while querying Airflow webserver status. "
-                    f"Will retry. {retries} retries left. Message: {response.text}"
+            print(f"Checking if Airflow webserver and API are ready... {retries} retries left")
+            
+            # Check BOTH endpoints (following backend pattern)
+            try:
+                health_response = requests.get(
+                    f"{self.host}/health",
+                    headers={"Authorization": f"Bearer {self.api_token}"},
+                    timeout=5
                 )
-            elif response.status_code == 200:
-                print("Airflow webserver is ready")
-                return True
-
+                dags_response = requests.get(
+                    f"{self.host}/api/v1/dags",
+                    headers=self.api_headers,
+                    timeout=5
+                )
+                
+                # Evaluate responses (following your backend pattern)
+                health_ok = health_response.status_code == 200
+                
+                # Handle API response like your backend does
+                if dags_response.status_code in (401, 403):
+                    print(f"WARNING: API auth failed ({dags_response.status_code}). Will retry. {retries} retries left.")
+                    api_ok = False
+                elif dags_response.status_code == 302:
+                    api_ok = True  # Redirect is OK like your backend
+                elif dags_response.status_code == 200:
+                    api_ok = True  # Normal success
+                else:
+                    api_ok = False
+                    print(f"API not ready (status: {dags_response.status_code})")
+                
+                if health_ok and api_ok:
+                    print("✅ Both endpoints ready, running stabilization check...")
+                    
+                    # Stabilization delay to catch flapping/unstable deployments
+                    time.sleep(10)
+                    
+                    # Re-check to ensure it's actually stable
+                    try:
+                        final_health = requests.get(
+                            f"{self.host}/health",
+                            headers={"Authorization": f"Bearer {self.api_token}"},
+                            timeout=5
+                        )
+                        final_dags = requests.get(
+                            f"{self.host}/api/v1/dags",
+                            headers=self.api_headers,
+                            timeout=5
+                        )
+                        
+                        if (final_health.status_code == 200 and 
+                            final_dags.status_code in (200, 302)):
+                            print("✅ Airflow webserver AND API are stable and ready")
+                            return True
+                        else:
+                            print(f"⚠️ Stabilization failed - Health: {final_health.status_code}, API: {final_dags.status_code}")
+                            print("Deployment is flapping, continuing to wait...")
+                    except requests.RequestException as e:
+                        print(f"⚠️ Stabilization check failed: {e}, continuing to wait...")
+                        
+                else:
+                    print(f"Not ready - Health: {health_response.status_code}, API: {dags_response.status_code}")
+                    
+            except (requests.ConnectTimeout, requests.ConnectionError, requests.Timeout) as e:
+                print(f"Connection error checking readiness (will retry): {e}")
+            except requests.RequestException as e:
+                print(f"Request error checking readiness (will retry): {e}")
+            
             retries -= 1
             time.sleep(60)
 
