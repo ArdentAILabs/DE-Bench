@@ -432,6 +432,92 @@ class AstroDeploymentManager:
 
         return deleted_deployments, failed_deletions
 
+    def get_non_test_runner_deployments(self) -> List[Dict]:
+        """Get all deployments that do NOT match the de_bench_test_runner_X pattern."""
+        all_deployments = self.list_deployments()
+
+        non_test_runners = []
+        for deployment in all_deployments:
+            # If it doesn't match the test runner pattern, include it
+            if not self.TEST_RUNNER_REGEX.match(deployment["name"]):
+                non_test_runners.append(deployment)
+
+        # Sort by name for consistent output
+        non_test_runners.sort(key=lambda x: x["name"])
+        return non_test_runners
+
+    def delete_all_non_test_runners(self) -> tuple[List[str], List[Dict]]:
+        """Delete all deployments that do NOT match de_bench_test_runner pattern. Returns (successful_deletions, failed_deletions)."""
+        non_test_runners = self.get_non_test_runner_deployments()
+
+        if not non_test_runners:
+            print(f"No non-{self.TEST_RUNNER_PATTERN} deployments found to delete.")
+            return [], []
+
+        print(
+            f"\n⚠️  Found {len(non_test_runners)} deployment(s) that do NOT match the {self.TEST_RUNNER_PATTERN} pattern:"
+        )
+        print("=" * 80)
+        for deployment in non_test_runners:
+            print(f"  - {deployment['name']} ({deployment['deployment_id']})")
+
+        print(f"\n🚨 WARNING: This will delete ALL deployments that are NOT {self.TEST_RUNNER_PATTERN} deployments!")
+        print("🚨 This action cannot be undone!")
+        confirm1 = input(
+            f"Are you sure you want to delete ALL non-{self.TEST_RUNNER_PATTERN} deployments? (type 'yes' to confirm): "
+        )
+
+        if confirm1.lower() != "yes":
+            print("❌ Deletion cancelled.")
+            return [], []
+
+        confirm2 = input(
+            f"Final confirmation: Delete {len(non_test_runners)} non-test-runner deployments? (type 'DELETE' to confirm): "
+        )
+
+        if confirm2 != "DELETE":
+            print("❌ Deletion cancelled.")
+            return [], []
+
+        print(
+            f"\n🗑️  Deleting {len(non_test_runners)} non-{self.TEST_RUNNER_PATTERN} deployments in parallel..."
+        )
+
+        # Create a wrapper function for parallel processing
+        def delete_single_deployment(deployment_info: Dict) -> Dict:
+            """Delete a single deployment and return result info."""
+            success, error_msg = self.delete_deployment(
+                deployment_info["deployment_id"], deployment_info["name"]
+            )
+
+            return {
+                "name": deployment_info["name"],
+                "deployment_id": deployment_info["deployment_id"],
+                "success": success,
+                "error": error_msg,
+            }
+
+        # Process all deletions in parallel
+        results = map_func(delete_single_deployment, non_test_runners)
+
+        # Separate successful and failed deletions
+        deleted_deployments = []
+        failed_deletions = []
+
+        for result in results:
+            if result["success"]:
+                deleted_deployments.append(result["name"])
+            else:
+                failed_deletions.append(
+                    {
+                        "name": result["name"],
+                        "deployment_id": result["deployment_id"],
+                        "error": result["error"],
+                    }
+                )
+
+        return deleted_deployments, failed_deletions
+
 
 def main():
     """Main function to handle command line interaction."""
@@ -442,6 +528,7 @@ def main():
 Examples:
   %(prog)s                    # Interactive mode to create deployments
   %(prog)s --delete-all       # Delete all de_bench_test_runner deployments
+  %(prog)s --delete-others    # Delete all non-de_bench_test_runner deployments
         """,
     )
     parser.add_argument(
@@ -449,12 +536,22 @@ Examples:
         action="store_true",
         help="Delete all de_bench_test_runner deployments (requires confirmation)",
     )
+    parser.add_argument(
+        "--delete-others",
+        action="store_true", 
+        help="Delete all deployments that do NOT follow the de_bench_test_runner pattern (requires confirmation)",
+    )
 
     args = parser.parse_args()
     manager = AstroDeploymentManager()
 
     print("🚀 Astronomer Test Runner Deployment Manager")
     print("=" * 50)
+
+    if args.delete_all and args.delete_others:
+        print("❌ Cannot use both --delete-all and --delete-others at the same time.")
+        print("   Use --delete-all to delete test runners, or --delete-others to delete everything else.")
+        sys.exit(1)
 
     if args.delete_all:
         # Delete all test_runner deployments
@@ -492,6 +589,44 @@ Examples:
             print("\n\n👋 Cancelled by user.")
         except Exception as e:
             print(f"❌ An error occurred: {e}")
+
+    elif args.delete_others:
+        # Delete all non-test_runner deployments
+        try:
+            deleted, failed = manager.delete_all_non_test_runners()
+
+            # Print summary
+            print("\n" + "=" * 80)
+            print("🔥 DELETION SUMMARY")
+            print("=" * 80)
+
+            if deleted:
+                print(f"\n✅ Successfully deleted {len(deleted)} non-test-runner deployment(s):")
+                for deployment in deleted:
+                    print(f"  - {deployment}")
+
+            if failed:
+                print(f"\n❌ Failed to delete {len(failed)} deployment(s):")
+                for failure in failed:
+                    print(f"  - {failure['name']} ({failure['deployment_id']})")
+                    print(f"    Reason: {failure['error']}")
+
+            if not deleted and not failed:
+                print("\n❌ No deployments were processed.")
+
+            # Overall result
+            total_attempted = len(deleted) + len(failed)
+            if total_attempted > 0:
+                success_rate = (len(deleted) / total_attempted) * 100
+                print(
+                    f"\n📊 Overall: {len(deleted)}/{total_attempted} successful ({success_rate:.1f}%)"
+                )
+
+        except KeyboardInterrupt:
+            print("\n\n👋 Cancelled by user.")
+        except Exception as e:
+            print(f"❌ An error occurred: {e}")
+
     else:
         # Interactive mode to create deployments
         # Display existing test runners

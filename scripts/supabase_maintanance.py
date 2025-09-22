@@ -61,6 +61,7 @@ def connect_to_supabase(url: str, service_role_key: str) -> Optional[Client]:
 def list_test_users(supabase_client: Client) -> List[Dict[str, Any]]:
     """
     List all test users with emails starting with 'test-' pattern.
+    Uses pagination to fetch all users, not just the first 50.
 
     Args:
         supabase_client: Supabase client connection
@@ -69,38 +70,66 @@ def list_test_users(supabase_client: Client) -> List[Dict[str, Any]]:
         List of user dictionaries containing user information
     """
     try:
-        # Get all users from Supabase Auth
+        # Get all users from Supabase Auth using pagination
         print("🔍 Fetching users from Supabase...")
-        response = supabase_client.auth.admin.list_users()
-        
-        # Debug: Print response structure
-        print(f"📊 Response type: {type(response)}")
-        print(f"📊 Response attributes: {dir(response)}")
-        
-        # Try different ways to access users
         all_users = []
-        if isinstance(response, list):
-            # Response is a direct list of users
-            all_users = response
-            print(f"📊 Found {len(all_users)} users via direct list")
-        elif hasattr(response, 'users'):
-            all_users = response.users
-            print(f"📊 Found {len(all_users)} users via response.users")
-        elif hasattr(response, 'data'):
-            all_users = response.data
-            print(f"📊 Found {len(all_users)} users via response.data")
-        else:
-            print(f"📊 Response content: {response}")
-            # Maybe it's a dict-like object?
-            if isinstance(response, dict):
-                if 'users' in response:
-                    all_users = response['users']
-                    print(f"📊 Found {len(all_users)} users via response['users']")
-                elif 'data' in response:
-                    all_users = response['data']
-                    print(f"📊 Found {len(all_users)} users via response['data']")
+        page = 1
+        per_page = 1000  # Maximum allowed per page
+        
+        while True:
+            print(f"📄 Fetching page {page} (up to {per_page} users per page)...")
+            response = supabase_client.auth.admin.list_users(page=page, per_page=per_page)
+            
+            # Debug: Print response structure on first page
+            if page == 1:
+                print(f"📊 Response type: {type(response)}")
+                print(f"📊 Response attributes: {dir(response)}")
+            
+            # Try different ways to access users
+            page_users = []
+            if isinstance(response, list):
+                # Response is a direct list of users
+                page_users = response
+                if page == 1:
+                    print(f"📊 Found {len(page_users)} users via direct list")
+            elif hasattr(response, 'users'):
+                page_users = response.users
+                if page == 1:
+                    print(f"📊 Found {len(page_users)} users via response.users")
+            elif hasattr(response, 'data'):
+                page_users = response.data
+                if page == 1:
+                    print(f"📊 Found {len(page_users)} users via response.data")
+            else:
+                if page == 1:
+                    print(f"📊 Response content: {response}")
+                # Maybe it's a dict-like object?
+                if isinstance(response, dict):
+                    if 'users' in response:
+                        page_users = response['users']
+                        if page == 1:
+                            print(f"📊 Found {len(page_users)} users via response['users']")
+                    elif 'data' in response:
+                        page_users = response['data']
+                        if page == 1:
+                            print(f"📊 Found {len(page_users)} users via response['data']")
 
-        print(f"📊 Total users found: {len(all_users)}")
+            # If no users found on this page, we've reached the end
+            if not page_users or len(page_users) == 0:
+                print(f"📄 No more users found on page {page}. Pagination complete.")
+                break
+                
+            print(f"📄 Page {page}: Found {len(page_users)} users")
+            all_users.extend(page_users)
+            
+            # If we got fewer users than per_page, we've reached the end
+            if len(page_users) < per_page:
+                print(f"📄 Page {page} returned {len(page_users)} users (less than {per_page}). Pagination complete.")
+                break
+                
+            page += 1
+
+        print(f"📊 Total users found across all pages: {len(all_users)}")
         
         # Show first few users (without sensitive info) for debugging
         if all_users and len(all_users) > 0:
