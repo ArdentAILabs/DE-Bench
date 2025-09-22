@@ -12,22 +12,8 @@ from typing_extensions import TypedDict
 from pathlib import Path
 
 from Fixtures.base_fixture import DEBenchFixture
-from Fixtures.Airflow.Airflow import Airflow_Local
 from Fixtures.Databricks.cache_manager import CacheManager
-from Fixtures.Airflow.airflow_resources import (
-    _ensure_astro_login,
-    _ensure_cache_manager_initialized,
-    _create_dir_and_astro_project,
-    _create_deployment_in_astronomer,
-    _wake_up_deployment,
-    _hibernate_deployment,
-    _get_deployment_id_by_name,
-    _create_astro_deployment_api_token,
-    _create_variables_in_airflow_deployment,
-    _check_and_update_gh_secrets,
-    _run_and_validate_subprocess,
-    cleanup_airflow_resource,
-)
+from Fixtures.Airflow.Airflow_class import AirflowManager
 
 from braintrust import traced
 
@@ -114,10 +100,12 @@ class AirflowFixture(
 
         # 1. Ensure Astro login
         print("🔐 Ensuring Astro CLI login...")
-        _ensure_astro_login()
+        temp_manager = AirflowManager()
+        temp_manager._ensure_astro_login()
 
         # 2. Initialize cache manager
         print("💾 Initializing deployment cache manager...")
+        from Fixtures.Airflow.airflow_resources import _ensure_cache_manager_initialized
         cache_manager = _ensure_cache_manager_initialized()
 
         # 3. Get available deployments
@@ -180,8 +168,7 @@ class AirflowFixture(
         self, resource_config: Optional[AirflowResourceConfig] = None
     ) -> AirflowResourceData:
         """
-        Set up individual Airflow resource for a test.
-        Allocates a deployment from the session pool and configures it.
+        Set up individual Airflow resource for a test using the unified AirflowManager.
         """
         # Determine which config to use
         if resource_config is not None:
@@ -205,85 +192,32 @@ class AirflowFixture(
 
         cache_manager = session_data["cache_manager"]
 
-        # Create test directory and Astro project
-        test_dir = _create_dir_and_astro_project(resource_id)
-
         try:
-            # Try to allocate a hibernating deployment from session cache
-            print(f"🔄 Attempting to allocate deployment for {resource_id}...")
-
-            if deployment_info := cache_manager.allocate_astronomer_deployment(
-                resource_id, os.getpid()
-            ):
-                # Got an existing hibernating deployment
-                astro_deployment_id = deployment_info["deployment_id"]
-                astro_deployment_name = deployment_info["deployment_name"]
-                print(f"♻️  Allocated hibernating deployment: {astro_deployment_name}")
-                _wake_up_deployment(astro_deployment_name)
-            else:
-                # No hibernating deployment available, create a new one
-                print(
-                    f"🆕 No hibernating deployments available, creating new: {resource_id}"
-                )
-                astro_deployment_id = _create_deployment_in_astronomer(resource_id)
-                astro_deployment_name = resource_id
-
-            # Update GitHub secrets for the deployment
-            _check_and_update_gh_secrets(
-                deployment_id=astro_deployment_id,
-                deployment_name=astro_deployment_name,
-                astro_access_token=os.environ["ASTRO_ACCESS_TOKEN"],
-                astro_workspace_id=os.environ["ASTRO_WORKSPACE_ID"],
+            # Create mock request object for the AirflowManager.create_resource method
+            class MockRequest:
+                class MockNode:
+                    def __init__(self, name):
+                        self.name = name
+                
+                def __init__(self, name):
+                    self.node = self.MockNode(name)
+            
+            mock_request = MockRequest(f"test_{resource_id}")
+            
+            # Build template for AirflowManager
+            build_template = {"resource_id": resource_id}
+            
+            # Use the unified AirflowManager to create the resource
+            airflow_manager = AirflowManager.create_resource(
+                request=mock_request,
+                build_template=build_template, 
+                shared_cache_manager=cache_manager
             )
-
-            # Get deployment API URL
-            api_url = "https://" + _run_and_validate_subprocess(
-                [
-                    "astro",
-                    "deployment",
-                    "inspect",
-                    "--deployment-name",
-                    astro_deployment_name,
-                    "--key",
-                    "metadata.airflow_api_url",
-                ],
-                "getting Astro deployment API URL",
-                return_output=True,
-            )
-            base_url = api_url[: api_url.find("/api/v1")]
-
-            # Get fresh deployment ID and create API token
-            fresh_deployment_id = _get_deployment_id_by_name(astro_deployment_name)
-            if not fresh_deployment_id:
-                raise EnvironmentError(
-                    f"Could not find deployment ID for {astro_deployment_name}"
-                )
-
-            api_token = os.getenv("ASTRO_API_TOKEN")
-
-            if not api_token:
-                raise ValueError(
-                    "ASTRO_API_TOKEN is not set. This is now a required environment variable."
-                )
-
-            # Create user in Airflow deployment
-            _create_variables_in_airflow_deployment(astro_deployment_name)
-
-            # Create and validate Airflow instance
-            airflow_instance = Airflow_Local(
-                airflow_dir=test_dir,
-                host=base_url,
-                api_token=api_token,
-                api_url=api_url,
-            )
-            airflow_instance.wait_for_airflow_to_be_ready()
 
             creation_end = time.time()
-            print(
-                f"✅ Airflow resource creation took {creation_end - creation_start:.2f}s"
-            )
+            print(f"✅ Airflow resource creation took {creation_end - creation_start:.2f}s")
 
-            # Create resource data
+            # Create resource data for backward compatibility
             resource_data = AirflowResourceData(
                 resource_id=resource_id,
                 type="airflow_resource",
@@ -291,31 +225,26 @@ class AirflowFixture(
                 creation_duration=creation_end - creation_start,
                 description=f"Airflow resource for {resource_id}",
                 status="active",
-                deployment_id=astro_deployment_id,
-                deployment_name=astro_deployment_name,
-                base_url=base_url,
-                api_url=api_url,
-                api_token=api_token,
-                api_headers={
-                    "Authorization": f"Bearer {api_token}",
-                    "Cache-Control": "no-cache",
-                },
+                deployment_id=airflow_manager.deployment_id,
+                deployment_name=airflow_manager.deployment_name,
+                base_url=airflow_manager.host,
+                api_url=airflow_manager.api_url,
+                api_token=airflow_manager.api_token,
+                api_headers=airflow_manager.api_headers,
                 username=os.getenv("AIRFLOW_USERNAME", "airflow"),
                 password=os.getenv("AIRFLOW_PASSWORD", "airflow"),
-                airflow_instance=airflow_instance,
-                test_dir=test_dir,
+                airflow_instance=airflow_manager,  # Use the manager as the instance
+                test_dir=airflow_manager.airflow_dir,
             )
+
+            # Store the manager for later use
+            self._airflow_manager = airflow_manager
 
             print(f"✅ Airflow resource {resource_id} ready!")
             return resource_data
 
         except Exception as e:
             print(f"❌ Failed to setup Airflow resource {resource_id}: {e}")
-            # Clean up on failure
-            if "test_dir" in locals() and test_dir.exists():
-                import shutil
-
-                shutil.rmtree(test_dir)
             raise
 
     def _test_teardown(self) -> None:
@@ -337,23 +266,30 @@ class AirflowFixture(
             )
 
     def test_teardown(self, resource_data: AirflowResourceData) -> None:
-        """Clean up individual Airflow resource"""
+        """Clean up individual Airflow resource using unified AirflowManager"""
         resource_id = resource_data["resource_id"]
-        deployment_name = resource_data["deployment_name"]
         test_dir = resource_data["test_dir"]
 
         print(f"🧹 Cleaning up Airflow resource: {resource_id}")
 
         try:
-            # Get session data for cache manager
-            session_data = self.session_data
-            cache_manager = session_data["cache_manager"] if session_data else None
-
-            # Clean up using existing logic
-            test_resources = [(deployment_name, cache_manager)] if cache_manager else []
-            cleanup_airflow_resource(resource_id, test_resources, test_dir)
-
-            print(f"✅ Airflow resource {resource_id} cleaned up")
+            # Use the stored AirflowManager instance for cleanup
+            if hasattr(self, '_airflow_manager') and self._airflow_manager:
+                self._airflow_manager.cleanup_resource(test_dir)
+                print(f"✅ Airflow resource {resource_id} cleaned up using AirflowManager")
+            else:
+                print(f"⚠️ No AirflowManager found for {resource_id}, attempting fallback cleanup")
+                # Fallback cleanup using session data
+                session_data = self.session_data
+                cache_manager = session_data["cache_manager"] if session_data else None
+                deployment_name = resource_data["deployment_name"]
+                
+                # Create a temporary manager for cleanup
+                temp_manager = AirflowManager(resource_id=resource_id, cache_manager=cache_manager)
+                temp_manager.deployment_name = deployment_name
+                temp_manager.test_resources = [(deployment_name, cache_manager)] if cache_manager else []
+                temp_manager.cleanup_resource(test_dir)
+                print(f"✅ Airflow resource {resource_id} cleaned up using fallback method")
 
         except Exception as e:
             print(f"❌ Error cleaning up Airflow resource {resource_id}: {e}")
@@ -421,3 +357,5 @@ class AirflowFixture(
 
 # Note: No global instance - each test creates its own AirflowFixture
 # with custom resource_id in get_fixtures()
+
+
