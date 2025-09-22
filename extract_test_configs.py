@@ -9,6 +9,7 @@ from Fixtures.Supabase_Account.supabase_account_resource import supabase_client
 import requests
 import jwt
 from braintrust import traced
+import traceback
 
 # Type definitions for better code clarity and IDE support
 
@@ -204,7 +205,9 @@ def setup_session_fixtures(session_fixtures: List[Any]) -> Dict[str, Any]:
             session_data[resource_type] = fixture_session_data
             print(f"✅ Session-level {resource_type} set up successfully")
         except Exception as e:
-            print(f"❌ Failed to set up session-level {resource_type}: {e}")
+            print(
+                f"❌ Failed to set up session-level {resource_type}: {e}, {traceback.format_exc()}"
+            )
 
     return session_data
 
