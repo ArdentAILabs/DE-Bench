@@ -136,8 +136,8 @@ def validate_test(model_result, fixtures=None):
             if not resource_data:
                 raise Exception("Snowflake resource data not available")
 
-            database_name = resource_data.get("database_name")
-            schema_name = resource_data.get("schema_name")
+            database_name = resource_data.get("database")
+            schema_name = resource_data.get("schema")
 
             # Step 2: Check if Sarah Johnson record was added
             query = f"""
