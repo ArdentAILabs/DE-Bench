@@ -397,9 +397,7 @@ class AirflowManager:
             return_output=True,
         )
 
-        print(
-            f"Worker {os.getpid()}: Deployment {deployment_name} status: {status}"
-        )
+        print(f"Worker {os.getpid()}: Deployment {deployment_name} status: {status}")
         return status
 
     @traced(name="_validate_deployment_status")
@@ -948,7 +946,11 @@ class AirflowManager:
                         print("⚠️ Flap during stabilization")
                         _log("health2", health2)
                         _log("dags2", dags2)
-            except (requests.ConnectTimeout, requests.ConnectionError, requests.Timeout) as e:
+            except (
+                requests.ConnectTimeout,
+                requests.ConnectionError,
+                requests.Timeout,
+            ) as e:
                 print(f"Connection error during readiness: {e}")
             except requests.RequestException as e:
                 print(f"Request error during readiness: {e}")
@@ -1625,7 +1627,7 @@ class AirflowManager:
                     f"Worker {os.getpid()}: Allocated hibernating deployment: {astro_deployment_name}"
                 )
                 manager._wake_up_deployment(astro_deployment_name)
-                #validate proper environment variables
+                # validate proper environment variables
             else:
                 print(
                     f"Worker {os.getpid()}: No hibernating deployments available, creating new deployment: {resource_id}"
@@ -1661,7 +1663,7 @@ class AirflowManager:
                 f"Worker {os.getpid()}: Using fresh deployment ID {fresh_deployment_id} for {astro_deployment_name}"
             )
 
-            #validate proper environment variables
+            # validate proper environment variables
 
             # Set up API connection details
             api_url = "https://" + run_and_validate_subprocess(
