@@ -218,7 +218,7 @@ class GitHubFixture(
         # Extract connection details from resource data
         return {
             "github": {
-                "token": resource_data.get("github_token", os.getenv("GITHUB_TOKEN")),
+                "token": resource_data.get("github_token", os.getenv("AIRFLOW_GITHUB_TOKEN")),
                 "repo": resource_data.get("repo_full_name"),
                 "branch": resource_data.get("branch_name"),
                 "default_branch": resource_data.get("default_branch", "main"),

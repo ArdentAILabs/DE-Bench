@@ -27,7 +27,7 @@ from utils import map_func
 # Note: set_up_model_configs and cleanup_model_artifacts are now used inside run_de_bench_task
 
 # Load environment variables
-load_dotenv()
+load_dotenv(override=True)
 
 # Global cleanup flag to prevent double cleanup
 cleanup_already_run = False
@@ -429,6 +429,8 @@ def discover_available_tests(
     if filter_patterns:
         filtered_tests = []
         for test_name in available_tests:
+            if isinstance(filter_patterns, str):
+                filter_patterns = [filter_patterns]
             for pattern in filter_patterns:
                 try:
                     if re.search(pattern, test_name, re.IGNORECASE):

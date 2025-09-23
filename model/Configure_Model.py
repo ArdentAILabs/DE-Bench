@@ -33,6 +33,10 @@ def set_up_model_configs(Configs, custom_info=None):
             for service in Configs["services"]:
                 service_config = Configs["services"][service]
 
+
+                print(f"🔍 SERVICE CONFIG: {service_config}")
+                print(f"🔍 SERVICE: {service}")
+
                 # Handle different service types
                 if service == "airflow":
                     # ensure all required fields are present
@@ -160,12 +164,17 @@ def set_up_model_configs(Configs, custom_info=None):
                             "X-Braintrust-Exported-Parent-Span": current_span().export(),
                         },
                     )
+                else:
+                    # Handle unknown service types
+                    print(f"⚠️ Unknown service type: {service}")
+                    service_result = None
 
                 # Add the result to our results dictionary
-                if not results:
-                    results = {service: service_result}
-                else:
-                    results[service] = service_result
+                if service_result is not None:
+                    if not results:
+                        results = {service: service_result}
+                    else:
+                        results[service] = service_result
     elif mode == "Claude_Code":
         # set up the kubernetes job
 

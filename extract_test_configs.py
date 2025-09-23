@@ -9,6 +9,7 @@ from Fixtures.Supabase_Account.supabase_account_resource import supabase_client
 import requests
 import jwt
 from braintrust import traced
+import traceback
 
 # Type definitions for better code clarity and IDE support
 
@@ -204,7 +205,9 @@ def setup_session_fixtures(session_fixtures: List[Any]) -> Dict[str, Any]:
             session_data[resource_type] = fixture_session_data
             print(f"✅ Session-level {resource_type} set up successfully")
         except Exception as e:
-            print(f"❌ Failed to set up session-level {resource_type}: {e}")
+            print(
+                f"❌ Failed to set up session-level {resource_type}: {e}, {traceback.format_exc()}"
+            )
 
     return session_data
 
@@ -273,21 +276,18 @@ def setup_test_resources_from_fixtures(
         # Use provided config or default config
         config = fixture_configs.get(resource_type, fixture.get_default_config())
 
-        try:
-            # Check if fixture was initialized with custom config
-            if hasattr(fixture, "custom_config") and fixture.custom_config is not None:
-                # Fixture has custom config, let it use that
-                resource_data = fixture._test_setup()
-                print(f"✅ Set up {resource_type} using fixture's custom config")
-            else:
-                # Use provided config or default
-                resource_data = fixture._test_setup(config)
-                print(f"✅ Set up {resource_type} using provided fixture")
+        # Check if fixture was initialized with custom config
+        if hasattr(fixture, "custom_config") and fixture.custom_config is not None:
+            # Fixture has custom config, let it use that
+            resource_data = fixture._test_setup()
+            print(f"✅ Set up {resource_type} using fixture's custom config")
+        else:
+            # Use provided config or default
+            resource_data = fixture._test_setup(config)
+            print(f"✅ Set up {resource_type} using provided fixture")
 
-            # Store resource data in the fixture AND the resources dict
-            resources[resource_type] = resource_data
-        except Exception as e:
-            print(f"❌ Failed to set up {resource_type}: {e}")
+        # Store resource data in the fixture AND the resources dict
+        resources[resource_type] = resource_data
 
     return resources, fixtures
 

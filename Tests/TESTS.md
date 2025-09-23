@@ -409,6 +409,26 @@ python run_braintrust_eval.py --filter "Airflow_Agent.*" Ardent
 python run_braintrust_eval.py Ardent
 ```
 
+### Designating Agents
+- Currently we support running tests with the following agents:
+    - Ardent
+    - Claude_Code
+    - OpenAI_Codex
+- Specify which agent to use after all parameters and values
+- Example usage of stating which agent to use for testing
+```bash
+# To run all three agents
+python run_braintrust_eval.py --filter "Airflow_Agent.*" Ardent Claude_Code OpenAI_Codex
+
+# To run two agents
+python run_braintrust_eval.py --filter "Airflow_Agent.*" Ardent Claude_Code
+
+# If no agent is specified, it will default to Ardent
+python run_braintrust_eval.py --filter "Airflow_Agent.*"
+# The above is the same as the following command
+python run_braintrust_eval.py --filter "Airflow_Agent.*" Ardent
+```
+
 ## Test Discovery
 
 Tests are automatically discovered by scanning the `Tests/` directory for:

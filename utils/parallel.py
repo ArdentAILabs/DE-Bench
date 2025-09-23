@@ -4,6 +4,7 @@ Parallel processing utilities for I/O-bound operations.
 
 from typing import Any, Callable, List
 from pydantic import validate_call
+from concurrent.futures import ThreadPoolExecutor
 
 
 @validate_call
@@ -28,7 +29,6 @@ def map_func(func: Callable, items: List[Any]) -> List[Any]:
         results = map_func(process_item, ["a", "b", "c"])
         # Returns: ["processed_a", "processed_b", "processed_c"]
     """
-    from concurrent.futures import ThreadPoolExecutor
 
     with ThreadPoolExecutor() as executor:
         return list(executor.map(func, items))
