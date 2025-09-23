@@ -53,6 +53,10 @@ class AirflowManager:
     - Cache and session management
     """
 
+    # Pattern for test runner deployment names
+    TEST_RUNNER_PATTERN = "de_bench_test_runner"
+    TEST_RUNNER_REGEX = re.compile(rf"^{TEST_RUNNER_PATTERN}_(\d+)$")
+
     def __init__(
         self,
         airflow_dir: Optional[Path] = None,
@@ -533,19 +537,38 @@ class AirflowManager:
         ]
         deployments = {deployment[0]: deployment[5] for deployment in deployments}
 
+        # Filter deployments to only include those matching the test runner pattern
+        test_runner_deployments = {}
+        for deployment_name, deployment_id in deployments.items():
+            if self.TEST_RUNNER_REGEX.match(deployment_name):
+                test_runner_deployments[deployment_name] = deployment_id
+
         def build_deployment_info(deployment_item):
             """Helper function to build deployment info with status check"""
             deployment_name, deployment_id = deployment_item
+
+            status = "UNKNOWN"
+
+            try:
+                status = self._check_deployment_status(deployment_name)
+            except Exception as e:
+                print(f"Worker {os.getpid()}: Error checking deployment status: {e}")
+
+            # Extract runner number from deployment name
+            match = self.TEST_RUNNER_REGEX.match(deployment_name)
+            runner_number = int(match.group(1)) if match else None
+
             return {
                 "deployment_name": deployment_name,
                 "deployment_id": deployment_id,
-                "status": self._check_deployment_status(deployment_name),
+                "status": status,
+                "runner_number": runner_number,
             }
 
         # Use parallel processing to check all deployment statuses
-        astro_deployments = map_func(build_deployment_info, deployments.items())
+        astro_deployments = map_func(build_deployment_info, test_runner_deployments.items())
 
-        print(f"Worker {os.getpid()}: found {len(deployments)} deployments.")
+        print(f"Worker {os.getpid()}: found {len(test_runner_deployments)} test runner deployments.")
         return astro_deployments
 
     # ===== PROJECT AND DIRECTORY MANAGEMENT =====
