@@ -383,28 +383,24 @@ class AirflowManager:
         Returns:
             The status of the deployment
         """
-        try:
-            status = run_and_validate_subprocess(
-                [
-                    "astro",
-                    "deployment",
-                    "inspect",
-                    "--deployment-name",
-                    deployment_name,
-                    "--key",
-                    "metadata.status",
-                ],
-                "getting Astro deployment status",
-                return_output=True,
-            )
+        status = run_and_validate_subprocess(
+            [
+                "astro",
+                "deployment",
+                "inspect",
+                "--deployment-name",
+                deployment_name,
+                "--key",
+                "metadata.status",
+            ],
+            "getting Astro deployment status",
+            return_output=True,
+        )
 
-            print(
-                f"Worker {os.getpid()}: Deployment {deployment_name} status: {status}"
-            )
-            return status
-        except Exception as e:
-            print(f"Worker {os.getpid()}: Error getting Astro deployment status: {e}")
-            return "UNKNOWN"
+        print(
+            f"Worker {os.getpid()}: Deployment {deployment_name} status: {status}"
+        )
+        return status
 
     @traced(name="_validate_deployment_status")
     def _validate_deployment_status(
