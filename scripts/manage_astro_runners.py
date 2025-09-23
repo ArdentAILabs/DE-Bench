@@ -330,9 +330,13 @@ class AstroDeploymentManager:
                 if isinstance(res, subprocess.CalledProcessError):
                     err = (res.stderr or "").lower()
                     if "already exists" in err or "conflict" in err:
-                        print(f"ℹ️  Variable {var_name} already exists for {deployment_name}, skipping")
+                        print(
+                            f"ℹ️  Variable {var_name} already exists for {deployment_name}, skipping"
+                        )
                     else:
-                        print(f"⚠️  Failed to create variable {var_name} for {deployment_name}: {res.stderr}")
+                        print(
+                            f"⚠️  Failed to create variable {var_name} for {deployment_name}: {res.stderr}"
+                        )
                 else:
                     print(f"✅ Set variable {var_name} for {deployment_name}")
             except Exception as e:
@@ -541,7 +545,9 @@ class AstroDeploymentManager:
         for deployment in non_test_runners:
             print(f"  - {deployment['name']} ({deployment['deployment_id']})")
 
-        print(f"\n🚨 WARNING: This will delete ALL deployments that are NOT {self.TEST_RUNNER_PATTERN} deployments!")
+        print(
+            f"\n🚨 WARNING: This will delete ALL deployments that are NOT {self.TEST_RUNNER_PATTERN} deployments!"
+        )
         print("🚨 This action cannot be undone!")
         confirm1 = input(
             f"Are you sure you want to delete ALL non-{self.TEST_RUNNER_PATTERN} deployments? (type 'yes' to confirm): "
@@ -609,6 +615,8 @@ Examples:
   %(prog)s                    # Interactive mode to create deployments
   %(prog)s --delete-all       # Delete all de_bench_test_runner deployments
   %(prog)s --delete-others    # Delete all non-de_bench_test_runner deployments
+  %(prog)s --recreate-all     # Delete all de_bench_test_runner deployments and recreate (interactive)
+  %(prog)s --recreate-all 5   # Delete all de_bench_test_runner deployments and recreate 5 new ones
         """,
     )
     parser.add_argument(
@@ -618,8 +626,16 @@ Examples:
     )
     parser.add_argument(
         "--delete-others",
-        action="store_true", 
+        action="store_true",
         help="Delete all deployments that do NOT follow the de_bench_test_runner pattern (requires confirmation)",
+    )
+    parser.add_argument(
+        "--recreate-all",
+        type=int,
+        nargs="?",
+        const=-1,
+        metavar="COUNT",
+        help="Delete all de_bench_test_runner deployments and recreate them. Optionally specify COUNT (default: interactive)",
     )
 
     args = parser.parse_args()
@@ -628,9 +644,15 @@ Examples:
     print("🚀 Astronomer Test Runner Deployment Manager")
     print("=" * 50)
 
-    if args.delete_all and args.delete_others:
-        print("❌ Cannot use both --delete-all and --delete-others at the same time.")
-        print("   Use --delete-all to delete test runners, or --delete-others to delete everything else.")
+    # Check for conflicting arguments
+    exclusive_args = [
+        args.delete_all,
+        args.delete_others,
+        args.recreate_all is not None,
+    ]
+    if sum(exclusive_args) > 1:
+        print("❌ Cannot use multiple action arguments at the same time.")
+        print("   Choose one of: --delete-all, --delete-others, or --recreate-all")
         sys.exit(1)
 
     if args.delete_all:
@@ -681,7 +703,9 @@ Examples:
             print("=" * 80)
 
             if deleted:
-                print(f"\n✅ Successfully deleted {len(deleted)} non-test-runner deployment(s):")
+                print(
+                    f"\n✅ Successfully deleted {len(deleted)} non-test-runner deployment(s):"
+                )
                 for deployment in deleted:
                     print(f"  - {deployment}")
 
@@ -701,6 +725,114 @@ Examples:
                 print(
                     f"\n📊 Overall: {len(deleted)}/{total_attempted} successful ({success_rate:.1f}%)"
                 )
+
+        except KeyboardInterrupt:
+            print("\n\n👋 Cancelled by user.")
+        except Exception as e:
+            print(f"❌ An error occurred: {e}")
+
+    elif args.recreate_all is not None:
+        # Delete all test_runner deployments and recreate them
+        try:
+            # First, show what exists
+            print("🔄 RECREATE ALL TEST RUNNERS")
+            print("=" * 50)
+            manager.display_test_runners()
+
+            # Delete all existing test runners
+            print(
+                f"\n🗑️  Step 1: Deleting all existing {manager.TEST_RUNNER_PATTERN} deployments..."
+            )
+            deleted, failed = manager.delete_all_test_runners()
+
+            if failed:
+                print(
+                    f"\n❌ Failed to delete {len(failed)} deployment(s). Aborting recreation."
+                )
+                print("   Fix deletion issues before retrying recreation.")
+                for failure in failed:
+                    print(f"  - {failure['name']}: {failure['error']}")
+                sys.exit(1)
+
+            if not deleted:
+                print("ℹ️  No existing deployments found to delete.")
+            else:
+                print(f"✅ Successfully deleted {len(deleted)} deployment(s)")
+
+            # Determine how many to recreate
+            if args.recreate_all == -1:
+                # Interactive mode
+                print(
+                    f"\n🏗️  Step 2: Creating new {manager.TEST_RUNNER_PATTERN} deployments..."
+                )
+                try:
+                    count_input = input(
+                        f"How many new {manager.TEST_RUNNER_PATTERN} deployments would you like to create? (0 to skip): "
+                    )
+                    count = int(count_input.strip())
+                except ValueError:
+                    print("❌ Invalid input. Exiting.")
+                    sys.exit(1)
+            else:
+                # Count provided via argument
+                count = args.recreate_all
+                print(
+                    f"\n🏗️  Step 2: Creating {count} new {manager.TEST_RUNNER_PATTERN} deployments..."
+                )
+
+            if count <= 0:
+                print("No new deployments to create. Recreation complete.")
+                return
+
+            if count > 10:
+                confirm = input(
+                    f"You're about to create {count} deployments. Are you sure? (y/N): "
+                )
+                if confirm.lower() != "y":
+                    print("Cancelled.")
+                    return
+
+            # Create the new deployments
+            created, hibernation_failed = manager.create_multiple_test_runners(count)
+
+            # Print final summary
+            print("\n" + "=" * 80)
+            print("🔄 RECREATION SUMMARY")
+            print("=" * 80)
+
+            if deleted:
+                print(f"\n🗑️  Deleted: {len(deleted)} deployment(s)")
+
+            if created:
+                print(f"\n✅ Created: {len(created)} deployment(s)")
+                for deployment in created:
+                    print(f"  - {deployment}")
+
+            if len(created) < count:
+                print(
+                    f"\n⚠️  Only {len(created)} out of {count} requested deployments were created due to errors."
+                )
+
+            # Show hibernation failure summary if any
+            if hibernation_failed:
+                print(f"\n🚨 HIBERNATION FAILURES - MANUAL ACTION REQUIRED!")
+                print("=" * 60)
+                print(
+                    f"The following {len(hibernation_failed)} deployment(s) were created but failed to hibernate:"
+                )
+                for deployment in hibernation_failed:
+                    print(f"  ⚠️  {deployment}")
+                print(
+                    "\n💡 To avoid costs, manually hibernate these deployments using:"
+                )
+                print(
+                    "   astro deployment hibernate --deployment-name <DEPLOYMENT_NAME> -f"
+                )
+                print("   Or use the Astronomer UI to hibernate them.")
+            elif created:
+                print(f"\n✅ All {len(created)} deployments successfully hibernated!")
+
+            print(f"\n🎉 Recreation complete! Total active deployments: {len(created)}")
 
         except KeyboardInterrupt:
             print("\n\n👋 Cancelled by user.")
