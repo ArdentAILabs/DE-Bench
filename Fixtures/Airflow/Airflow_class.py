@@ -358,6 +358,10 @@ class AirflowManager:
                 f"Worker {os.getpid()}: Created Astronomer deployment: {deployment_id}"
             )
 
+            # Set required variables immediately on creation (never on wake)
+            self._create_variables_in_airflow_deployment(deployment_name)
+
+            # Applying variables can trigger a restart; wait for healthy
             self._validate_deployment_status(
                 deployment_name=deployment_name, expected_status="healthy"
             )
@@ -877,95 +881,86 @@ class AirflowManager:
                     continue
 
     # ===== AIRFLOW API INTERACTION METHODS =====
-
+    @traced(name="wait_for_airflow_to_be_ready")
     def wait_for_airflow_to_be_ready(
         self, wait_time_in_minutes: Optional[int] = 0
     ) -> bool:
         """
-        Wait for Airflow webserver to be ready.
+        Strict readiness gate for Airflow webserver and API.
 
-        Args:
-            wait_time_in_minutes: Time to wait before checking
-
-        Returns:
-            True if webserver is ready, False otherwise
+        - Requires HTTP 200 for both /health and /api/v1/dags
+        - Requires "healthy" in /health body
+        - Logs short bodies for debugging
+        - Includes a short stabilization recheck
         """
         time.sleep(60 * wait_time_in_minutes)
 
+        def _log(label, resp):
+            try:
+                preview = (resp.text or "")[:160].replace("\n", " ")
+            except Exception:
+                preview = "<no-body>"
+            print(f"{label}: {resp.status_code} {preview}")
+
         retries = 10
         while retries > 0:
-
-            print(f"Checking if Airflow webserver and API are ready... {retries} retries left")
-            
-            # Check BOTH endpoints (following backend pattern)
+            print(f"Checking Airflow readiness... {retries} retries left")
             try:
-                health_response = requests.get(
-                    f"{self.host}/health",
-                    headers={"Authorization": f"Bearer {self.api_token}"},
-                    timeout=5
-                )
-                dags_response = requests.get(
-                    f"{self.host}/api/v1/dags",
+                health = requests.get(
+                    f"{self.host.rstrip('/')}/health",
                     headers=self.api_headers,
-                    timeout=5
+                    timeout=5,
                 )
-                
-                # Evaluate responses (following your backend pattern)
-                health_ok = health_response.status_code == 200
-                
-                # Handle API response like your backend does
-                if dags_response.status_code in (401, 403):
-                    print(f"WARNING: API auth failed ({dags_response.status_code}). Will retry. {retries} retries left.")
-                    api_ok = False
-                elif dags_response.status_code == 302:
-                    api_ok = True  # Redirect is OK like your backend
-                elif dags_response.status_code == 200:
-                    api_ok = True  # Normal success
-                else:
-                    api_ok = False
-                    print(f"API not ready (status: {dags_response.status_code})")
-                
-                if health_ok and api_ok:
-                    print("✅ Both endpoints ready, running stabilization check...")
-                    
-                    # Stabilization delay to catch flapping/unstable deployments
-                    time.sleep(10)
-                    
-                    # Re-check to ensure it's actually stable
-                    try:
-                        final_health = requests.get(
-                            f"{self.host}/health",
-                            headers={"Authorization": f"Bearer {self.api_token}"},
-                            timeout=5
-                        )
-                        final_dags = requests.get(
-                            f"{self.host}/api/v1/dags",
-                            headers=self.api_headers,
-                            timeout=5
-                        )
-                        
-                        if (final_health.status_code == 200 and 
-                            final_dags.status_code in (200, 302)):
-                            print("✅ Airflow webserver AND API are stable and ready")
-                            return True
-                        else:
-                            print(f"⚠️ Stabilization failed - Health: {final_health.status_code}, API: {final_dags.status_code}")
-                            print("Deployment is flapping, continuing to wait...")
-                    except requests.RequestException as e:
-                        print(f"⚠️ Stabilization check failed: {e}, continuing to wait...")
-                        
-                else:
-                    print(f"Not ready - Health: {health_response.status_code}, API: {dags_response.status_code}")
-                    
-            except (requests.ConnectTimeout, requests.ConnectionError, requests.Timeout) as e:
-                print(f"Connection error checking readiness (will retry): {e}")
-            except requests.RequestException as e:
-                print(f"Request error checking readiness (will retry): {e}")
-            
-            retries -= 1
-            time.sleep(60)
+                dags = requests.get(
+                    f"{self.host.rstrip('/')}/api/v1/dags",
+                    headers=self.api_headers,
+                    timeout=5,
+                )
 
-        print("Airflow webserver is not ready")
+                # Strict: 200 AND body mentions 'healthy'
+                health_ok = (health.status_code == 200) and (
+                    "healthy" in (health.text or "").lower()
+                )
+                # Strict: 200 only; 302 is typically a login redirect -> NOT ready
+                api_ok = dags.status_code == 200
+
+                if not health_ok or not api_ok:
+                    _log("health", health)
+                    _log("dags", dags)
+
+                if health_ok and api_ok:
+                    # Stabilization window
+                    time.sleep(10)
+                    health2 = requests.get(
+                        f"{self.host.rstrip('/')}/health",
+                        headers=self.api_headers,
+                        timeout=5,
+                    )
+                    dags2 = requests.get(
+                        f"{self.host.rstrip('/')}/api/v1/dags",
+                        headers=self.api_headers,
+                        timeout=5,
+                    )
+                    health2_ok = (health2.status_code == 200) and (
+                        "healthy" in (health2.text or "").lower()
+                    )
+                    api2_ok = dags2.status_code == 200
+                    if health2_ok and api2_ok:
+                        print("✅ Airflow webserver and API are stable and ready")
+                        return True
+                    else:
+                        print("⚠️ Flap during stabilization")
+                        _log("health2", health2)
+                        _log("dags2", dags2)
+            except (requests.ConnectTimeout, requests.ConnectionError, requests.Timeout) as e:
+                print(f"Connection error during readiness: {e}")
+            except requests.RequestException as e:
+                print(f"Request error during readiness: {e}")
+
+            retries -= 1
+            time.sleep(30)
+
+        print("Airflow webserver is NOT ready after retries")
         return False
 
     def verify_airflow_dag_exists(
@@ -1634,6 +1629,7 @@ class AirflowManager:
                     f"Worker {os.getpid()}: Allocated hibernating deployment: {astro_deployment_name}"
                 )
                 manager._wake_up_deployment(astro_deployment_name)
+                #validate proper environment variables
             else:
                 print(
                     f"Worker {os.getpid()}: No hibernating deployments available, creating new deployment: {resource_id}"
@@ -1669,8 +1665,7 @@ class AirflowManager:
                 f"Worker {os.getpid()}: Using fresh deployment ID {fresh_deployment_id} for {astro_deployment_name}"
             )
 
-            # Create variables in deployment
-            manager._create_variables_in_airflow_deployment(astro_deployment_name)
+            #validate proper environment variables
 
             # Set up API connection details
             api_url = "https://" + run_and_validate_subprocess(

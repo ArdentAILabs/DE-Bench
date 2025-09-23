@@ -193,6 +193,9 @@ class AstroDeploymentManager:
                 if result.stdout:
                     print(f"Output: {result.stdout}")
 
+                # Set required variables immediately after creation (never during wake)
+                self.set_deployment_variables(deployment_name)
+
                 # Immediately hibernate the deployment after creation
                 hibernate_success = self.hibernate_deployment(deployment_name)
                 if not hibernate_success:
@@ -257,6 +260,83 @@ class AstroDeploymentManager:
                 return True
 
         return False
+
+    def set_deployment_variables(self, deployment_name: str) -> None:
+        """Create/update required Airflow variables on the deployment. Called only on creation."""
+        username = os.getenv("AIRFLOW_USERNAME", "airflow")
+        password = os.getenv("AIRFLOW_PASSWORD", "airflow")
+
+        commands: List[List[str]] = [
+            [
+                "astro",
+                "deployment",
+                "variable",
+                "create",
+                "_AIRFLOW_WWW_USER_CREATE=true",
+                "--deployment-name",
+                deployment_name,
+            ],
+            [
+                "astro",
+                "deployment",
+                "variable",
+                "create",
+                f"_AIRFLOW_WWW_USER_USERNAME={username}",
+                "--deployment-name",
+                deployment_name,
+            ],
+            [
+                "astro",
+                "deployment",
+                "variable",
+                "create",
+                f"_AIRFLOW_WWW_USER_PASSWORD={password}",
+                "--deployment-name",
+                deployment_name,
+                "-s",
+            ],
+            [
+                "astro",
+                "deployment",
+                "variable",
+                "create",
+                "AIRFLOW__API__AUTH_BACKENDS=airflow.api.auth.backend.basic_auth",
+                "--deployment-name",
+                deployment_name,
+            ],
+        ]
+
+        # Optional secret
+        slack_app_url = os.getenv("SLACK_APP_URL")
+        if slack_app_url:
+            commands.append(
+                [
+                    "astro",
+                    "deployment",
+                    "variable",
+                    "create",
+                    f"SLACK_APP_URL={slack_app_url}",
+                    "--deployment-name",
+                    deployment_name,
+                    "-s",
+                ]
+            )
+
+        for cmd in commands:
+            var_name = cmd[4].split("=")[0]
+            try:
+                res = self.run_astro_command(cmd, exit_on_error=False)
+                # If it failed, check if it's due to already existing variable; otherwise show error
+                if isinstance(res, subprocess.CalledProcessError):
+                    err = (res.stderr or "").lower()
+                    if "already exists" in err or "conflict" in err:
+                        print(f"ℹ️  Variable {var_name} already exists for {deployment_name}, skipping")
+                    else:
+                        print(f"⚠️  Failed to create variable {var_name} for {deployment_name}: {res.stderr}")
+                else:
+                    print(f"✅ Set variable {var_name} for {deployment_name}")
+            except Exception as e:
+                print(f"⚠️  Unexpected error setting variable {var_name}: {e}")
 
     def get_next_available_numbers(self, count: int) -> List[int]:
         """Get the next N available runner numbers, filling gaps first."""
