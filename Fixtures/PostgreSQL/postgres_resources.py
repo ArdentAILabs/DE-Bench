@@ -80,10 +80,10 @@ class PostgreSQLFixture(
             psycopg2 connection object
         """
         return psycopg2.connect(
-            host=os.getenv("POSTGRES_HOSTNAME"),
-            port=os.getenv("POSTGRES_PORT"),
-            user=os.getenv("POSTGRES_USERNAME"),
-            password=os.getenv("POSTGRES_PASSWORD"),
+            host=self.postgres_hostname,
+            port=self.postgres_port,
+            user=self.postgres_username,
+            password=self.postgres_password,
             database=database,
             sslmode="require",
         )
@@ -92,6 +92,11 @@ class PostgreSQLFixture(
         self, resource_config: Optional[PostgreSQLResourceConfig] = None
     ) -> PostgreSQLResourceData:
         """Set up PostgreSQL databases with optional SQL schema loading"""
+        self.postgres_hostname = os.getenv("POSTGRES_HOSTNAME")
+        self.postgres_port = os.getenv("POSTGRES_PORT")
+        self.postgres_username = os.getenv("POSTGRES_USERNAME")
+        self.postgres_password = os.getenv("POSTGRES_PASSWORD")
+
         # Determine which config to use
         if resource_config is not None:
             config = resource_config
@@ -107,9 +112,20 @@ class PostgreSQLFixture(
         created_resources = []
 
         # Get system connection for database operations
-        system_connection = self.get_connection("postgres")
+        print("🐘 Getting PostgreSQL connection...")
+        system_connection = self.get_connection()
+        print("✅ PostgreSQL connection obtained")
         system_connection.set_isolation_level(ISOLATION_LEVEL_AUTOCOMMIT)
         system_cursor = system_connection.cursor()
+
+        # Sanity check to make sure the database is connected
+        print("🐘 Sanity checking PostgreSQL connection...")
+        system_cursor.execute(
+            """
+            SELECT 1
+            """
+        )
+        print("✅ PostgreSQL connection sanity check passed")
 
         try:
             # Create each database specified in the config
@@ -120,8 +136,8 @@ class PostgreSQLFixture(
                 try:
                     system_cursor.execute(
                         """
-                        SELECT pg_terminate_backend(pid) 
-                        FROM pg_stat_activity 
+                        SELECT pg_terminate_backend(pid)
+                        FROM pg_stat_activity
                         WHERE datname = %s AND pid <> pg_backend_pid()
                         """,
                         (db_name,),
@@ -168,10 +184,10 @@ class PostgreSQLFixture(
             status="active",
             created_resources=created_resources,
             connection_params={
-                "host": os.getenv("POSTGRES_HOSTNAME"),
-                "port": os.getenv("POSTGRES_PORT"),
-                "user": os.getenv("POSTGRES_USERNAME"),
-                "password": os.getenv("POSTGRES_PASSWORD"),
+                "host": self.postgres_hostname,
+                "port": self.postgres_port,
+                "user": self.postgres_username,
+                "password": self.postgres_password,
                 "sslmode": "require",
             },
         )
@@ -235,17 +251,17 @@ class PostgreSQLFixture(
 
         # Set up environment for psql command
         env = os.environ.copy()
-        env["PGPASSWORD"] = os.getenv("POSTGRES_PASSWORD")
+        env["PGPASSWORD"] = self.postgres_password
 
         # Run psql to load the SQL file
         cmd = [
             "psql",
             "-h",
-            os.getenv("POSTGRES_HOSTNAME"),
+            self.postgres_hostname,
             "-p",
-            os.getenv("POSTGRES_PORT"),
+            self.postgres_port,
             "-U",
-            os.getenv("POSTGRES_USERNAME"),
+            self.postgres_username,
             "-d",
             db_name,
             "-f",
