@@ -36,6 +36,7 @@ active_session_data = {}
 active_tests_with_fixtures = []
 
 
+@traced(name="teardown_test_fixtures")
 def _teardown_test_fixtures(test_name, fixtures, test_resources=None):
     """Helper function to clean up test resources for a specific task."""
     try:
