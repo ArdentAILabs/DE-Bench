@@ -296,38 +296,48 @@ def validate_test(model_result, fixtures=None):
                 paths_to_capture=[
                     "dags/",  # All DAG files created by the agent
                     "requirements.txt",  # Root requirements file
-                    "Requirements/requirements.txt"  # Alternative requirements location
-                ]
+                    "Requirements/requirements.txt",  # Alternative requirements location
+                ],
             )
-            print(f"🔍 DEBUG: Successfully received agent_code_snapshot with type: {type(agent_code_snapshot)}")
-            print(f"✅ Agent code snapshot captured: {agent_code_snapshot['summary']['total_files']} files "
-                  f"({agent_code_snapshot['summary']['total_size_bytes']} bytes)")
-            
+            print(
+                f"🔍 DEBUG: Successfully received agent_code_snapshot with type: {type(agent_code_snapshot)}"
+            )
+            print(
+                f"✅ Agent code snapshot captured: {agent_code_snapshot['summary']['total_files']} files "
+                f"({agent_code_snapshot['summary']['total_size_bytes']} bytes)"
+            )
+
             # Store snapshot in base test metadata immediately (incremental capture)
-            test_steps.append({
-                "name": "Agent Code Snapshot Capture",
-                "description": "Capture exact code created by agent for debugging",
-                "status": "passed",
-                "Result_Message": f"✅ Captured {agent_code_snapshot['summary']['total_files']} files "
-                                f"({agent_code_snapshot['summary']['total_size_bytes']} bytes) from branch {branch_name}",
-                "agent_code_snapshot": agent_code_snapshot,
-                "capture_timestamp": agent_code_snapshot["capture_timestamp"],
-                "branch_captured": branch_name
-            })
-            print(f"📋 Agent code snapshot added to test metadata for immediate availability")
-            
+            test_steps.append(
+                {
+                    "name": "Agent Code Snapshot Capture",
+                    "description": "Capture exact code created by agent for debugging",
+                    "status": "passed",
+                    "Result_Message": f"✅ Captured {agent_code_snapshot['summary']['total_files']} files "
+                    f"({agent_code_snapshot['summary']['total_size_bytes']} bytes) from branch {branch_name}",
+                    "agent_code_snapshot": agent_code_snapshot,
+                    "capture_timestamp": agent_code_snapshot["capture_timestamp"],
+                    "branch_captured": branch_name,
+                }
+            )
+            print(
+                f"📋 Agent code snapshot added to test metadata for immediate availability"
+            )
+
         except Exception as e:
             print(f"⚠️ Failed to capture agent code snapshot: {e}")
             agent_code_snapshot = None
             # Still add a test step to show the attempt
-            test_steps.append({
-                "name": "Agent Code Snapshot Capture", 
-                "description": "Capture exact code created by agent for debugging",
-                "status": "failed",
-                "Result_Message": f"❌ Failed to capture code snapshot: {str(e)}",
-                "agent_code_snapshot": None,
-                "capture_error": str(e)
-            })
+            test_steps.append(
+                {
+                    "name": "Agent Code Snapshot Capture",
+                    "description": "Capture exact code created by agent for debugging",
+                    "status": "failed",
+                    "Result_Message": f"❌ Failed to capture code snapshot: {str(e)}",
+                    "agent_code_snapshot": None,
+                    "capture_error": str(e),
+                }
+            )
 
         # PR creation and merge
         pr_exists, test_steps[2] = github_manager.find_and_merge_pr(
@@ -352,16 +362,22 @@ def validate_test(model_result, fixtures=None):
         ] = f"✅ PR '{pr_title}' created and merged successfully"
 
         # GitHub action completion with CI failure details
-        action_status = github_manager.check_if_action_is_complete(pr_title=pr_title, return_details=True)
-        
+        action_status = github_manager.check_if_action_is_complete(
+            pr_title=pr_title, return_details=True
+        )
+
         if not action_status["completed"]:
             test_steps[3]["status"] = "failed"
-            test_steps[3]["Result_Message"] = f"❌ GitHub action timed out (status: {action_status['status']})"
+            test_steps[3][
+                "Result_Message"
+            ] = f"❌ GitHub action timed out (status: {action_status['status']})"
             test_steps[3]["action_status"] = action_status
             return {"score": 0.0, "metadata": {"test_steps": test_steps}}
         elif not action_status["success"]:
             test_steps[3]["status"] = "failed"
-            test_steps[3]["Result_Message"] = f"❌ GitHub action failed (conclusion: {action_status['conclusion']})"
+            test_steps[3][
+                "Result_Message"
+            ] = f"❌ GitHub action failed (conclusion: {action_status['conclusion']})"
             test_steps[3]["action_status"] = action_status
             return {"score": 0.0, "metadata": {"test_steps": test_steps}}
         else:
@@ -424,9 +440,11 @@ def validate_test(model_result, fixtures=None):
             # Add agent code snapshot to comprehensive DAG info (captured earlier)
             if agent_code_snapshot:
                 comprehensive_dag_info["agent_code_snapshot"] = agent_code_snapshot
-                print(f"📸 Agent code snapshot added to comprehensive DAG info: "
-                      f"{agent_code_snapshot['summary']['total_files']} files, "
-                      f"{agent_code_snapshot['summary']['total_size_bytes']} bytes")
+                print(
+                    f"📸 Agent code snapshot added to comprehensive DAG info: "
+                    f"{agent_code_snapshot['summary']['total_files']} files, "
+                    f"{agent_code_snapshot['summary']['total_size_bytes']} bytes"
+                )
             else:
                 print("⚠️ Agent code snapshot not available")
 
@@ -437,11 +455,11 @@ def validate_test(model_result, fixtures=None):
                 print(
                     f"📄 DAG source code captured ({len(dag_source['source_code'])} characters)"
                 )
-                print(
-                    f"📄 Source code preview: {dag_source['source_code'][:200]}..."
-                )
+                print(f"📄 Source code preview: {dag_source['source_code'][:200]}...")
             else:
-                print("⚠️ DAG source code not available from Airflow - check agent_code_snapshot for actual files")
+                print(
+                    "⚠️ DAG source code not available from Airflow - check agent_code_snapshot for actual files"
+                )
 
             if import_errors:
                 print(f"❌ Found {len(import_errors)} import errors")
@@ -469,7 +487,9 @@ def validate_test(model_result, fixtures=None):
                             "duration": task_info.get("duration"),
                             "log_length": len(task_info.get("logs", "")),
                         }
-                        for task_id, task_info in comprehensive_dag_info.get("task_logs", {}).items()
+                        for task_id, task_info in comprehensive_dag_info.get(
+                            "task_logs", {}
+                        ).items()
                     },
                 }
             )
@@ -491,7 +511,7 @@ def validate_test(model_result, fixtures=None):
             logs = airflow_instance.get_task_instance_logs(
                 dag_id=dag_name,
                 dag_run_id=dag_run_id,
-                task_id="extract_earthquake_data",
+                task_id="fetch_earthquake_data",
             )
 
             if "earthquake.usgs.gov" in logs or "geojson" in logs or "features" in logs:
