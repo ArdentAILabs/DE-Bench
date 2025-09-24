@@ -566,9 +566,13 @@ class AirflowManager:
             }
 
         # Use parallel processing to check all deployment statuses
-        astro_deployments = map_func(build_deployment_info, test_runner_deployments.items())
+        astro_deployments = map_func(
+            build_deployment_info, test_runner_deployments.items()
+        )
 
-        print(f"Worker {os.getpid()}: found {len(test_runner_deployments)} test runner deployments.")
+        print(
+            f"Worker {os.getpid()}: found {len(test_runner_deployments)} test runner deployments."
+        )
         return astro_deployments
 
     # ===== PROJECT AND DIRECTORY MANAGEMENT =====
@@ -650,23 +654,25 @@ class AirflowManager:
                 try:
                     if repo.get_secret(secret):
                         print(
-                            f"Worker {os.getpid()}: {secret} already exists, deleting..."
+                            f"Worker {os.getpid()}: {secret} already exists in GitHub, deleting..."
                         )
                         repo.delete_secret(secret)
                     print(f"Worker {os.getpid()}: Creating {secret}...")
                 except github.GithubException as e:
                     if e.status == 404:
                         print(
-                            f"Worker {os.getpid()}: {secret} does not exist, creating..."
+                            f"Worker {os.getpid()}: {secret} does not exist in GitHub, creating..."
                         )
                     else:
                         print(
-                            f"Worker {os.getpid()}: Error checking secret {secret}: {e}"
+                            f"Worker {os.getpid()}: Error checking GitHub secret {secret}: {e}"
                         )
                         raise e
 
                 repo.create_secret(secret, value)
-                print(f"Worker {os.getpid()}: {secret} created successfully.")
+                print(
+                    f"Worker {os.getpid()}: GitHub secret {secret} created successfully."
+                )
         except Exception as e:
             print(
                 f"Worker {os.getpid()}: Error checking and updating GitHub secrets: {e}"
@@ -1120,7 +1126,9 @@ class AirflowManager:
 
         return None
 
-    def verify_dag_id_ran(self, dag_id: str, dag_run_id: str) -> bool:
+    def verify_dag_id_ran(
+        self, dag_id: str, dag_run_id: str, max_retries: int = 10
+    ) -> bool:
         """
         Verify if a DAG has been executed.
 
