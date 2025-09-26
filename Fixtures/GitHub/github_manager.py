@@ -59,19 +59,23 @@ class GitHubManager:
         :return: Name of the new branch
         :rtype: str
         """
+        final_test_name = test_name + "_" + str(random.randint(1, 1_000_000))
+
         try:
             commit_sha = self.repo.get_commits()[0].sha
-            self.repo.create_git_ref(ref=f"refs/heads/{test_name}", sha=commit_sha)
-            self.branch_name = test_name
+            self.repo.create_git_ref(
+                ref=f"refs/heads/{final_test_name}", sha=commit_sha
+            )
+            self.branch_name = final_test_name
             print(f"✓ Created branch: {self.branch_name}")
         except Exception as e:
             if getattr(e, "status", None) == 422:
-                print(f"Branch '{test_name}' already exists, skipping creation.")
+                print(f"Branch '{final_test_name}' already exists, skipping creation.")
                 return getattr(self, "branch_name", test_name)
             raise Exception(f"✗ Error creating branch: {e}")
         finally:
             if build_info:
-                self._update_build_info(build_info, test_name)
+                self._update_build_info(build_info, final_test_name)
         return self.branch_name
 
     def add_merge_step_to_user_input(self, user_input: str) -> str:
@@ -86,7 +90,7 @@ class GitHubManager:
         last_number = max(numbers) if numbers else 0
         # add the test name to the user input
         user_input += (
-            f"{last_number + 1}. Set the destination branch to '{self.branch_name}'."
+            f"{last_number + 1}. Set the PR destination branch to '{self.branch_name}'."
         )
         return user_input
 
