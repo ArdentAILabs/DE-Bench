@@ -262,7 +262,11 @@ def run_de_bench_task(test_input):
 
 def cleanup_handler() -> None:
     """Cleanup function that runs on exit or interrupt - preserves existing logic"""
-    global cleanup_already_run, active_session_fixtures, active_session_data, active_tests_with_fixtures
+    global \
+        cleanup_already_run, \
+        active_session_fixtures, \
+        active_session_data, \
+        active_tests_with_fixtures
 
     if cleanup_already_run:
         print("🔄 Cleanup already completed, skipping...")
@@ -586,6 +590,8 @@ Examples:
   python run_braintrust_eval.py --filter ".*Hello.*"     # Run only Hello World tests
   python run_braintrust_eval.py --filter "MongoDB.*" "MySQL.*" Ardent  # MongoDB & MySQL in Ardent mode
   python run_braintrust_eval.py --filter "MongoDB_Agent_Add_Record" OpenAI_Codex  # Single test with Codex
+  python run_braintrust_eval.py --num-trials 3 Ardent    # Run all tests 3 times in Ardent mode
+  python run_braintrust_eval.py -n 5 --filter ".*Hello.*" Claude_Code  # Run Hello tests 5 times with Claude
         """,
     )
 
@@ -616,6 +622,14 @@ Examples:
         help="Skip model run for all tests, useful for debugging",
     )
 
+    parser.add_argument(
+        "--num-trials",
+        "-n",
+        type=int,
+        default=1,
+        help="Number of trials to run for each test (default: 1)",
+    )
+
     return parser.parse_args()
 
 
@@ -625,6 +639,7 @@ def run_multi_test_evaluation(
     all_valid_tests: Optional[List[str]] = None,
     verbose: bool = False,
     skip_model_run: bool = False,
+    trial_count: int = 1,
 ) -> Dict[str, Any]:
     """Run multiple tests as Braintrust evaluation for specified modes"""
     global active_session_fixtures, active_session_data, active_tests_with_fixtures
@@ -777,6 +792,7 @@ def run_multi_test_evaluation(
                 },
                 # TODO: Make this configurable
                 max_concurrency=20,
+                trial_count=trial_count,
             )
 
             results[mode] = result
@@ -802,10 +818,11 @@ if __name__ == "__main__":
     args = parse_arguments()
 
     if args.verbose:
-        print(f"🔧 Parsed arguments:")
+        print("🔧 Parsed arguments:")
         print(f"   Modes: {args.modes}")
         print(f"   Filter patterns: {args.filter_patterns}")
         print(f"   Verbose: {args.verbose}")
+        print(f"   Number of trials: {args.num_trials}")
 
     try:
         # Discover tests with filtering
@@ -826,6 +843,7 @@ if __name__ == "__main__":
             all_valid_tests=all_tests,
             verbose=args.verbose,
             skip_model_run=args.skip_model_run,
+            trial_count=args.num_trials,
         )
 
         if results:
