@@ -39,6 +39,7 @@ def get_fixtures() -> List[DEBenchFixture]:
     # Initialize PostgreSQL fixture for workflow execution data
     custom_postgres_config = {
         "resource_id": f"workflow_observability_test_{test_timestamp}_{test_uuid}",
+        "load_bulk": True,
         "databases": [
             {
                 "name": f"workflow_db_{test_timestamp}_{test_uuid}",
@@ -327,7 +328,7 @@ def validate_test(model_result, fixtures=None):
             print(f"🔍 DEBUG: Successfully received agent_code_snapshot with type: {type(agent_code_snapshot)}")
             print(f"✅ Agent code snapshot captured: {agent_code_snapshot['summary']['total_files']} files "
                   f"({agent_code_snapshot['summary']['total_size_bytes']} bytes)")
-            
+
             # Store snapshot in base test metadata immediately (incremental capture)
             test_steps.append({
                 "name": "Agent Code Snapshot Capture",
@@ -340,13 +341,13 @@ def validate_test(model_result, fixtures=None):
                 "branch_captured": branch_name
             })
             print(f"📋 Agent code snapshot added to test metadata for immediate availability")
-            
+
         except Exception as e:
             print(f"⚠️ Failed to capture agent code snapshot: {e}")
             agent_code_snapshot = None
             # Still add a test step to show the attempt
             test_steps.append({
-                "name": "Agent Code Snapshot Capture", 
+                "name": "Agent Code Snapshot Capture",
                 "description": "Capture exact code created by agent for debugging",
                 "status": "failed",
                 "Result_Message": f"❌ Failed to capture code snapshot: {str(e)}",
@@ -378,7 +379,7 @@ def validate_test(model_result, fixtures=None):
 
         # GitHub action completion with CI failure details
         action_status = github_manager.check_if_action_is_complete(pr_title=pr_title, return_details=True)
-        
+
         if not action_status["completed"]:
             test_steps[3]["status"] = "failed"
             test_steps[3]["Result_Message"] = f"❌ GitHub action timed out (status: {action_status['status']})"
