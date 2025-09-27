@@ -47,7 +47,7 @@ def get_fixtures() -> List[DEBenchFixture]:
 
     # Initialize GitHub fixture for PR and branch management
     custom_github_config = {
-        "resource_id": f"test_airlfow_db_deduplication_test_{test_timestamp}_{test_uuid}",
+        "resource_id": f"test_airflow_db_deduplication_test_{test_timestamp}_{test_uuid}",
     }
 
     airflow_fixture = AirflowFixture(custom_config=custom_airflow_config)

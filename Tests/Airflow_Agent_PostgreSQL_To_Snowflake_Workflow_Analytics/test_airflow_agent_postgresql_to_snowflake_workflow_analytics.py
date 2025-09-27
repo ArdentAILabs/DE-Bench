@@ -39,6 +39,7 @@ def get_fixtures() -> List[DEBenchFixture]:
     # Initialize PostgreSQL fixture for workflow data
     custom_postgres_config = {
         "resource_id": f"workflow_analytics_test_{test_timestamp}_{test_uuid}",
+        "load_bulk": True,
         "databases": [
             {
                 "name": f"workflow_db_{test_timestamp}_{test_uuid}",

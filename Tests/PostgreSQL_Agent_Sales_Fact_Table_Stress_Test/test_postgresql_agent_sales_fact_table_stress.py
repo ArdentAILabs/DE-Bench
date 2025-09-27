@@ -31,6 +31,7 @@ def get_fixtures() -> List[DEBenchFixture]:
     custom_postgres_config = {
         "resource_id": f"postgres_stress_test_{test_timestamp}_{test_uuid}_{test_timestamp}_{test_uuid}",
         "test_module_path": __file__,  # Pass current module path for SQL file resolution
+        "load_bulk": True,
         "databases": [
             {
                 "name": f"stress_test_db_{test_timestamp}_{test_uuid}_{test_timestamp}_{test_uuid}",

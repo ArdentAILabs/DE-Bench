@@ -39,6 +39,7 @@ def get_fixtures() -> List[DEBenchFixture]:
     # Initialize PostgreSQL fixture for workflow data
     custom_postgres_config = {
         "resource_id": f"schema_drift_test_{test_timestamp}_{test_uuid}",
+        "load_bulk": True,
         "databases": [
             {
                 "name": f"workflow_db_{test_timestamp}_{test_uuid}",
@@ -293,7 +294,7 @@ def validate_test(model_result, fixtures=None):
             print(f"🔍 DEBUG: Successfully received agent_code_snapshot with type: {type(agent_code_snapshot)}")
             print(f"✅ Agent code snapshot captured: {agent_code_snapshot['summary']['total_files']} files "
                   f"({agent_code_snapshot['summary']['total_size_bytes']} bytes)")
-            
+
             # Store snapshot in base test metadata immediately (incremental capture)
             test_steps.append({
                 "name": "Agent Code Snapshot Capture",
@@ -306,13 +307,13 @@ def validate_test(model_result, fixtures=None):
                 "branch_captured": branch_name
             })
             print(f"📋 Agent code snapshot added to test metadata for immediate availability")
-            
+
         except Exception as e:
             print(f"⚠️ Failed to capture agent code snapshot: {e}")
             agent_code_snapshot = None
             # Still add a test step to show the attempt
             test_steps.append({
-                "name": "Agent Code Snapshot Capture", 
+                "name": "Agent Code Snapshot Capture",
                 "description": "Capture exact code created by agent for debugging",
                 "status": "failed",
                 "Result_Message": f"❌ Failed to capture code snapshot: {str(e)}",
@@ -342,7 +343,7 @@ def validate_test(model_result, fixtures=None):
 
         # GitHub action completion with CI failure details
         action_status = github_manager.check_if_action_is_complete(pr_title=pr_title, return_details=True)
-        
+
         if not action_status["completed"]:
             test_steps[3]["status"] = "failed"
             test_steps[3]["Result_Message"] = f"❌ GitHub action timed out (status: {action_status['status']})"
@@ -402,12 +403,25 @@ def validate_test(model_result, fixtures=None):
                 github_manager=github_manager,
             )
 
-            # Add agent code snapshot to comprehensive DAG info (captured earlier)
-            if agent_code_snapshot:
-                comprehensive_dag_info["agent_code_snapshot"] = agent_code_snapshot
-                print(f"📸 Agent code snapshot added to comprehensive DAG info: "
-                      f"{agent_code_snapshot['summary']['total_files']} files, "
-                      f"{agent_code_snapshot['summary']['total_size_bytes']} bytes")
+            # Add requirements.txt snapshot to comprehensive DAG info
+            print(f"📦 Adding requirements.txt snapshot from feature branch: {branch_name}")
+            req_snapshot = None
+            candidate_paths = ["Requirements/requirements.txt", "requirements.txt"]
+            
+            for path in candidate_paths:
+                try:
+                    content = github_manager.get_file_content(path, branch_name)
+                    if content is not None:
+                        req_snapshot = {"path": path, "content": content}
+                        print(f"✅ Found requirements.txt at {path}")
+                        break
+                except Exception as e:
+                    print(f"⚠️ Could not read {path} from {branch_name}: {e}")
+                    continue
+            
+            if req_snapshot:
+                comprehensive_dag_info["requirements_snapshot"] = req_snapshot
+                print(f"📄 Requirements snapshot added to comprehensive DAG info ({len(req_snapshot['content'])} chars)")
             else:
                 print("⚠️ Agent code snapshot not available")
 
