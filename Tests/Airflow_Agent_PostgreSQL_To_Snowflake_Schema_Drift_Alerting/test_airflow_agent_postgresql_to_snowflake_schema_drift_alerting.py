@@ -215,17 +215,49 @@ def validate_test(model_result, fixtures=None):
         # Step 1: Check that the agent task executed
         if not model_result or model_result.get("status") == "failed":
             test_steps[0]["status"] = "failed"
-            test_steps[0]["Result_Message"] = "❌ AI Agent task execution failed or returned no result"
+            test_steps[0]["Result_Message"] = (
+                "❌ AI Agent task execution failed or returned no result"
+            )
             return {"score": 0.0, "metadata": {"test_steps": test_steps}}
 
         test_steps[0]["status"] = "passed"
-        test_steps[0]["Result_Message"] = "✅ AI Agent completed task execution successfully"
+        test_steps[0]["Result_Message"] = (
+            "✅ AI Agent completed task execution successfully"
+        )
 
         # Get fixtures for Airflow, PostgreSQL, Snowflake, and GitHub
-        airflow_fixture = next((f for f in fixtures if f.get_resource_type() == "airflow_resource"), None) if fixtures else None
-        postgres_fixture = next((f for f in fixtures if f.get_resource_type() == "postgres_resource"), None) if fixtures else None
-        snowflake_fixture = next((f for f in fixtures if f.get_resource_type() == "snowflake_resource"), None) if fixtures else None
-        github_fixture = next((f for f in fixtures if f.get_resource_type() == "github_resource"), None) if fixtures else None
+        airflow_fixture = (
+            next(
+                (f for f in fixtures if f.get_resource_type() == "airflow_resource"),
+                None,
+            )
+            if fixtures
+            else None
+        )
+        postgres_fixture = (
+            next(
+                (f for f in fixtures if f.get_resource_type() == "postgres_resource"),
+                None,
+            )
+            if fixtures
+            else None
+        )
+        snowflake_fixture = (
+            next(
+                (f for f in fixtures if f.get_resource_type() == "snowflake_resource"),
+                None,
+            )
+            if fixtures
+            else None
+        )
+        github_fixture = (
+            next(
+                (f for f in fixtures if f.get_resource_type() == "github_resource"),
+                None,
+            )
+            if fixtures
+            else None
+        )
 
         if not airflow_fixture:
             raise Exception("Airflow fixture not found")
@@ -270,13 +302,17 @@ def validate_test(model_result, fixtures=None):
         print(f"🔍 Checking for branch: {branch_name}")
         time.sleep(10)
 
-        branch_exists, test_steps[1] = github_manager.verify_branch_exists(branch_name, test_steps[1])
+        branch_exists, test_steps[1] = github_manager.verify_branch_exists(
+            branch_name, test_steps[1]
+        )
         if not branch_exists:
             test_steps[1]["status"] = "failed"
             return {"score": 0.0, "metadata": {"test_steps": test_steps}}
 
         test_steps[1]["status"] = "passed"
-        test_steps[1]["Result_Message"] = f"✅ Git branch '{branch_name}' created successfully"
+        test_steps[1]["Result_Message"] = (
+            f"✅ Git branch '{branch_name}' created successfully"
+        )
 
         # Capture agent's code snapshot for observability (after branch verification)
         print(f"📸 Capturing agent code snapshot from branch: {branch_name}")
@@ -287,38 +323,48 @@ def validate_test(model_result, fixtures=None):
                 paths_to_capture=[
                     "dags/",  # All DAG files created by the agent
                     "requirements.txt",  # Root requirements file
-                    "Requirements/requirements.txt"  # Alternative requirements location
-                ]
+                    "Requirements/requirements.txt",  # Alternative requirements location
+                ],
             )
-            print(f"🔍 DEBUG: Successfully received agent_code_snapshot with type: {type(agent_code_snapshot)}")
-            print(f"✅ Agent code snapshot captured: {agent_code_snapshot['summary']['total_files']} files "
-                  f"({agent_code_snapshot['summary']['total_size_bytes']} bytes)")
-            
+            print(
+                f"🔍 DEBUG: Successfully received agent_code_snapshot with type: {type(agent_code_snapshot)}"
+            )
+            print(
+                f"✅ Agent code snapshot captured: {agent_code_snapshot['summary']['total_files']} files "
+                f"({agent_code_snapshot['summary']['total_size_bytes']} bytes)"
+            )
+
             # Store snapshot in base test metadata immediately (incremental capture)
-            test_steps.append({
-                "name": "Agent Code Snapshot Capture",
-                "description": "Capture exact code created by agent for debugging",
-                "status": "passed",
-                "Result_Message": f"✅ Captured {agent_code_snapshot['summary']['total_files']} files "
-                                f"({agent_code_snapshot['summary']['total_size_bytes']} bytes) from branch {branch_name}",
-                "agent_code_snapshot": agent_code_snapshot,
-                "capture_timestamp": agent_code_snapshot["capture_timestamp"],
-                "branch_captured": branch_name
-            })
-            print(f"📋 Agent code snapshot added to test metadata for immediate availability")
-            
+            test_steps.append(
+                {
+                    "name": "Agent Code Snapshot Capture",
+                    "description": "Capture exact code created by agent for debugging",
+                    "status": "passed",
+                    "Result_Message": f"✅ Captured {agent_code_snapshot['summary']['total_files']} files "
+                    f"({agent_code_snapshot['summary']['total_size_bytes']} bytes) from branch {branch_name}",
+                    "agent_code_snapshot": agent_code_snapshot,
+                    "capture_timestamp": agent_code_snapshot["capture_timestamp"],
+                    "branch_captured": branch_name,
+                }
+            )
+            print(
+                f"📋 Agent code snapshot added to test metadata for immediate availability"
+            )
+
         except Exception as e:
             print(f"⚠️ Failed to capture agent code snapshot: {e}")
             agent_code_snapshot = None
             # Still add a test step to show the attempt
-            test_steps.append({
-                "name": "Agent Code Snapshot Capture", 
-                "description": "Capture exact code created by agent for debugging",
-                "status": "failed",
-                "Result_Message": f"❌ Failed to capture code snapshot: {str(e)}",
-                "agent_code_snapshot": None,
-                "capture_error": str(e)
-            })
+            test_steps.append(
+                {
+                    "name": "Agent Code Snapshot Capture",
+                    "description": "Capture exact code created by agent for debugging",
+                    "status": "failed",
+                    "Result_Message": f"❌ Failed to capture code snapshot: {str(e)}",
+                    "agent_code_snapshot": None,
+                    "capture_error": str(e),
+                }
+            )
 
         # PR creation and merge
         pr_exists, test_steps[2] = github_manager.find_and_merge_pr(
@@ -338,19 +384,27 @@ def validate_test(model_result, fixtures=None):
             return {"score": 0.0, "metadata": {"test_steps": test_steps}}
 
         test_steps[2]["status"] = "passed"
-        test_steps[2]["Result_Message"] = f"✅ PR '{pr_title}' created and merged successfully"
+        test_steps[2]["Result_Message"] = (
+            f"✅ PR '{pr_title}' created and merged successfully"
+        )
 
         # GitHub action completion with CI failure details
-        action_status = github_manager.check_if_action_is_complete(pr_title=pr_title, return_details=True)
-        
+        action_status = github_manager.check_if_action_is_complete(
+            pr_title=pr_title, return_details=True
+        )
+
         if not action_status["completed"]:
             test_steps[3]["status"] = "failed"
-            test_steps[3]["Result_Message"] = f"❌ GitHub action timed out (status: {action_status['status']})"
+            test_steps[3]["Result_Message"] = (
+                f"❌ GitHub action timed out (status: {action_status['status']})"
+            )
             test_steps[3]["action_status"] = action_status
             return {"score": 0.0, "metadata": {"test_steps": test_steps}}
         elif not action_status["success"]:
             test_steps[3]["status"] = "failed"
-            test_steps[3]["Result_Message"] = f"❌ GitHub action failed (conclusion: {action_status['conclusion']})"
+            test_steps[3]["Result_Message"] = (
+                f"❌ GitHub action failed (conclusion: {action_status['conclusion']})"
+            )
             test_steps[3]["action_status"] = action_status
             return {"score": 0.0, "metadata": {"test_steps": test_steps}}
         else:
@@ -361,11 +415,15 @@ def validate_test(model_result, fixtures=None):
         # Airflow redeployment
         if not airflow_instance.wait_for_airflow_to_be_ready():
             test_steps[4]["status"] = "failed"
-            test_steps[4]["Result_Message"] = "❌ Airflow instance did not redeploy successfully"
+            test_steps[4]["Result_Message"] = (
+                "❌ Airflow instance did not redeploy successfully"
+            )
             return {"score": 0.0, "metadata": {"test_steps": test_steps}}
 
         test_steps[4]["status"] = "passed"
-        test_steps[4]["Result_Message"] = "✅ Airflow redeployed successfully after GitHub action"
+        test_steps[4]["Result_Message"] = (
+            "✅ Airflow redeployed successfully after GitHub action"
+        )
 
         # DAG existence check
         dag_name = "schema_drift_alerting_etl"
@@ -376,7 +434,9 @@ def validate_test(model_result, fixtures=None):
             test_steps[5]["Result_Message"] = f"✅ DAG '{dag_name}' found in Airflow"
         else:
             test_steps[5]["status"] = "failed"
-            test_steps[5]["Result_Message"] = f"❌ DAG '{dag_name}' not found in Airflow"
+            test_steps[5]["Result_Message"] = (
+                f"❌ DAG '{dag_name}' not found in Airflow"
+            )
             return {"score": 0.0, "metadata": {"test_steps": test_steps}}
 
         # DAG execution
@@ -391,7 +451,9 @@ def validate_test(model_result, fixtures=None):
         # Monitor the DAG run until completion
         airflow_instance.verify_dag_id_ran(dag_name, dag_run_id)
         test_steps[6]["status"] = "passed"
-        test_steps[6]["Result_Message"] = f"✅ DAG '{dag_name}' executed successfully (run_id: {dag_run_id})"
+        test_steps[6]["Result_Message"] = (
+            f"✅ DAG '{dag_name}' executed successfully (run_id: {dag_run_id})"
+        )
 
         # Capture comprehensive DAG information for debugging (source, import errors, task logs)
         print("📊 Capturing comprehensive DAG information for debugging...")
@@ -405,9 +467,11 @@ def validate_test(model_result, fixtures=None):
             # Add agent code snapshot to comprehensive DAG info (captured earlier)
             if agent_code_snapshot:
                 comprehensive_dag_info["agent_code_snapshot"] = agent_code_snapshot
-                print(f"📸 Agent code snapshot added to comprehensive DAG info: "
-                      f"{agent_code_snapshot['summary']['total_files']} files, "
-                      f"{agent_code_snapshot['summary']['total_size_bytes']} bytes")
+                print(
+                    f"📸 Agent code snapshot added to comprehensive DAG info: "
+                    f"{agent_code_snapshot['summary']['total_files']} files, "
+                    f"{agent_code_snapshot['summary']['total_size_bytes']} bytes"
+                )
             else:
                 print("⚠️ Agent code snapshot not available")
 
@@ -418,11 +482,11 @@ def validate_test(model_result, fixtures=None):
                 print(
                     f"📄 DAG source code captured ({len(dag_source['source_code'])} characters)"
                 )
-                print(
-                    f"📄 Source code preview: {dag_source['source_code'][:200]}..."
-                )
+                print(f"📄 Source code preview: {dag_source['source_code'][:200]}...")
             else:
-                print("⚠️ DAG source code not available from Airflow - check agent_code_snapshot for actual files")
+                print(
+                    "⚠️ DAG source code not available from Airflow - check agent_code_snapshot for actual files"
+                )
 
             if import_errors:
                 print(f"❌ Found {len(import_errors)} import errors")
@@ -450,7 +514,9 @@ def validate_test(model_result, fixtures=None):
                             "duration": task_info.get("duration"),
                             "log_length": len(task_info.get("logs", "")),
                         }
-                        for task_id, task_info in comprehensive_dag_info.get("task_logs", {}).items()
+                        for task_id, task_info in comprehensive_dag_info.get(
+                            "task_logs", {}
+                        ).items()
                     },
                 }
             )
@@ -490,17 +556,23 @@ def validate_test(model_result, fixtures=None):
 
             if step_defs_count > 0 and step_runs_count > 0:
                 test_steps[7]["status"] = "passed"
-                test_steps[7]["Result_Message"] = f"✅ PostgreSQL source data validated: {step_defs_count} step definitions, {step_runs_count} step runs"
+                test_steps[7]["Result_Message"] = (
+                    f"✅ PostgreSQL source data validated: {step_defs_count} step definitions, {step_runs_count} step runs"
+                )
             else:
                 test_steps[7]["status"] = "failed"
-                test_steps[7]["Result_Message"] = f"❌ Insufficient source data: {step_defs_count} step definitions, {step_runs_count} step runs"
+                test_steps[7]["Result_Message"] = (
+                    f"❌ Insufficient source data: {step_defs_count} step definitions, {step_runs_count} step runs"
+                )
 
             postgres_cur.close()
             postgres_conn.close()
 
         except Exception as e:
             test_steps[7]["status"] = "failed"
-            test_steps[7]["Result_Message"] = f"❌ PostgreSQL validation error: {str(e)}"
+            test_steps[7]["Result_Message"] = (
+                f"❌ PostgreSQL validation error: {str(e)}"
+            )
 
         # Step 9 & 10: Snowflake Target Data Validation
         try:
@@ -515,7 +587,7 @@ def validate_test(model_result, fixtures=None):
                 database=database_name,
                 schema=schema_name,
                 warehouse=os.getenv("SNOWFLAKE_WAREHOUSE"),
-                role=os.getenv("SNOWFLAKE_ROLE", "SYSADMIN"),
+                # role=os.getenv("SNOWFLAKE_ROLE", "SYSADMIN"),
             )
             snowflake_cur = snowflake_conn.cursor()
 
@@ -525,7 +597,9 @@ def validate_test(model_result, fixtures=None):
 
             if drift_events_count >= 0:  # Table exists even if no records
                 test_steps[8]["status"] = "passed"
-                test_steps[8]["Result_Message"] = f"✅ Snowflake schema_drift_events table created with {drift_events_count} records"
+                test_steps[8]["Result_Message"] = (
+                    f"✅ Snowflake schema_drift_events table created with {drift_events_count} records"
+                )
 
                 # Step 10: Validate schema drift detection logic
                 if drift_events_count > 0:
@@ -539,18 +613,28 @@ def validate_test(model_result, fixtures=None):
 
                     if sample_record:
                         test_steps[9]["status"] = "passed"
-                        test_steps[9]["Result_Message"] = f"✅ Schema drift detection validated: found drift events with proper structure"
+                        test_steps[9]["Result_Message"] = (
+                            f"✅ Schema drift detection validated: found drift events with proper structure"
+                        )
                     else:
                         test_steps[9]["status"] = "failed"
-                        test_steps[9]["Result_Message"] = "❌ Schema drift events exist but lack proper structure"
+                        test_steps[9]["Result_Message"] = (
+                            "❌ Schema drift events exist but lack proper structure"
+                        )
                 else:
                     test_steps[9]["status"] = "passed"
-                    test_steps[9]["Result_Message"] = "✅ Schema drift detection completed (no drift detected - which is valid)"
+                    test_steps[9]["Result_Message"] = (
+                        "✅ Schema drift detection completed (no drift detected - which is valid)"
+                    )
             else:
                 test_steps[8]["status"] = "failed"
-                test_steps[8]["Result_Message"] = "❌ Snowflake schema_drift_events table not found"
+                test_steps[8]["Result_Message"] = (
+                    "❌ Snowflake schema_drift_events table not found"
+                )
                 test_steps[9]["status"] = "failed"
-                test_steps[9]["Result_Message"] = "❌ Cannot validate drift detection - table not found"
+                test_steps[9]["Result_Message"] = (
+                    "❌ Cannot validate drift detection - table not found"
+                )
 
             snowflake_cur.close()
             snowflake_conn.close()
@@ -573,7 +657,9 @@ def validate_test(model_result, fixtures=None):
     total_steps = len(test_steps)
     score = passed_steps / total_steps
 
-    print(f"🎯 Validation completed: {passed_steps}/{total_steps} steps passed (Score: {score:.2f})")
+    print(
+        f"🎯 Validation completed: {passed_steps}/{total_steps} steps passed (Score: {score:.2f})"
+    )
 
     return {
         "score": score,

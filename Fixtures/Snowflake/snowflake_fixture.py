@@ -85,7 +85,7 @@ class SnowflakeFixture(
             password=os.getenv("SNOWFLAKE_PASSWORD"),
             account=os.getenv("SNOWFLAKE_ACCOUNT"),
             warehouse=os.getenv("SNOWFLAKE_WAREHOUSE"),
-            role=os.getenv("SNOWFLAKE_ROLE", "SYSADMIN"),
+            # role=os.getenv("SNOWFLAKE_ROLE", "SYSADMIN"),
             autocommit=True,
         )
 
@@ -110,7 +110,7 @@ class SnowflakeFixture(
             "user": os.getenv("SNOWFLAKE_USER"),
             "password": os.getenv("SNOWFLAKE_PASSWORD"),
             "warehouse": os.getenv("SNOWFLAKE_WAREHOUSE"),
-            "role": os.getenv("SNOWFLAKE_ROLE", "SYSADMIN"),
+            # "role": os.getenv("SNOWFLAKE_ROLE", "SYSADMIN"),
         }
 
         # Generate unique database and schema names
@@ -252,7 +252,7 @@ class SnowflakeFixture(
             "SCHEMA": schema_name,
             "DATABASE": database_name,
             "WAREHOUSE": os.getenv("SNOWFLAKE_WAREHOUSE"),
-            "ROLE": os.getenv("SNOWFLAKE_ROLE", "SYSADMIN"),
+            # "ROLE": os.getenv("SNOWFLAKE_ROLE", "SYSADMIN"),
         }
 
         # Add S3 configuration variables if provided
@@ -287,7 +287,7 @@ class SnowflakeFixture(
 
         # Process results from each statement
         for i, cursor in enumerate(cursors):
-            print(f"✅ Processed statement {i+1}")
+            print(f"✅ Processed statement {i + 1}")
             try:
                 cursor.fetchall()
             except Exception:

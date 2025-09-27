@@ -27,6 +27,7 @@ class TestCaseInput(TypedDict):
     mode: NotRequired[str]
     test_resources: NotRequired[Dict[str, Any]]
     test_name: NotRequired[str]
+    session_data: NotRequired[Dict[str, Any]]
 
 
 class TestCaseMetadata(TypedDict):
@@ -62,10 +63,20 @@ class SupabaseAccountResource(TypedDict):
     jwt_token: NotRequired[str]
 
 
+class PartialTestCaseConfig(TypedDict):
+    test_name: str
+    unique_test_id: str
+
+
 @traced(name="extract_test_configuration")
-def extract_test_configuration(test_name: str) -> TestConfiguration:
+def extract_test_configuration(
+    partial_test_case_config: PartialTestCaseConfig,
+) -> TestConfiguration:
     """Generic test configuration extraction for any test following the standard pattern"""
     try:
+        test_name = partial_test_case_config["test_name"]
+        unique_test_id = partial_test_case_config["unique_test_id"]
+
         # Dynamically import the test config
         config_module_path = f"Tests.{test_name}.Test_Configs"
         Test_Configs = importlib.import_module(config_module_path)
@@ -91,7 +102,7 @@ def extract_test_configuration(test_name: str) -> TestConfiguration:
 
                 # Check if test defines its own fixtures and config creation (REQUIRED)
                 if hasattr(test_module, "get_fixtures"):
-                    custom_fixtures = test_module.get_fixtures()
+                    custom_fixtures = test_module.get_fixtures(partial_test_case_config)
                     print(
                         f"📦 {test_name} provides custom fixtures: {[f.get_resource_type() for f in custom_fixtures]}"
                     )
@@ -125,10 +136,14 @@ def extract_test_configuration(test_name: str) -> TestConfiguration:
 
         # Create the test case data
         # All tests now use create_config function - no more base configs needed
-        test_case = {
-            "input": {"task": Test_Configs.User_Input, "configs": {}},
+        test_case: TestCase = {
+            "input": {
+                "task": Test_Configs.User_Input,
+                "configs": {},
+            },
             "metadata": {
                 "test_name": test_name,
+                "unique_test_id": f"{test_name}_{str(uuid.uuid4())}",
                 "test_function": test_function_name,
                 "resource_configs": resource_configs,
                 "custom_fixtures": custom_fixtures,
@@ -355,17 +370,20 @@ def setup_supabase_account_resource(mode: str = "Ardent") -> SupabaseAccountReso
 
 @traced(name="setup_test_resources")
 def setup_test_resources(
-    resource_configs: Dict[str, Any], session_data: Dict[str, Any] = None
+    test_case_config: TestCase,
 ) -> Tuple[Dict[str, Any], List[Any]]:
     """Generic setup for all test resources using DEBenchFixture instances"""
     resources = {}
-    session_data = session_data or {}
+    session_data = test_case_config.get("input", {}).get("session_data", {})
     fixtures = []
+    custom_fixtures = (
+        test_case_config.get("metadata", {})
+        .get("resource_configs", {})
+        .get("custom_fixtures", [])
+    )
 
     # Check if test provides custom fixtures
-    if "custom_fixtures" in resource_configs and resource_configs["custom_fixtures"]:
-        custom_fixtures = resource_configs["custom_fixtures"]
-
+    if custom_fixtures:
         # Set up Supabase account if needed (always needed for Ardent mode)
         resources["supabase_account_resource"] = setup_supabase_account_resource()
 
@@ -381,7 +399,7 @@ def setup_test_resources(
     # All tests must now use the new pattern with get_fixtures() and create_model_inputs()
     # This fallback should never be reached since we enforce the new pattern above
     raise ValueError(
-        f"❌ Invalid test configuration for {resource_configs}"
+        f"❌ Invalid test configuration for {test_case_config}"
     )  # This shouldn't happen
 
 

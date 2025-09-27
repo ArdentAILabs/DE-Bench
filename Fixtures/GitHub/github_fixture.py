@@ -4,6 +4,7 @@ Handles GitHub repository operations via GitHubManager.
 """
 
 import os
+import random
 import time
 import uuid
 from typing import Dict, Any, Optional, List
@@ -71,6 +72,11 @@ class GitHubFixture(
             config = self.get_default_config()
 
         resource_id = config["resource_id"]
+        if not resource_id:
+            raise ValueError("Resource ID is required for GitHub resource")
+
+        resource_id = f"{resource_id}_{str(random.randint(1, 1_000_000))}"
+
         print(f"🐙 Setting up GitHub resource: {resource_id}")
 
         # Verify required environment variables
@@ -218,7 +224,9 @@ class GitHubFixture(
         # Extract connection details from resource data
         return {
             "github": {
-                "token": resource_data.get("github_token", os.getenv("AIRFLOW_GITHUB_TOKEN")),
+                "token": resource_data.get(
+                    "github_token", os.getenv("AIRFLOW_GITHUB_TOKEN")
+                ),
                 "repo": resource_data.get("repo_full_name"),
                 "branch": resource_data.get("branch_name"),
                 "default_branch": resource_data.get("default_branch", "main"),

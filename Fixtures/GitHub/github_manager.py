@@ -59,7 +59,7 @@ class GitHubManager:
         :return: Name of the new branch
         :rtype: str
         """
-        final_test_name = test_name + "_" + str(random.randint(1, 1_000_000))
+        final_test_name = test_name
 
         try:
             commit_sha = self.repo.get_commits()[0].sha

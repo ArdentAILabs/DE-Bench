@@ -1,3 +1,4 @@
+import random
 import pytest
 import json
 import time
@@ -207,7 +208,7 @@ class MySQLFixture(
                                         values = list(record.values())
                                         placeholders = ", ".join(["%s"] * len(values))
                                         insert_sql = f"INSERT INTO {table_name} ({', '.join(columns)}) VALUES ({placeholders})"
-                                        print(f"Inserting record {i+1}: {record}")
+                                        print(f"Inserting record {i + 1}: {record}")
                                         cursor.execute(insert_sql, values)
 
                                     # Note: autocommit=True means we don't need this, but keeping for safety
@@ -228,7 +229,13 @@ class MySQLFixture(
         creation_end = time.time()
         print(f"MySQL resource creation took {creation_end - creation_start:.2f}s")
 
-        resource_id = config.get("resource_id", f"mysql_resource_{int(time.time())}")
+        resource_id = config.get("resource_id")
+
+        if not resource_id:
+            raise ValueError("Resource ID is required for MySQL resource")
+
+        # Resource id must be unique, to protect against parallel executions of the same test.
+        resource_id = f"{resource_id}_{str(random.randint(1, 1_000_000))}"
 
         # Create detailed resource data
         resource_data = {

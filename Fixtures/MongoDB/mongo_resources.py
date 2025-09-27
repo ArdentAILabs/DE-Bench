@@ -1,3 +1,4 @@
+import random
 import pytest
 import json
 import time
@@ -104,7 +105,11 @@ class MongoDBFixture(
         creation_end = time.time()
         print(f"MongoDB resource creation took {creation_end - creation_start:.2f}s")
 
-        resource_id = config.get("resource_id", f"mongo_resource_{int(time.time())}")
+        resource_id = config.get("resource_id")
+        if not resource_id:
+            raise ValueError("Resource ID is required for MongoDB resource")
+
+        resource_id = f"{resource_id}_{str(random.randint(1, 1_000_000))}"
 
         # Create detailed resource data
         resource_data = {

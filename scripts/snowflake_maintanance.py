@@ -76,7 +76,7 @@ def connect_to_snowflake(
 def list_databases(connection: snowflake.connector.SnowflakeConnection) -> List[str]:
     """
     List all user databases excluding Snowflake system databases.
-    
+
     This function gets all databases and filters out the default Snowflake system databases,
     returning only user-created databases that should be cleaned up.
 
@@ -92,7 +92,7 @@ def list_databases(connection: snowflake.connector.SnowflakeConnection) -> List[
         # Query to get all databases
         query = "SHOW DATABASES"
         cursor.execute(query)
-        
+
         # Get all database names (row[1] is the database name)
         all_databases = [row[1] for row in cursor.fetchall()]
         cursor.close()
@@ -100,16 +100,16 @@ def list_databases(connection: snowflake.connector.SnowflakeConnection) -> List[
         # Filter out Snowflake system databases
         # These are the default databases that come with Snowflake and should not be deleted
         system_databases = {
-            'SNOWFLAKE',
-            'SNOWFLAKE_SAMPLE_DATA', 
-            'SNOWFLAKE_LEARNING_DB',
-            'UTIL_DB',
-            'INFORMATION_SCHEMA'
+            "SNOWFLAKE",
+            "SNOWFLAKE_SAMPLE_DATA",
+            "SNOWFLAKE_LEARNING_DB",
+            "UTIL_DB",
+            "INFORMATION_SCHEMA",
         }
-        
+
         # Return only user databases (not system databases)
         user_databases = [db for db in all_databases if db not in system_databases]
-        
+
         return user_databases
 
     except snowflake.connector.Error as e:
@@ -117,7 +117,9 @@ def list_databases(connection: snowflake.connector.SnowflakeConnection) -> List[
         return []
 
 
-def drop_database(connection: snowflake.connector.SnowflakeConnection, db_name: str) -> bool:
+def drop_database(
+    connection: snowflake.connector.SnowflakeConnection, db_name: str
+) -> bool:
     """
     Drop a Snowflake database.
 
@@ -160,7 +162,7 @@ def get_connection_params():
     snowflake_password = os.getenv("SNOWFLAKE_PASSWORD")
     snowflake_account = os.getenv("SNOWFLAKE_ACCOUNT")
     snowflake_warehouse = os.getenv("SNOWFLAKE_WAREHOUSE")
-    snowflake_role = os.getenv("SNOWFLAKE_ROLE", "SYSADMIN")
+    snowflake_role = os.getenv("SNOWFLAKE_ROLE", None)
 
     # If environment variables are not set, prompt user for input
     if not snowflake_user:
@@ -172,7 +174,13 @@ def get_connection_params():
     if not snowflake_warehouse:
         snowflake_warehouse = input("Enter Snowflake warehouse name: ")
 
-    return snowflake_user, snowflake_password, snowflake_account, snowflake_warehouse, snowflake_role
+    return (
+        snowflake_user,
+        snowflake_password,
+        snowflake_account,
+        snowflake_warehouse,
+        snowflake_role,
+    )
 
 
 def cmd_list_dbs():
@@ -259,7 +267,9 @@ def cmd_clear_dbs():
 
         # Show warning and ask for confirmation
         print("\n" + "⚠️ " * 20)
-        print("WARNING: This will PERMANENTLY DELETE all the user databases listed above!")
+        print(
+            "WARNING: This will PERMANENTLY DELETE all the user databases listed above!"
+        )
         print("This action CANNOT be undone!")
         print("⚠️ " * 20)
 

@@ -21,7 +21,6 @@ def set_up_model_configs(Configs, custom_info=None):
 
     # For non-Ardent modes, no remote config setup is required
     if mode == "Ardent":
-
         Ardent_Client = ArdentClient(
             public_key=custom_info["publicKey"],
             secret_key=custom_info["secretKey"],
@@ -29,10 +28,8 @@ def set_up_model_configs(Configs, custom_info=None):
         )
 
         if "services" in Configs:
-
             for service in Configs["services"]:
                 service_config = Configs["services"][service]
-
 
                 print(f"🔍 SERVICE CONFIG: {service_config}")
                 print(f"🔍 SERVICE: {service}")
@@ -84,7 +81,6 @@ def set_up_model_configs(Configs, custom_info=None):
                         raise
 
                 elif service == "postgreSQL":
-
                     print(f"🔧 Setting up PostgreSQL config:")
                     print(f"   Hostname: {service_config['hostname']}")
                     print(f"   Port: {service_config['port']}")
@@ -158,7 +154,7 @@ def set_up_model_configs(Configs, custom_info=None):
                         user=service_config["user"],
                         password=service_config["password"],
                         warehouse=service_config["warehouse"],
-                        role=service_config.get("role", "SYSADMIN"),
+                        # role=service_config.get("role", "SYSADMIN"),
                         databases=[{"name": service_config["database"]}],
                         header_overrides={
                             "X-Braintrust-Exported-Parent-Span": current_span().export(),
@@ -197,7 +193,10 @@ def set_up_model_configs(Configs, custom_info=None):
 
         # Create job with mounted Azure File Share
         job_k8s.create_job_in_namespace_with_volume_mount(
-            api_instance=api_instance, shareName=file_share_name, jobID=job_name, mode = mode
+            api_instance=api_instance,
+            shareName=file_share_name,
+            jobID=job_name,
+            mode=mode,
         )
 
         # Wait for pod and run commands
@@ -241,7 +240,10 @@ def set_up_model_configs(Configs, custom_info=None):
 
         # Create job with mounted Azure File Share
         job_k8s.create_job_in_namespace_with_volume_mount(
-            api_instance=api_instance, shareName=file_share_name, jobID=job_name, mode="OpenAI_Codex"
+            api_instance=api_instance,
+            shareName=file_share_name,
+            jobID=job_name,
+            mode="OpenAI_Codex",
         )
 
         # Wait for pod and run commands
@@ -288,7 +290,6 @@ def cleanup_model_artifacts(Configs, custom_info=None):
             Ardent_Client.delete_job(job_id=custom_info["job_id"])
 
     elif mode == "Claude_Code":
-
         print("Cleaning up Kubernetes job for Claude Code")
         print(custom_info)
         # Cleanup Kubernetes job for Claude Code
@@ -312,7 +313,6 @@ def cleanup_model_artifacts(Configs, custom_info=None):
                 print(f"Error during Kubernetes cleanup: {e}")
 
     elif mode == "OpenAI_Codex":
-
         print("Cleaning up Kubernetes job for OpenAI Codex")
         print(custom_info)
         # Cleanup Kubernetes job for OpenAI Codex

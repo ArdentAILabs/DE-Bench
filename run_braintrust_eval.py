@@ -201,12 +201,10 @@ def run_de_bench_task(test_input):
 
         # 1. Extract test configuration and set up per-test resources
         print(f"📋 Setting up resources for {test_name}...")
-        test_data = extract_test_configuration(test_name)
+        test_case_config = extract_test_configuration(test_name)
 
         # Set up per-test resources (using shared session data if available)
-        test_resources, fixture_instances = setup_test_resources(
-            test_data["resource_configs"], session_data=session_data
-        )
+        test_resources, fixture_instances = setup_test_resources(test_case_config)
         print(f"✅ Resources set up for {test_name}")
 
         # Register test with fixtures for global cleanup tracking
@@ -703,7 +701,8 @@ def run_multi_test_evaluation(
         if session_fixtures:
             print(f"🌐 Found {len(session_fixtures)} session-level fixture types...")
             active_session_fixtures = session_fixtures
-            active_session_data = setup_session_fixtures(session_fixtures)
+            # active_session_data = setup_session_fixtures(session_fixtures)
+            active_session_data = {}
             print("✅ Session-level fixtures set up successfully")
         else:
             print("📝 No session-level fixtures required")
