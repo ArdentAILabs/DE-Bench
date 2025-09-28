@@ -263,7 +263,7 @@ def validate_test(model_result, fixtures=None):
     - Proper star schema with fact and dimension tables
     - Fact table (fact_etl_jobs) with metrics and foreign keys
     - Dimension tables (dim_jobs, dim_time, dim_status, dim_categories)
-    - Star schema relationships and integrity constraints
+    - Star schema relationships and integrity constraints`
     - Analytics infrastructure (views, procedures)
 
     Args:
@@ -337,55 +337,73 @@ def validate_test(model_result, fixtures=None):
             raise Exception("MySQL resource data not available")
 
         source_db_name = resource_data["created_resources"][0]["name"]
+        if not source_db_name:
+            raise Exception("Source database name not available")
+            
         db_connection = mysql_fixture.get_connection()  # Connect without specific database
         db_cursor = db_connection.cursor()
 
         try:
             # Step 2: Check if new data warehouse was created
+            print(f"DEBUG: About to execute first query")
             db_cursor.execute("""
                 SELECT COUNT(*) 
                 FROM information_schema.schemata 
                 WHERE schema_name = 'data_warehouse'
             """)
             data_warehouse_exists = db_cursor.fetchone()[0] > 0
-
-            # Also check for any new database that was created (might have different name)
-            db_cursor.execute("""
-                SELECT schema_name 
-                FROM information_schema.schemata 
-                WHERE schema_name NOT IN ('information_schema', 'performance_schema', 'mysql', 'sys', %s)
-                AND schema_name LIKE '%warehouse%' OR schema_name LIKE '%star%' OR schema_name LIKE '%dim%'
-            """, (source_db_name,))
-            warehouse_schemas = db_cursor.fetchall()
+            print(f"DEBUG: First query completed, data_warehouse_exists={data_warehouse_exists}")
 
             if data_warehouse_exists:
                 test_steps[1]["status"] = "passed"
                 test_steps[1]["Result_Message"] = "✅ Data warehouse 'data_warehouse' created successfully"
                 target_schema = "data_warehouse"
-            elif warehouse_schemas:
-                test_steps[1]["status"] = "passed"
-                target_schema = warehouse_schemas[0][0]
-                test_steps[1]["Result_Message"] = f"✅ Data warehouse '{target_schema}' created successfully"
             else:
-                # Check for any new schema at all
+                # Also check for any new database that was created (might have different name)
+                print(f"DEBUG: About to execute warehouse query with source_db_name='{source_db_name}'")
                 db_cursor.execute("""
                     SELECT schema_name 
                     FROM information_schema.schemata 
                     WHERE schema_name NOT IN ('information_schema', 'performance_schema', 'mysql', 'sys', %s)
+                    AND (schema_name LIKE '%warehouse%' OR schema_name LIKE '%star%' OR schema_name LIKE '%dim%')
                 """, (source_db_name,))
-                any_new_schemas = db_cursor.fetchall()
-                
-                if any_new_schemas:
+                print(f"DEBUG: Warehouse query completed")
+                warehouse_schemas = db_cursor.fetchall()
+
+                if warehouse_schemas:
                     test_steps[1]["status"] = "passed"
-                    target_schema = any_new_schemas[0][0]
-                    test_steps[1]["Result_Message"] = f"✅ New database '{target_schema}' created"
+                    target_schema = warehouse_schemas[0][0]
+                    if not target_schema:
+                        raise Exception("Target schema name is empty")
+                    test_steps[1]["Result_Message"] = f"✅ Data warehouse '{target_schema}' created successfully"
                 else:
-                    test_steps[1]["status"] = "failed"
-                    test_steps[1]["Result_Message"] = "❌ No new data warehouse database created"
-                    return {"score": 0.2, "metadata": {"test_steps": test_steps}}
+                    # Check for any new schema at all
+                    print(f"DEBUG: About to execute any_new_schemas query with source_db_name='{source_db_name}'")
+                    db_cursor.execute("""
+                        SELECT schema_name 
+                        FROM information_schema.schemata 
+                        WHERE schema_name NOT IN ('information_schema', 'performance_schema', 'mysql', 'sys', %s)
+                    """, (source_db_name,))
+                    print(f"DEBUG: Any new schemas query completed")
+                    any_new_schemas = db_cursor.fetchall()
+                    
+                    if any_new_schemas:
+                        test_steps[1]["status"] = "passed"
+                        target_schema = any_new_schemas[0][0]
+                        if not target_schema:
+                            raise Exception("Target schema name is empty")
+                        test_steps[1]["Result_Message"] = f"✅ New database '{target_schema}' created"
+                    else:
+                        test_steps[1]["status"] = "failed"
+                        test_steps[1]["Result_Message"] = "❌ No new data warehouse database created"
+                        return {"score": 0.2, "metadata": {"test_steps": test_steps}}
 
             # Step 3: Validate star schema structure
             # Check for fact and dimension tables
+            if not target_schema:
+                raise Exception("Target schema not properly defined")
+            
+            print(f"DEBUG: About to execute tables query with target_schema='{target_schema}'")
             db_cursor.execute("""
                 SELECT table_name, table_rows 
                 FROM information_schema.tables 
@@ -393,6 +411,7 @@ def validate_test(model_result, fixtures=None):
                 AND table_type = 'BASE TABLE'
                 ORDER BY table_name
             """, (target_schema,))
+            print(f"DEBUG: Tables query completed")
             all_tables = db_cursor.fetchall()
             table_names = [table[0] for table in all_tables]
 
@@ -540,7 +559,7 @@ def validate_test(model_result, fixtures=None):
                 analytics_components.append(f"{procedure_count} maintenance procedures")
 
             # Check for proper indexing across all tables
-            db_cursor.execute(f"""
+            db_cursor.execute("""
                 SELECT COUNT(DISTINCT index_name) 
                 FROM information_schema.statistics 
                 WHERE table_schema = %s 

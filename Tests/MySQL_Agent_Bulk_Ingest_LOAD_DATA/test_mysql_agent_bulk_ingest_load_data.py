@@ -203,7 +203,7 @@ def validate_test(model_result, fixtures=None):
                 FROM products 
                 WHERE description LIKE '%,%' 
                    OR description LIKE '%"%' 
-                   OR description LIKE '%'%'
+                   OR description LIKE '%''%'
                    OR name REGEXP '[àáâãäåæçèéêëìíîïðñòóôõöøùúûüýþÿ]'
                    OR price IS NULL
                 ORDER BY product_id

@@ -246,8 +246,11 @@ def validate_test(model_result, fixtures=None):
                 ORDER BY account_id
             """)
             account_data = db_cursor.fetchall()
+            # total up the number of transactions for account 1001 and 1002
+            account_1001_transactions = sum(acc[1] for acc in account_data if acc[0] == 1001)
+            account_1002_transactions = sum(acc[1] for acc in account_data if acc[0] == 1002)
 
-            if record_count >= 7 and len(account_data) >= 3:
+            if record_count >= 7 and (account_1001_transactions + account_1002_transactions) >= 6:
                 test_steps[2]["status"] = "passed"
                 test_steps[2]["Result_Message"] = (
                     f"✅ Transaction data validated: {record_count} total transactions, "
@@ -257,7 +260,7 @@ def validate_test(model_result, fixtures=None):
                 test_steps[2]["status"] = "failed"
                 test_steps[2]["Result_Message"] = (
                     f"❌ Insufficient transaction data: {record_count} records (expected ≥7), "
-                    f"{len(account_data)} accounts with data (expected ≥3)"
+                    f"{account_1001_transactions + account_1002_transactions} transactions with data (expected ≥6)"
                 )
 
             # Step 4: Look for evidence of advanced transaction work
