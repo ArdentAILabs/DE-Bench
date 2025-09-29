@@ -141,9 +141,9 @@ def validate_test(model_result, fixtures=None):
 
             # Step 2: Check if Sarah Johnson record was added
             query = f"""
-            SELECT NAME, EMAIL, AGE, CITY, STATE, ACTIVE, PURCHASES 
+            SELECT FIRST_NAME, LAST_NAME, EMAIL, AGE, CITY, STATE, IS_ACTIVE, TOTAL_PURCHASES 
             FROM {database_name}.{schema_name}.USERS 
-            WHERE NAME = 'Sarah Johnson' AND EMAIL = 'sarah.johnson@newuser.com'
+            WHERE FIRST_NAME = 'Sarah' AND LAST_NAME = 'Johnson' AND EMAIL = 'sarah.johnson@newuser.com'
             """
             cursor.execute(query)
             results = cursor.fetchall()
@@ -163,19 +163,31 @@ def validate_test(model_result, fixtures=None):
             # Step 3: Validate the record data
             record = results[0]
             expected_values = {
-                "NAME": "Sarah Johnson",
+                "FIRST_NAME": "Sarah",
+                "LAST_NAME": "Johnson", 
                 "EMAIL": "sarah.johnson@newuser.com",
                 "AGE": 35,
                 "CITY": "Austin",
                 "STATE": "TX",
-                "ACTIVE": True,
-                "PURCHASES": 0.00,
+                "IS_ACTIVE": True,
+                "TOTAL_PURCHASES": 0.00,
             }
 
             # Check each field
             validation_errors = []
             for i, (field, expected) in enumerate(expected_values.items()):
                 actual = record[i]
+                
+                # Handle data type conversions for comparison
+                if field == "TOTAL_PURCHASES":
+                    # Convert Decimal to float for comparison
+                    actual = float(actual) if actual is not None else actual
+                    expected = float(expected)
+                elif field in ["AGE"] and actual is not None:
+                    # Ensure integer fields are compared as integers
+                    actual = int(actual)
+                    expected = int(expected)
+                
                 if actual != expected:
                     validation_errors.append(
                         f"{field}: expected {expected}, got {actual}"
