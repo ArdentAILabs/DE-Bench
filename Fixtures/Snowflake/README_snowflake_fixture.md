@@ -27,13 +27,19 @@ If you do not have not have a Snowflake environment, then sign up for a trial. W
 ### Required Environment Variables
 
 #### Retrieving the Values
-The values for these environment variables can be found by logging into Snowflake, clicking your name in the bottom left, click Account, then View Account Details. In the menu that pops up, click Config File and select your warehouse. Copy and paste the values for the appropriate environment variable and enter your password for the `SNOWFLAKE_PASSWORD` value.
+The values for these environment variables can be found by logging into Snowflake, clicking your name in the bottom left, click Account, then View Account Details. In the menu that pops up, click Config File and select your warehouse. Copy and paste the values for the appropriate environment variable.
+
+**For PAT Authentication (Recommended):**
+1. In Snowflake, navigate to Admin > Users & Roles > Users
+2. Select your user and go to the "Personal Access Tokens" tab
+3. Create a new PAT and copy the token value
+4. Use the PAT as your `SNOWFLAKE_PASSWORD` value
 
 The fixture requires the following environment variables to be set:
 ```bash
 # Snowflake connection credentials (REQUIRED)
 SNOWFLAKE_USER=your_snowflake_username
-SNOWFLAKE_PASSWORD=your_snowflake_password
+SNOWFLAKE_PASSWORD=your_personal_access_token  # Use PAT instead of password
 SNOWFLAKE_ACCOUNT=your_account_identifier  # e.g., xy12345.us-east-1
 SNOWFLAKE_WAREHOUSE=your_warehouse_name
 SNOWFLAKE_ROLE=SYSADMIN  # Optional, defaults to SYSADMIN
