@@ -1,0 +1,125 @@
+product_id,name,description,price,category
+4,"Advanced Widget","High-performance widget with advanced features",89.99,Widgets
+5,"Café Gadget","Spécialisé gadget pour café ☕",45.50,Gadgets
+6,"Tool Set","Complete tool set, includes: hammer, screwdriver, ""super wrench""",129.99,Tools
+7,"Émoji Product 🎉","Fun product with émojis and åccénted cháracters",25.00,Fun
+8,"CSV Test Item","Description with, embedded commas and ""quotes""",15.75,Testing
+1,"Updated Basic Widget","This is a duplicate product_id - should test handling",22.99,Widgets
+9,"Null Price Item",,35.00,Mystery
+10,"Empty Description","",19.99,Basic
+11,"Special Characters","Product with täb	and newline
+characters",67.50,Special
+12,"Unicode Test","Testing unicödé: 你好世界 🌍",42.00,International
+2,"Premium Gadget Updated","Duplicate of existing product_id 2",109.99,Gadgets
+13,"Mixed Encoding","Tëst prødüct wïth mïxëd ëncødïng",88.88,Test
+14,,"Item with empty name field",30.00,Anonymous
+15,"Final Test Item","Last item in bulk load test",99.99,Final
+16,"Bluetooth Speaker","Wireless speaker with excellent sound quality",79.99,Electronics
+17,"Gaming Mouse","Ergonomic gaming mouse with RGB lighting",49.95,Gaming
+18,"Café Deluxe","Premium coffee maker, très sophistiqué ☕",199.99,Appliances
+19,"Smart Watch","Fitness tracking with heart rate monitor",159.99,Wearables
+20,"Desk Lamp","LED desk lamp with adjustable brightness",34.50,Office
+21,"Mechanical Keyboard","Cherry MX switches, ""clicky"" and responsive",129.95,Gaming
+22,"Water Bottle","Stainless steel, 32oz capacity",24.99,Sports
+23,"Backpack","Durable hiking backpack, 40L capacity",89.95,Outdoor
+24,"Smartphone Case","Protective case, shock-resistant design",19.99,Accessories
+25,"Tablet Stand","Adjustable stand for tablets and phones",29.95,Accessories
+26,"Headphones","Noise-canceling over-ear headphones",149.99,Electronics
+27,"Power Bank","10,000mAh portable charger",39.95,Electronics
+28,"Yoga Mat","Non-slip exercise mat, eco-friendly",44.99,Sports
+29,"Coffee Grinder","Burr grinder for perfect coffee grounds",119.95,Appliances
+30,"Monitor Stand","Wooden monitor riser with storage",54.99,Office
+31,"Webcam","HD webcam for video calls",69.95,Electronics
+32,"Kitchen Scale","Digital scale with precision weighing",34.95,Kitchen
+33,"Phone Charger","USB-C fast charging cable, 6ft",14.99,Accessories
+34,"Desk Organizer","Bamboo desktop organizer with compartments",29.99,Office
+35,"Bluetooth Earbuds","True wireless earbuds with charging case",79.95,Electronics
+36,"Travel Mug","Insulated travel mug, spill-proof design",22.95,Drinkware
+37,"External SSD","1TB external solid state drive",159.95,Storage
+38,"Gaming Chair","Ergonomic gaming chair with lumbar support",249.99,Furniture
+39,"Portable Speaker","Compact Bluetooth speaker, waterproof",54.95,Electronics
+40,"Fitness Tracker","Activity tracker with sleep monitoring",99.95,Wearables
+41,"Desk Pad","Large mouse pad for desk coverage",19.95,Office
+42,"USB Hub","7-port USB 3.0 hub with power adapter",39.95,Electronics
+43,"Notebook Set","Premium notebook set with lined pages",24.95,Stationery
+44,"Pen Collection","Set of gel pens, assorted colors",12.99,Stationery
+45,"Wall Clock","Modern minimalist wall clock",44.95,Home
+46,"Plant Pot","Ceramic plant pot with drainage holes",18.95,Garden
+47,"Book Light","LED reading light with clip attachment",16.95,Lighting
+48,"Coasters Set","Stone coasters set of 4 with holder",19.95,Home
+49,"Cable Organizer","Cable management solution for desks",14.95,Office
+50,"Memory Foam Pillow","Contour pillow for better sleep",59.95,Bedding
+3,"Duplicate Standard Tool","Another duplicate record to test handling",47.50,Tools
+51,"Electric Kettle","Fast-boiling kettle with temperature control",69.95,Appliances
+52,"Air Purifier","HEPA filter air purifier for rooms",199.95,Appliances
+53,"Desk Fan","Quiet desktop fan with multiple speeds",34.95,Office
+54,"Laptop Stand","Adjustable aluminum laptop stand",49.95,Office
+55,"Wireless Charger","Qi wireless charging pad",29.95,Electronics
+56,"Essential Oils Set","Aromatherapy oils set of 6 scents",39.95,Wellness
+57,"Resistance Bands","Exercise bands set with different tensions",24.95,Sports
+58,"Cutting Board","Bamboo cutting board with juice groove",29.95,Kitchen
+59,"Spice Rack","Rotating spice rack with 16 jars",44.95,Kitchen
+60,"Shower Curtain","Waterproof fabric shower curtain",24.95,Bathroom
+61,"Towel Set","Cotton towel set, bath and hand towels",49.95,Bathroom
+62,"Picture Frame","Digital photo frame with WiFi",129.95,Electronics
+63,"Garden Tools","Essential garden tool set",54.95,Garden
+64,"Bird Feeder","Wooden bird feeder for backyard",34.95,Garden
+65,"Solar Lights","String lights for outdoor decoration",39.95,Garden
+66,"Camping Stove","Portable gas camping stove",89.95,Outdoor
+67,"Sleeping Bag","3-season sleeping bag, temperature rated",119.95,Outdoor
+68,"Hiking Boots","Waterproof hiking boots, size varies",159.95,Outdoor
+69,"Fishing Rod","Telescopic fishing rod with reel",79.95,Outdoor
+70,"Tent Stakes","Heavy-duty tent stakes set of 8",19.95,Outdoor
+71,"Flashlight","LED flashlight with rechargeable battery",34.95,Tools
+72,"Multi-tool","Swiss army style multi-tool",49.95,Tools
+73,"Measuring Tape","25ft measuring tape with magnetic tip",24.95,Tools
+74,"Level","48-inch spirit level for construction",39.95,Tools
+75,"Drill Bits","HSS drill bit set, various sizes",29.95,Tools
+76,"Safety Glasses","Impact-resistant safety eyewear",14.95,Safety
+77,"Work Gloves","Heavy-duty work gloves, size L",19.95,Safety
+78,"First Aid Kit","Complete first aid kit for home/car",34.95,Safety
+79,"Fire Extinguisher","Multi-purpose fire extinguisher, 2.5lb",49.95,Safety
+80,"Smoke Detector","Battery-powered smoke alarm",24.95,Safety
+81,"Car Charger","Dual USB car charger adapter",16.95,Automotive
+82,"Phone Mount","Car phone mount with suction cup",19.95,Automotive
+83,"Jump Starter","Portable car battery jump starter",99.95,Automotive
+84,"Tire Gauge","Digital tire pressure gauge",22.95,Automotive
+85,"Car Vacuum","Handheld car vacuum cleaner",59.95,Automotive
+86,"Ice Scraper","Snow and ice scraper for windshield",9.95,Automotive
+87,"Floor Mats","All-weather car floor mats set",44.95,Automotive
+88,"Steering Wheel Cover","Leather steering wheel cover",24.95,Automotive
+89,"Sunshade","Windshield sunshade for UV protection",19.95,Automotive
+90,"Car Wash Kit","Complete car washing kit with soap",29.95,Automotive
+91,"Pet Bed","Comfortable pet bed for dogs/cats",49.95,Pets
+92,"Pet Toy","Interactive puzzle toy for pets",24.95,Pets
+93,"Pet Carrier","Airline-approved pet travel carrier",79.95,Pets
+94,"Pet Food Bowl","Stainless steel food and water bowls",19.95,Pets
+95,"Pet Leash","Retractable pet leash, 16ft",29.95,Pets
+96,"Pet Shampoo","Gentle pet shampoo for sensitive skin",16.95,Pets
+97,"Cat Litter","Clumping cat litter, unscented",24.95,Pets
+98,"Dog Treats","Natural dog treats, variety pack",19.95,Pets
+99,"Pet Gate","Adjustable pet gate for doorways",54.95,Pets
+100,"Pet Brush","Grooming brush for long-haired pets",22.95,Pets
+101,"Vitamin C","Vitamin C supplement, 1000mg tablets",19.95,Health
+102,"Protein Powder","Whey protein powder, vanilla flavor",39.95,Health
+103,"Omega-3","Fish oil omega-3 supplement",29.95,Health
+104,"Multivitamin","Daily multivitamin for adults",24.95,Health
+105,"Probiotics","Digestive health probiotic supplement",34.95,Health
+1,"Another Duplicate Widget","Testing duplicate handling again",21.99,Widgets
+106,"Hand Sanitizer","70% alcohol hand sanitizer gel",9.95,Health
+107,"Face Masks","Disposable face masks, pack of 50",19.95,Health
+108,"Thermometer","Digital thermometer for body temperature",24.95,Health
+109,"Blood Pressure Monitor","Automatic blood pressure cuff",79.95,Health
+110,"Chinese Characters","产品测试 with 中文字符 🇨🇳",55.00,International
+111,,"Another empty name test",,25.50,Mystery
+112,"Emoji Paradise","🌟⭐✨🎊🎉 Full of emojis! 🚀🌈💫",77.77,Fun
+113,"Japanese Characters","日本語テスト with 日本語文字 🇯🇵",66.66,International
+114,"French Characters","Test français avec des caractères français 🇫🇷",77.77,International
+115,"German Characters","Test deutsch mit deutschen Zeichen 🇩🇪",88.88,International
+116,"Italian Characters","Test italiano con caratteri italiani 🇮🇹",99.99,International
+117,"Spanish Characters","Test español con caracteres españoles 🇪🇸",100.00,International
+118,"Russian Characters","Тест русский с русскими символами 🇷🇺",110.00,International
+119,"Portuguese Characters","Test português com caracteres portugueses 🇵🇹",120.00,International
+120,"Dutch Characters","Test Nederlands met Nederlandse tekens 🇳🇱",130.00,International
+121,"Turkish Characters","Türkçe testi Türkçe karakterlerle 🇹🇷",140.00,International
+122,"Arabic Characters","تحقق من العربية بالأحرف العربية 🇸🇦",150.00,International
