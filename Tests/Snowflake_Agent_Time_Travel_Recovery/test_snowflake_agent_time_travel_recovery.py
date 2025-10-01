@@ -143,24 +143,40 @@ def validate_test(model_result, fixtures=None):
             schema_name = resource_data.get("schema")
 
             # Step 2: Validate production database setup with Time Travel configuration
-            # Check for tables with proper data retention settings
-            cursor.execute(f"""
-                SELECT table_name, data_retention_time_in_days
-                FROM {database_name}.information_schema.tables
-                WHERE table_schema = '{schema_name}'
-                AND table_type = 'BASE TABLE'
-                AND data_retention_time_in_days > 0
-            """)
-            time_travel_tables = cursor.fetchall()
+            # Check for tables with proper data retention settings using SHOW TABLES
+            cursor.execute(f"SHOW TABLES IN SCHEMA {database_name}.{schema_name}")
+            all_tables = cursor.fetchall()
+
+            # Get column names from cursor description
+            table_columns = [desc[0].lower() for desc in cursor.description] if cursor.description else []
+
+            # Filter tables that have data retention > 0
+            time_travel_tables = []
+            for table in all_tables:
+                try:
+                    # Create a dict mapping column names to values
+                    table_dict = dict(zip(table_columns, table)) if table_columns else {}
+
+                    # Get retention_time with proper type handling
+                    retention_time = table_dict.get('retention_time', table[10] if len(table) > 10 else 0)
+
+                    # Convert to int for comparison
+                    retention_int = int(retention_time) if retention_time is not None else 0
+
+                    if retention_int > 0:
+                        time_travel_tables.append(table)
+                except (ValueError, TypeError, IndexError) as e:
+                    # Skip tables where we can't parse retention_time
+                    continue
 
             cursor.execute(f"SELECT COUNT(*) FROM {database_name}.{schema_name}.CUSTOMERS")
-            customer_count = cursor.fetchone()[0]
+            customer_count = int(cursor.fetchone()[0])
 
-            cursor.execute(f"SELECT COUNT(*) FROM {database_name}.{schema_name}.ORDERS")  
-            order_count = cursor.fetchone()[0]
+            cursor.execute(f"SELECT COUNT(*) FROM {database_name}.{schema_name}.ORDERS")
+            order_count = int(cursor.fetchone()[0])
 
             cursor.execute(f"SELECT COUNT(*) FROM {database_name}.{schema_name}.AUDIT_LOG")
-            audit_count = cursor.fetchone()[0]
+            audit_count = int(cursor.fetchone()[0])
 
             if len(time_travel_tables) >= 2 and customer_count >= 3 and order_count >= 5 and audit_count >= 10:
                 test_steps[1]["status"] = "passed"
@@ -205,27 +221,40 @@ def validate_test(model_result, fixtures=None):
             # Step 4: Test Time Travel query capability
             # Try to execute a basic Time Travel query to verify functionality
             try:
-                # Get a timestamp from a few minutes ago for testing
-                cursor.execute("SELECT DATEADD('minute', -5, CURRENT_TIMESTAMP())")
-                past_timestamp = cursor.fetchone()[0]
+                # Instead of looking back in time (which fails for newly created tables),
+                # verify that the tables support time travel by checking retention settings
+                cursor.execute(f"SHOW TABLES IN SCHEMA {database_name}.{schema_name}")
+                tables_with_retention = cursor.fetchall()
 
-                # Test AT clause functionality
-                cursor.execute(f"""
-                    SELECT COUNT(*) 
-                    FROM {database_name}.{schema_name}.CUSTOMERS AT(TIMESTAMP => '{past_timestamp}')
-                """)
-                past_customer_count = cursor.fetchone()[0]
+                # Get column names from cursor description
+                show_tables_columns = [desc[0].lower() for desc in cursor.description] if cursor.description else []
 
-                # Test BEFORE clause functionality  
+                # Count tables that have time travel enabled (retention > 0)
+                time_travel_enabled_count = 0
+                for table_row in tables_with_retention:
+                    try:
+                        table_dict = dict(zip(show_tables_columns, table_row)) if show_tables_columns else {}
+                        retention_time = table_dict.get('retention_time', 0)
+                        retention_int = int(retention_time) if retention_time is not None else 0
+                        if retention_int > 0:
+                            time_travel_enabled_count += 1
+                    except (ValueError, TypeError):
+                        continue
+
+                # Test BEFORE clause functionality (works for current timestamp)
                 cursor.execute(f"""
                     SELECT COUNT(*)
                     FROM {database_name}.{schema_name}.ORDERS BEFORE(TIMESTAMP => CURRENT_TIMESTAMP())
                 """)
-                current_order_count = cursor.fetchone()[0]
+                current_order_count = int(cursor.fetchone()[0])
 
-                # Check if we can query historical data (even if counts are the same)
-                test_steps[3]["status"] = "passed"
-                test_steps[3]["Result_Message"] = f"✅ Time Travel queries working: AT clause returned {past_customer_count} customers, BEFORE clause returned {current_order_count} orders"
+                # Check if we can execute time travel queries
+                if time_travel_enabled_count > 0 and current_order_count >= 0:
+                    test_steps[3]["status"] = "passed"
+                    test_steps[3]["Result_Message"] = f"✅ Time Travel capability verified: {time_travel_enabled_count} tables with retention enabled, BEFORE clause returned {current_order_count} orders"
+                else:
+                    test_steps[3]["status"] = "failed"
+                    test_steps[3]["Result_Message"] = f"❌ Time Travel not properly configured: {time_travel_enabled_count} tables with retention"
 
             except Exception as e:
                 test_steps[3]["status"] = "failed"
@@ -235,7 +264,7 @@ def validate_test(model_result, fixtures=None):
             # Check for proper audit trail and recovery tracking
             try:
                 cursor.execute(f"SELECT COUNT(*) FROM {database_name}.{schema_name}.AUDIT_LOG")
-                total_audit_records = cursor.fetchone()[0]
+                total_audit_records = int(cursor.fetchone()[0])
 
                 cursor.execute(f"""
                     SELECT DISTINCT TABLE_NAME 
@@ -245,21 +274,22 @@ def validate_test(model_result, fixtures=None):
 
                 # Check for business metrics or validation views
                 cursor.execute(f"""
-                    SELECT view_name
+                    SELECT table_name
                     FROM {database_name}.information_schema.views
                     WHERE table_schema = '{schema_name}'
-                    AND (UPPER(view_name) LIKE '%METRIC%' OR UPPER(view_name) LIKE '%BUSINESS%' OR UPPER(view_name) LIKE '%VALIDATION%')
+                    AND (UPPER(table_name) LIKE '%METRIC%' OR UPPER(table_name) LIKE '%BUSINESS%' OR UPPER(table_name) LIKE '%VALIDATION%')
                 """)
                 validation_views = cursor.fetchall()
 
                 # Check for checkpoint or recovery tracking capabilities
                 cursor.execute(f"""
-                    SELECT COUNT(*) 
+                    SELECT COUNT(*)
                     FROM {database_name}.information_schema.tables
                     WHERE table_schema = '{schema_name}'
                     AND UPPER(table_name) LIKE '%CHECKPOINT%'
                 """)
-                checkpoint_tables = cursor.fetchone()[0]
+                checkpoint_tables_raw = cursor.fetchone()[0]
+                checkpoint_tables = int(checkpoint_tables_raw) if checkpoint_tables_raw is not None else 0
 
                 if total_audit_records >= 10 and len(audited_tables) >= 2 and (validation_views or checkpoint_tables > 0):
                     test_steps[4]["status"] = "passed"

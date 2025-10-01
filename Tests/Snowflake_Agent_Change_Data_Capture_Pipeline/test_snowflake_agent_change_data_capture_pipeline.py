@@ -172,18 +172,17 @@ def validate_test(model_result, fixtures=None):
                 test_steps[1]["Result_Message"] = f"❌ Insufficient source setup: {systems_with_data} systems, {total_source_records} records"
 
             # Step 3: Check for comprehensive stream architecture
-            cursor.execute(f"""
-                SELECT stream_name, table_name, stream_type, mode
-                FROM {database_name}.information_schema.streams
-                WHERE stream_schema = '{schema_name}'
-            """)
+            cursor.execute(f"SHOW STREAMS IN SCHEMA {database_name}.{schema_name}")
             streams = cursor.fetchall()
 
             # Check for streams on source tables
             source_streams = []
             for stream in streams:
+                # SHOW STREAMS returns: name, database_name, schema_name, table_name, ...
+                stream_name = stream[0] if len(stream) > 0 else ""
+                table_name = stream[3] if len(stream) > 3 else ""
                 for source_table in source_tables:
-                    if source_table in stream[1].upper():
+                    if source_table in table_name.upper():
                         source_streams.append(stream)
                         break
 
@@ -195,18 +194,15 @@ def validate_test(model_result, fixtures=None):
                 test_steps[2]["Result_Message"] = f"❌ Insufficient stream coverage: {len(source_streams)} streams found"
 
             # Step 4: Validate task-based processing pipeline
-            cursor.execute(f"""
-                SELECT task_name, schedule, warehouse, state, task_definition
-                FROM {database_name}.information_schema.tasks
-                WHERE task_schema = '{schema_name}'
-            """)
+            cursor.execute(f"SHOW TASKS IN SCHEMA {database_name}.{schema_name}")
             tasks = cursor.fetchall()
 
             # Look for different types of CDC tasks
             cdc_task_types = []
             for task in tasks:
-                task_name = task[0].upper()
-                task_def = task[4].upper() if task[4] else ""
+                # SHOW TASKS returns: name, database_name, schema_name, warehouse, schedule, state, definition...
+                task_name = task[0].upper() if len(task) > 0 else ""
+                task_def = task[6].upper() if len(task) > 6 and task[6] else ""
                 
                 if any(keyword in task_name for keyword in ['CUSTOMER', 'CRM']):
                     cdc_task_types.append('CUSTOMER_SYNC')
@@ -276,22 +272,46 @@ def validate_test(model_result, fixtures=None):
                     pass
 
             # Check for monitoring procedures or functions
-            cursor.execute(f"""
-                SELECT COUNT(*)
-                FROM {database_name}.information_schema.procedures
-                WHERE procedure_schema = '{schema_name}'
-                AND (UPPER(procedure_name) LIKE '%MONITOR%' OR UPPER(procedure_name) LIKE '%QUALITY%' OR UPPER(procedure_name) LIKE '%ERROR%')
-            """)
-            monitoring_procedures = cursor.fetchone()[0]
+            monitoring_procedures = 0
+            try:
+                cursor.execute(f"""
+                    SELECT COUNT(*)
+                    FROM {database_name}.information_schema.procedures
+                    WHERE procedure_schema = '{schema_name}'
+                    AND (UPPER(procedure_name) LIKE '%MONITOR%' OR UPPER(procedure_name) LIKE '%QUALITY%' OR UPPER(procedure_name) LIKE '%ERROR%')
+                """)
+                monitoring_procedures = cursor.fetchone()[0]
+            except Exception:
+                # Try alternative approach using SHOW PROCEDURES
+                try:
+                    cursor.execute(f"SHOW PROCEDURES IN SCHEMA {database_name}.{schema_name}")
+                    procedures = cursor.fetchall()
+                    monitoring_procedures = sum(1 for proc in procedures 
+                                             if any(keyword in proc[0].upper() 
+                                                   for keyword in ['MONITOR', 'QUALITY', 'ERROR']))
+                except Exception:
+                    monitoring_procedures = 0
 
             # Check for data quality views or functions
-            cursor.execute(f"""
-                SELECT COUNT(*)
-                FROM {database_name}.information_schema.views
-                WHERE table_schema = '{schema_name}'
-                AND (UPPER(view_name) LIKE '%QUALITY%' OR UPPER(view_name) LIKE '%MONITOR%' OR UPPER(view_name) LIKE '%HEALTH%')
-            """)
-            monitoring_views = cursor.fetchone()[0]
+            monitoring_views = 0
+            try:
+                cursor.execute(f"""
+                    SELECT COUNT(*)
+                    FROM {database_name}.information_schema.views
+                    WHERE table_schema = '{schema_name}'
+                    AND (UPPER(view_name) LIKE '%QUALITY%' OR UPPER(view_name) LIKE '%MONITOR%' OR UPPER(view_name) LIKE '%HEALTH%')
+                """)
+                monitoring_views = cursor.fetchone()[0]
+            except Exception:
+                # Try alternative approach using SHOW VIEWS
+                try:
+                    cursor.execute(f"SHOW VIEWS IN SCHEMA {database_name}.{schema_name}")
+                    views = cursor.fetchall()
+                    monitoring_views = sum(1 for view in views 
+                                         if any(keyword in view[0].upper() 
+                                               for keyword in ['QUALITY', 'MONITOR', 'HEALTH']))
+                except Exception:
+                    monitoring_views = 0
 
             total_monitoring_features = monitoring_capabilities + monitoring_procedures + monitoring_views
 

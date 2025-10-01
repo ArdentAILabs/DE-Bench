@@ -171,13 +171,25 @@ def validate_test(model_result, fixtures=None):
                     clone_databases.append(db_name)
 
             # Also check for clone-related objects or procedures
-            cursor.execute(f"""
-                SELECT procedure_name
-                FROM {database_name}.information_schema.procedures
-                WHERE procedure_schema = '{schema_name}'
-                AND (UPPER(procedure_name) LIKE '%CLONE%' OR UPPER(procedure_name) LIKE '%REFRESH%')
-            """)
-            clone_procedures = cursor.fetchall()
+            clone_procedures = []
+            try:
+                cursor.execute(f"""
+                    SELECT procedure_name
+                    FROM {database_name}.information_schema.procedures
+                    WHERE procedure_schema = '{schema_name}'
+                    AND (UPPER(procedure_name) LIKE '%CLONE%' OR UPPER(procedure_name) LIKE '%REFRESH%')
+                """)
+                clone_procedures = cursor.fetchall()
+            except Exception:
+                # Fallback to SHOW PROCEDURES
+                try:
+                    cursor.execute(f"SHOW PROCEDURES IN SCHEMA {database_name}.{schema_name}")
+                    all_procedures = cursor.fetchall()
+                    clone_procedures = [proc for proc in all_procedures 
+                                      if any(keyword in proc[0].upper() 
+                                            for keyword in ['CLONE', 'REFRESH'])]
+                except Exception:
+                    clone_procedures = []
 
             if clone_databases or clone_procedures:
                 test_steps[2]["status"] = "passed"
@@ -191,12 +203,21 @@ def validate_test(model_result, fixtures=None):
                 cursor.execute(f"SELECT COUNT(*) FROM {database_name}.{schema_name}.CLONE_METADATA")
                 clone_metadata_count = cursor.fetchone()[0]
                 
-                cursor.execute(f"""
-                    SELECT column_name 
-                    FROM {database_name}.information_schema.columns 
-                    WHERE table_schema = '{schema_name}' AND table_name = 'CLONE_METADATA'
-                """)
-                metadata_columns = [row[0] for row in cursor.fetchall()]
+                try:
+                    cursor.execute(f"""
+                        SELECT column_name 
+                        FROM {database_name}.information_schema.columns 
+                        WHERE table_schema = '{schema_name}' AND table_name = 'CLONE_METADATA'
+                    """)
+                    metadata_columns = [row[0] for row in cursor.fetchall()]
+                except Exception:
+                    # Fallback to DESCRIBE TABLE
+                    try:
+                        cursor.execute(f"DESCRIBE TABLE {database_name}.{schema_name}.CLONE_METADATA")
+                        desc_results = cursor.fetchall()
+                        metadata_columns = [row[0] for row in desc_results]
+                    except Exception:
+                        metadata_columns = []
                 
                 expected_metadata_cols = ['CLONE_NAME', 'SOURCE_DATABASE', 'CREATED_AT']
                 has_metadata_structure = all(col in metadata_columns for col in expected_metadata_cols)
@@ -210,13 +231,25 @@ def validate_test(model_result, fixtures=None):
                     
             except Exception:
                 # If CLONE_METADATA doesn't exist, check for other evidence of isolation testing
-                cursor.execute(f"""
-                    SELECT view_name 
-                    FROM {database_name}.information_schema.views
-                    WHERE table_schema = '{schema_name}'
-                    AND (UPPER(view_name) LIKE '%SUMMARY%' OR UPPER(view_name) LIKE '%BUSINESS%')
-                """)
-                summary_views = cursor.fetchall()
+                summary_views = []
+                try:
+                    cursor.execute(f"""
+                        SELECT view_name 
+                        FROM {database_name}.information_schema.views
+                        WHERE table_schema = '{schema_name}'
+                        AND (UPPER(view_name) LIKE '%SUMMARY%' OR UPPER(view_name) LIKE '%BUSINESS%')
+                    """)
+                    summary_views = cursor.fetchall()
+                except Exception:
+                    # Fallback to SHOW VIEWS
+                    try:
+                        cursor.execute(f"SHOW VIEWS IN SCHEMA {database_name}.{schema_name}")
+                        all_views = cursor.fetchall()
+                        summary_views = [view for view in all_views 
+                                       if any(keyword in view[0].upper() 
+                                             for keyword in ['SUMMARY', 'BUSINESS'])]
+                    except Exception:
+                        summary_views = []
                 
                 if summary_views:
                     test_steps[3]["status"] = "passed"
@@ -227,28 +260,57 @@ def validate_test(model_result, fixtures=None):
 
             # Step 5: Check for clone management implementation
             # Look for stored procedures, functions, or scripts for clone lifecycle management
-            cursor.execute(f"""
-                SELECT COUNT(*)
-                FROM {database_name}.information_schema.procedures
-                WHERE procedure_schema = '{schema_name}'
-            """)
-            total_procedures = cursor.fetchone()[0]
+            total_procedures = 0
+            try:
+                cursor.execute(f"""
+                    SELECT COUNT(*)
+                    FROM {database_name}.information_schema.procedures
+                    WHERE procedure_schema = '{schema_name}'
+                """)
+                total_procedures = cursor.fetchone()[0]
+            except Exception:
+                try:
+                    cursor.execute(f"SHOW PROCEDURES IN SCHEMA {database_name}.{schema_name}")
+                    procedures = cursor.fetchall()
+                    total_procedures = len(procedures)
+                except Exception:
+                    total_procedures = 0
 
-            cursor.execute(f"""
-                SELECT COUNT(*)
-                FROM {database_name}.information_schema.functions
-                WHERE function_schema = '{schema_name}'
-            """)
-            total_functions = cursor.fetchone()[0]
+            total_functions = 0
+            try:
+                cursor.execute(f"""
+                    SELECT COUNT(*)
+                    FROM {database_name}.information_schema.functions
+                    WHERE function_schema = '{schema_name}'
+                """)
+                total_functions = cursor.fetchone()[0]
+            except Exception:
+                try:
+                    cursor.execute(f"SHOW FUNCTIONS IN SCHEMA {database_name}.{schema_name}")
+                    functions = cursor.fetchall()
+                    total_functions = len(functions)
+                except Exception:
+                    total_functions = 0
 
             # Check for tables that might support clone management
-            cursor.execute(f"""
-                SELECT table_name
-                FROM {database_name}.information_schema.tables
-                WHERE table_schema = '{schema_name}'
-                AND (UPPER(table_name) LIKE '%CLONE%' OR UPPER(table_name) LIKE '%METADATA%' OR UPPER(table_name) LIKE '%MANAGEMENT%')
-            """)
-            management_tables = cursor.fetchall()
+            management_tables = []
+            try:
+                cursor.execute(f"""
+                    SELECT table_name
+                    FROM {database_name}.information_schema.tables
+                    WHERE table_schema = '{schema_name}'
+                    AND (UPPER(table_name) LIKE '%CLONE%' OR UPPER(table_name) LIKE '%METADATA%' OR UPPER(table_name) LIKE '%MANAGEMENT%')
+                """)
+                management_tables = cursor.fetchall()
+            except Exception:
+                try:
+                    cursor.execute(f"SHOW TABLES IN SCHEMA {database_name}.{schema_name}")
+                    all_tables = cursor.fetchall()
+                    management_tables = [table for table in all_tables 
+                                       if any(keyword in table[1].upper() 
+                                             for keyword in ['CLONE', 'METADATA', 'MANAGEMENT'])]
+                except Exception:
+                    management_tables = []
 
             if total_procedures > 0 or total_functions > 0 or management_tables:
                 test_steps[4]["status"] = "passed"

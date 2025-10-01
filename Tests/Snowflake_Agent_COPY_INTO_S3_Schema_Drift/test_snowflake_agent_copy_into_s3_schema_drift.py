@@ -182,19 +182,38 @@ def validate_test(model_result, fixtures=None):
 
             # Step 3: Check for COPY INTO configuration with MATCH_BY_COLUMN_NAME
             # This is checked by looking for evidence of proper file format and stage setup
-            cursor.execute(f"""
-                SELECT file_format_name, type, format_options
-                FROM {database_name}.information_schema.file_formats
-                WHERE file_format_schema = '{schema_name}'
-            """)
-            file_formats = cursor.fetchall()
+            file_formats = []
+            stages = []
+            
+            try:
+                cursor.execute(f"""
+                    SELECT file_format_name, file_format_type, format_options
+                    FROM {database_name}.information_schema.file_formats
+                    WHERE file_format_schema = '{schema_name}'
+                """)
+                file_formats = cursor.fetchall()
+            except Exception:
+                # Fallback to SHOW FILE FORMATS
+                try:
+                    cursor.execute(f"SHOW FILE FORMATS IN SCHEMA {database_name}.{schema_name}")
+                    file_formats = cursor.fetchall()
+                except Exception:
+                    file_formats = []
 
-            cursor.execute(f"""
-                SELECT stage_name, stage_type, stage_url
-                FROM {database_name}.information_schema.stages  
-                WHERE stage_schema = '{schema_name}'
-            """)
-            stages = cursor.fetchall()
+            try:
+                cursor.execute(f"""
+                    SELECT stage_name, stage_type, stage_url
+                    FROM {database_name}.information_schema.stages  
+                    WHERE stage_schema = '{schema_name}'
+                """)
+                stages = cursor.fetchall()
+            except Exception:
+                # Fallback to SHOW STAGES
+                try:
+                    cursor.execute(f"SHOW STAGES IN SCHEMA {database_name}.{schema_name}")
+                    stages = cursor.fetchall()
+                except Exception:
+                    stages = []
 
             if file_formats and stages:
                 test_steps[2]["status"] = "passed"
@@ -204,21 +223,43 @@ def validate_test(model_result, fixtures=None):
                 test_steps[2]["Result_Message"] = "❌ Missing file formats or stages for COPY INTO operation"
 
             # Step 4: Test schema evolution handling by checking for flexible column handling
-            cursor.execute(f"""
-                SELECT COUNT(*) as view_count
-                FROM {database_name}.information_schema.views
-                WHERE table_schema = '{schema_name}' 
-                AND (table_name LIKE '%UNIFIED%' OR table_name LIKE '%EVOLUTION%' OR table_name LIKE '%FLEXIBLE%')
-            """)
-            evolution_views = cursor.fetchone()[0]
+            evolution_views = 0
+            try:
+                cursor.execute(f"""
+                    SELECT COUNT(*) as view_count
+                    FROM {database_name}.information_schema.views
+                    WHERE table_schema = '{schema_name}' 
+                    AND (table_name LIKE '%UNIFIED%' OR table_name LIKE '%EVOLUTION%' OR table_name LIKE '%FLEXIBLE%')
+                """)
+                evolution_views = cursor.fetchone()[0]
+            except Exception:
+                # Fallback to SHOW VIEWS
+                try:
+                    cursor.execute(f"SHOW VIEWS IN SCHEMA {database_name}.{schema_name}")
+                    views = cursor.fetchall()
+                    evolution_views = sum(1 for view in views 
+                                        if any(keyword in view[0].upper() 
+                                              for keyword in ['UNIFIED', 'EVOLUTION', 'FLEXIBLE']))
+                except Exception:
+                    evolution_views = 0
 
             # Also check for procedures or functions that might handle schema evolution
-            cursor.execute(f"""
-                SELECT COUNT(*) 
-                FROM {database_name}.information_schema.procedures
-                WHERE procedure_schema = '{schema_name}'
-            """)
-            procedures_count = cursor.fetchone()[0]
+            procedures_count = 0
+            try:
+                cursor.execute(f"""
+                    SELECT COUNT(*) 
+                    FROM {database_name}.information_schema.procedures
+                    WHERE procedure_schema = '{schema_name}'
+                """)
+                procedures_count = cursor.fetchone()[0]
+            except Exception:
+                # Fallback to SHOW PROCEDURES
+                try:
+                    cursor.execute(f"SHOW PROCEDURES IN SCHEMA {database_name}.{schema_name}")
+                    procedures = cursor.fetchall()
+                    procedures_count = len(procedures)
+                except Exception:
+                    procedures_count = 0
 
             if evolution_views > 0 or procedures_count > 0:
                 test_steps[3]["status"] = "passed"
