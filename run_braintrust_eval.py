@@ -592,6 +592,7 @@ Examples:
   python run_braintrust_eval.py --filter "MongoDB_Agent_Add_Record" OpenAI_Codex  # Single test with Codex
   python run_braintrust_eval.py --num-trials 3 Ardent    # Run all tests 3 times in Ardent mode
   python run_braintrust_eval.py -n 5 --filter ".*Hello.*" Claude_Code  # Run Hello tests 5 times with Claude
+  python run_braintrust_eval.py --full-concurrency Ardent  # Run all tests with max concurrency = number of tests
         """,
     )
 
@@ -630,6 +631,12 @@ Examples:
         help="Number of trials to run for each test (default: 1)",
     )
 
+    parser.add_argument(
+        "--full-concurrency",
+        action="store_true",
+        help="Use the total number of tests as max_concurrency instead of default 20",
+    )
+
     return parser.parse_args()
 
 
@@ -640,6 +647,7 @@ def run_multi_test_evaluation(
     verbose: bool = False,
     skip_model_run: bool = False,
     trial_count: int = 1,
+    full_concurrency: bool = False,
 ) -> Dict[str, Any]:
     """Run multiple tests as Braintrust evaluation for specified modes"""
     global active_session_fixtures, active_session_data, active_tests_with_fixtures
@@ -775,6 +783,12 @@ def run_multi_test_evaluation(
                 f"🔍 Running Braintrust.Eval for {mode} mode with {len(mode_samples)} samples"
             )
 
+            # Calculate max_concurrency based on flag
+            max_concurrency_value = len(mode_samples) if full_concurrency else 20
+            print(
+                f"🔧 Using max_concurrency={max_concurrency_value} {'(due to full-concurrency flag)' if full_concurrency else ''}"
+            )
+
             # Run Braintrust.Eval for this mode with all tests
             result = braintrust.Eval(
                 name="DE-Bench",
@@ -790,8 +804,7 @@ def run_multi_test_evaluation(
                     "num_tests_excluded": len(all_valid_tests) - len(test_names),
                     "all_valid_tests": all_valid_tests,
                 },
-                # TODO: Make this configurable
-                max_concurrency=20,
+                max_concurrency=max_concurrency_value,
                 trial_count=trial_count,
             )
 
@@ -844,6 +857,7 @@ if __name__ == "__main__":
             verbose=args.verbose,
             skip_model_run=args.skip_model_run,
             trial_count=args.num_trials,
+            full_concurrency=args.full_concurrency,
         )
 
         if results:
