@@ -39,9 +39,11 @@ jobs:
             astronomer.io:
               domain: astronomer.io
               token: ${{ secrets.ASTRONOMER_API_TOKEN }}
+              workspace: ${{ secrets.ASTRONOMER_WORKSPACE_ID }}
           EOF
         env:
           ASTRONOMER_API_TOKEN: ${{ secrets.ASTRONOMER_API_TOKEN }}
+          ASTRONOMER_WORKSPACE_ID: ${{ secrets.ASTRONOMER_WORKSPACE_ID }}
       
       - name: Set Airflow credentials
         run: |
@@ -53,6 +55,7 @@ jobs:
         run: |
           python scripts/manage_astro_runners.py --recreate-old -y
         env:
+          ASTRO_WORKSPACE_ID: ${{ secrets.ASTRONOMER_WORKSPACE_ID }}
           AIRFLOW_USERNAME: ${{ secrets.AIRFLOW_USERNAME }}
           AIRFLOW_PASSWORD: ${{ secrets.AIRFLOW_PASSWORD }}
           SLACK_APP_URL: ${{ secrets.SLACK_APP_URL }}
