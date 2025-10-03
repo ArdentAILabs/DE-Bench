@@ -37,22 +37,26 @@ jobs:
         run: |
           curl -sSL https://install.astronomer.io | sudo bash -s
       
-      - name: Authenticate with Astronomer
+      - name: Set Airflow / credentials
         run: |
-          # Login using API token
-          echo "${{ secrets.ASTRONOMER_API_TOKEN }}" | astro login --token-login
-          
+          echo "AIRFLOW_USERNAME=${{ secrets.AIRFLOW_USERNAME }}" >> $GITHUB_ENV
+          echo "AIRFLOW_PASSWORD=${{ secrets.AIRFLOW_PASSWORD }}" >> $GITHUB_ENV
+          echo "SLACK_APP_URL=${{ secrets.SLACK_APP_URL }}" >> $GITHUB_ENV
+          echo "ASTRO_API_TOKEN=${{ secrets.ASTRO_API_TOKEN }}" >> $GITHUB_ENV
+          echo "ASTRO_WORKSPACE_ID=${{ secrets.ASTRO_WORKSPACE_ID }}" >> $GITHUB_ENV
+      
+      - name: Switch to the correct workspace
+        run: |
           # Switch to the correct workspace
           astro workspace switch ${{ secrets.ASTRO_WORKSPACE_ID }}
           
           # Verify authentication
           astro workspace list
+        env:
+          ASTRO_WORKSPACE_ID: ${{ secrets.ASTRO_WORKSPACE_ID }}
+          ASTRO_API_TOKEN: ${{ secrets.ASTRO_API_TOKEN }}
       
-      - name: Set Airflow credentials
-        run: |
-          echo "AIRFLOW_USERNAME=${{ secrets.AIRFLOW_USERNAME }}" >> $GITHUB_ENV
-          echo "AIRFLOW_PASSWORD=${{ secrets.AIRFLOW_PASSWORD }}" >> $GITHUB_ENV
-          echo "SLACK_APP_URL=${{ secrets.SLACK_APP_URL }}" >> $GITHUB_ENV
+
       
       - name: Run recreate old runners script
         run: |
