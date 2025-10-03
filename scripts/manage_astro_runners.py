@@ -13,6 +13,7 @@ import argparse
 import os
 import time
 import random
+import functools
 from datetime import datetime, timezone, timedelta
 from typing import List, Dict, Optional
 
@@ -23,6 +24,94 @@ sys.path.insert(0, parent_dir)
 
 # Import parallel utilities
 from utils import map_func
+
+
+def retry_astro_command(max_retries: int = 3):
+    """
+    Retry decorator for astro CLI commands with exponential backoff.
+    Includes automatic workspace switching fallback for workspace context errors.
+
+    Args:
+        max_retries: Maximum number of retries (default 3, so 4 total attempts)
+
+    Returns:
+        Decorated function
+    """
+
+    def decorator(func):
+        @functools.wraps(func)
+        def wrapper(*args, **kwargs):
+            last_exception = None
+
+            for attempt in range(max_retries + 1):
+                try:
+                    return func(*args, **kwargs)
+                except (
+                    subprocess.CalledProcessError,
+                    EnvironmentError,
+                    ValueError,
+                ) as e:
+                    last_exception = e
+                    error_message = str(e).lower()
+
+                    # Check stderr/stdout if it's a CalledProcessError
+                    if hasattr(e, "stderr") and e.stderr:
+                        error_message += " " + str(e.stderr).lower()
+                    if hasattr(e, "stdout") and e.stdout:
+                        error_message += " " + str(e.stdout).lower()
+
+                    # Check for workspace context error and try to fix it
+                    if (
+                        "workspace context not set" in error_message
+                        or "failed to find a valid workspace" in error_message
+                    ):
+                        try:
+                            workspace_id = os.getenv("ASTRO_WORKSPACE_ID")
+                            if workspace_id:
+                                print(
+                                    f"⚠️  Workspace context error detected, switching to workspace {workspace_id}"
+                                )
+                                subprocess.run(
+                                    ["astro", "workspace", "switch", workspace_id],
+                                    capture_output=True,
+                                    text=True,
+                                    check=True,
+                                )
+                                print(
+                                    f"✅ Successfully switched to workspace {workspace_id}, retrying command..."
+                                )
+                                # Try the command again immediately after switching workspace
+                                try:
+                                    return func(*args, **kwargs)
+                                except Exception:
+                                    # If it still fails, continue with normal retry logic
+                                    pass
+                            else:
+                                print(
+                                    "⚠️  Workspace context error detected but ASTRO_WORKSPACE_ID not found"
+                                )
+                        except Exception as workspace_error:
+                            print(f"⚠️  Failed to switch workspace: {workspace_error}")
+
+                    if attempt == max_retries:
+                        print(
+                            f"❌ {func.__name__} failed after {max_retries + 1} attempts: {e}"
+                        )
+                        raise
+
+                    wait_time = 2**attempt
+                    print(
+                        f"⚠️  {func.__name__} failed (attempt {attempt + 1}/{max_retries + 1}): {e}"
+                    )
+                    print(f"🔄 Retrying {func.__name__} in {wait_time} seconds...")
+                    time.sleep(wait_time)
+
+            if last_exception:
+                raise last_exception
+
+        return wrapper
+
+    return decorator
 
 
 class AstroDeploymentManager:
@@ -46,10 +135,11 @@ class AstroDeploymentManager:
             "scheduler_size": "small",
         }
 
+    @retry_astro_command(max_retries=3)
     def run_astro_command(
         self, command: List[str], exit_on_error: bool = True
     ) -> subprocess.CompletedProcess:
-        """Run an astro CLI command and return the result."""
+        """Run an astro CLI command and return the result with automatic retry and workspace switching."""
         try:
             result = subprocess.run(command, capture_output=True, text=True, check=True)
             return result
@@ -59,8 +149,8 @@ class AstroDeploymentManager:
                 print(f"Error output: {e.stderr}")
                 sys.exit(1)
             else:
-                # Return the failed result for handling by caller
-                return e
+                # Re-raise to let the decorator handle retries
+                raise
 
     def list_deployments(self) -> List[Dict]:
         """List all deployments in the workspace."""
