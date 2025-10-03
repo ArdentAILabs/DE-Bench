@@ -27,7 +27,7 @@ from utils import map_func
 # Note: set_up_model_configs and cleanup_model_artifacts are now used inside run_de_bench_task
 
 # Load environment variables
-load_dotenv()
+load_dotenv(override=True)
 
 # Global cleanup flag to prevent double cleanup
 cleanup_already_run = False
@@ -36,12 +36,13 @@ active_session_data = {}
 active_tests_with_fixtures = []
 
 
+@traced(name="teardown_test_fixtures")
 def _teardown_test_fixtures(test_name, fixtures, test_resources=None):
     """Helper function to clean up test resources for a specific task."""
     try:
         if fixtures:
             print(
-                f"🧹 Tearing down {len(fixtures)} fixtures for {test_name} (fixtures: {', '.join([f'"{f.get_resource_type()}"' for f in fixtures])})"
+                f"🧹 Tearing down {len(fixtures)} fixtures for {test_name} (fixtures: {', '.join([f.get_resource_type() for f in fixtures])})"
             )
 
             for fixture in reversed(fixtures):
@@ -261,7 +262,11 @@ def run_de_bench_task(test_input):
 
 def cleanup_handler() -> None:
     """Cleanup function that runs on exit or interrupt - preserves existing logic"""
-    global cleanup_already_run, active_session_fixtures, active_session_data, active_tests_with_fixtures
+    global \
+        cleanup_already_run, \
+        active_session_fixtures, \
+        active_session_data, \
+        active_tests_with_fixtures
 
     if cleanup_already_run:
         print("🔄 Cleanup already completed, skipping...")
@@ -361,8 +366,11 @@ def teardown_all_fixtures(args: TeardownAllFixturesArgs) -> None:
                 print(f"🧹 Tearing down fixtures for test: {test.test_name}")
                 for fixture in reversed(test.fixtures):
                     try:
-                        fixture.teardown()
-                        print(f"...✅ Tore down fixture: {fixture.get_resource_type()}")
+                        if hasattr(fixture, "test_teardown"):
+                            fixture.test_teardown()
+                            print(
+                                f"...✅ Tore down fixture: {fixture.get_resource_type()}"
+                            )
                     except Exception as e:
                         print(f"⚠️ Error tearing down fixture for {test.test_name}: {e}")
                         continue
@@ -376,7 +384,9 @@ def signal_handler(signum: int, frame: Any) -> None:
     sys.exit(0)
 
 
-def discover_available_tests(filter_patterns: Optional[List[str]] = None) -> List[str]:
+def discover_available_tests(
+    filter_patterns: Optional[List[str]] = None,
+) -> Dict[str, List[str]]:
     """
     Dynamically discover available tests for Braintrust evaluation with optional filtering.
 
@@ -388,14 +398,14 @@ def discover_available_tests(filter_patterns: Optional[List[str]] = None) -> Lis
         filter_patterns: List of regex patterns to filter test names
 
     Returns:
-        List of test names that match the filter patterns (if any)
+        Dict with 'all_tests' (all discovered valid tests) and 'filtered_tests' (tests matching filter patterns)
     """
     available_tests = []
     tests_dir = "Tests"
 
     if not os.path.exists(tests_dir):
         print(f"⚠️  Tests directory '{tests_dir}' not found")
-        return []
+        return {"all_tests": [], "filtered_tests": []}
 
     # Scan all directories in Tests/
     for item in os.listdir(tests_dir):
@@ -420,9 +430,12 @@ def discover_available_tests(filter_patterns: Optional[List[str]] = None) -> Lis
     available_tests.sort()
 
     # Apply filters if provided
+    filtered_tests = available_tests.copy()  # Default to all tests
     if filter_patterns:
         filtered_tests = []
         for test_name in available_tests:
+            if isinstance(filter_patterns, str):
+                filter_patterns = [filter_patterns]
             for pattern in filter_patterns:
                 try:
                     if re.search(pattern, test_name, re.IGNORECASE):
@@ -431,9 +444,8 @@ def discover_available_tests(filter_patterns: Optional[List[str]] = None) -> Lis
                 except re.error as e:
                     print(f"⚠️  Invalid regex pattern '{pattern}': {e}")
                     continue
-        return filtered_tests
 
-    return available_tests
+    return {"all_tests": available_tests, "filtered_tests": filtered_tests}
 
 
 def _is_valid_new_pattern_test(test_name: str) -> bool:
@@ -578,6 +590,9 @@ Examples:
   python run_braintrust_eval.py --filter ".*Hello.*"     # Run only Hello World tests
   python run_braintrust_eval.py --filter "MongoDB.*" "MySQL.*" Ardent  # MongoDB & MySQL in Ardent mode
   python run_braintrust_eval.py --filter "MongoDB_Agent_Add_Record" OpenAI_Codex  # Single test with Codex
+  python run_braintrust_eval.py --num-trials 3 Ardent    # Run all tests 3 times in Ardent mode
+  python run_braintrust_eval.py -n 5 --filter ".*Hello.*" Claude_Code  # Run Hello tests 5 times with Claude
+  python run_braintrust_eval.py --full-concurrency Ardent  # Run all tests with max concurrency = number of tests
         """,
     )
 
@@ -608,14 +623,31 @@ Examples:
         help="Skip model run for all tests, useful for debugging",
     )
 
+    parser.add_argument(
+        "--num-trials",
+        "-n",
+        type=int,
+        default=1,
+        help="Number of trials to run for each test (default: 1)",
+    )
+
+    parser.add_argument(
+        "--full-concurrency",
+        action="store_true",
+        help="Use the total number of tests as max_concurrency instead of default 20",
+    )
+
     return parser.parse_args()
 
 
 def run_multi_test_evaluation(
     modes: List[str] = ["Ardent"],
     test_names: Optional[List[str]] = None,
+    all_valid_tests: Optional[List[str]] = None,
     verbose: bool = False,
     skip_model_run: bool = False,
+    trial_count: int = 1,
+    full_concurrency: bool = False,
 ) -> Dict[str, Any]:
     """Run multiple tests as Braintrust evaluation for specified modes"""
     global active_session_fixtures, active_session_data, active_tests_with_fixtures
@@ -630,10 +662,18 @@ def run_multi_test_evaluation(
 
     # Discover available tests if not specified
     if test_names is None:
-        test_names = discover_available_tests()
+        test_discovery = discover_available_tests()
+        test_names = test_discovery["filtered_tests"]
+        if all_valid_tests is None:
+            all_valid_tests = test_discovery["all_tests"]
+
+    # Ensure all_valid_tests is set (fallback if not provided)
+    if all_valid_tests is None:
+        all_valid_tests = test_names
 
     if verbose:
-        print(f"🔍 Available tests discovered: {test_names}")
+        print(f"🔍 All valid tests discovered: {all_valid_tests}")
+        print(f"🔍 Tests to run (after filtering): {test_names}")
 
     if not test_names:
         print("❌ No tests found matching the filter criteria")
@@ -743,6 +783,12 @@ def run_multi_test_evaluation(
                 f"🔍 Running Braintrust.Eval for {mode} mode with {len(mode_samples)} samples"
             )
 
+            # Calculate max_concurrency based on flag
+            max_concurrency_value = len(mode_samples) if full_concurrency else 20
+            print(
+                f"🔧 Using max_concurrency={max_concurrency_value} {'(due to full-concurrency flag)' if full_concurrency else ''}"
+            )
+
             # Run Braintrust.Eval for this mode with all tests
             result = braintrust.Eval(
                 name="DE-Bench",
@@ -755,10 +801,11 @@ def run_multi_test_evaluation(
                     "test_types": test_names,
                     "timestamp": str(time.time()),
                     "num_tests_included": len(mode_samples),
-                    "num_tests_excluded": len(test_names) - len(mode_samples),
+                    "num_tests_excluded": len(all_valid_tests) - len(test_names),
+                    "all_valid_tests": all_valid_tests,
                 },
-                # TODO: Make this configurable
-                max_concurrency=20,
+                max_concurrency=max_concurrency_value,
+                trial_count=trial_count,
             )
 
             results[mode] = result
@@ -784,25 +831,33 @@ if __name__ == "__main__":
     args = parse_arguments()
 
     if args.verbose:
-        print(f"🔧 Parsed arguments:")
+        print("🔧 Parsed arguments:")
         print(f"   Modes: {args.modes}")
         print(f"   Filter patterns: {args.filter_patterns}")
         print(f"   Verbose: {args.verbose}")
+        print(f"   Number of trials: {args.num_trials}")
 
     try:
         # Discover tests with filtering
         if args.filter_patterns:
             print(f"🔍 Filtering tests with patterns: {args.filter_patterns}")
-            filtered_tests = discover_available_tests(args.filter_patterns)
+            test_discovery = discover_available_tests(args.filter_patterns)
+            filtered_tests = test_discovery["filtered_tests"]
+            all_tests = test_discovery["all_tests"]
         else:
-            filtered_tests = None
+            test_discovery = discover_available_tests()
+            filtered_tests = test_discovery["filtered_tests"]
+            all_tests = test_discovery["all_tests"]
 
         # Run evaluation on filtered tests
         results = run_multi_test_evaluation(
             modes=args.modes,
             test_names=filtered_tests,
+            all_valid_tests=all_tests,
             verbose=args.verbose,
             skip_model_run=args.skip_model_run,
+            trial_count=args.num_trials,
+            full_concurrency=args.full_concurrency,
         )
 
         if results:

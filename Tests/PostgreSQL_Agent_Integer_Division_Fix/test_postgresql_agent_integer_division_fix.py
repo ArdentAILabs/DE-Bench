@@ -192,7 +192,9 @@ def validate_test(model_result, fixtures=None):
                     new_results = db_cursor.fetchall()
 
                     # Check if we now get proper decimal results
-                    non_zero_results = [row[3] for row in new_results if row[3] > 0]
+                    non_zero_results = [
+                        row[3] for row in new_results if float(row[3]) > 0
+                    ]
                     if (
                         len(non_zero_results) >= 2
                     ):  # At least 2 users should have non-zero averages
@@ -203,12 +205,12 @@ def validate_test(model_result, fixtures=None):
 
                         # Validate specific expected results
                         expected_user_1 = any(
-                            abs(row[3] - 0.5) < 0.01
+                            abs(float(row[3]) - 0.5) < 0.01
                             for row in new_results
                             if row[0] == 1
                         )  # 5/10 = 0.5
                         expected_user_4 = any(
-                            abs(row[3] - 0.75) < 0.01
+                            abs(float(row[3]) - 0.75) < 0.01
                             for row in new_results
                             if row[0] == 4
                         )  # 3/4 = 0.75
@@ -254,7 +256,7 @@ def validate_test(model_result, fixtures=None):
                                 table_results = db_cursor.fetchall()
 
                                 non_zero_in_table = [
-                                    row[3] for row in table_results if row[3] > 0
+                                    row[3] for row in table_results if float(row[3]) > 0
                                 ]
                                 if len(non_zero_in_table) >= 2:
                                     test_steps[1]["status"] = "passed"
@@ -278,7 +280,7 @@ def validate_test(model_result, fixtures=None):
                             cast_results = db_cursor.fetchall()
 
                             non_zero_cast = [
-                                row[1] for row in cast_results if row[1] > 0
+                                row[1] for row in cast_results if float(row[1]) > 0
                             ]
                             if len(non_zero_cast) >= 2:
                                 test_steps[1]["status"] = "passed"

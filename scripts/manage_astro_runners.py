@@ -13,6 +13,7 @@ import argparse
 import os
 import time
 import random
+from datetime import datetime, timezone, timedelta
 from typing import List, Dict, Optional
 
 # Add parent directory to path to import utils
@@ -29,8 +30,13 @@ class AstroDeploymentManager:
     TEST_RUNNER_PATTERN = "de_bench_test_runner"
     TEST_RUNNER_REGEX = re.compile(rf"^{TEST_RUNNER_PATTERN}_(\d+)$")
 
-    def __init__(self, workspace_id: str = "cmcnpmwr80l9601lyycmaep42"):
+    def __init__(
+        self,
+        workspace_id: str = "cmcnpmwr80l9601lyycmaep42",
+        auto_approve: bool = False,
+    ):
         self.workspace_id = workspace_id
+        self.auto_approve = auto_approve
         self.default_config = {
             "runtime_version": "13.1.0",
             "development_mode": "enable",
@@ -193,6 +199,9 @@ class AstroDeploymentManager:
                 if result.stdout:
                     print(f"Output: {result.stdout}")
 
+                # Set required variables immediately after creation (never during wake)
+                self.set_deployment_variables(deployment_name)
+
                 # Immediately hibernate the deployment after creation
                 hibernate_success = self.hibernate_deployment(deployment_name)
                 if not hibernate_success:
@@ -258,6 +267,87 @@ class AstroDeploymentManager:
 
         return False
 
+    def set_deployment_variables(self, deployment_name: str) -> None:
+        """Create/update required Airflow variables on the deployment. Called only on creation."""
+        username = os.getenv("AIRFLOW_USERNAME", "airflow")
+        password = os.getenv("AIRFLOW_PASSWORD", "airflow")
+
+        commands: List[List[str]] = [
+            [
+                "astro",
+                "deployment",
+                "variable",
+                "create",
+                "_AIRFLOW_WWW_USER_CREATE=true",
+                "--deployment-name",
+                deployment_name,
+            ],
+            [
+                "astro",
+                "deployment",
+                "variable",
+                "create",
+                f"_AIRFLOW_WWW_USER_USERNAME={username}",
+                "--deployment-name",
+                deployment_name,
+            ],
+            [
+                "astro",
+                "deployment",
+                "variable",
+                "create",
+                f"_AIRFLOW_WWW_USER_PASSWORD={password}",
+                "--deployment-name",
+                deployment_name,
+                "-s",
+            ],
+            [
+                "astro",
+                "deployment",
+                "variable",
+                "create",
+                "AIRFLOW__API__AUTH_BACKENDS=airflow.api.auth.backend.basic_auth",
+                "--deployment-name",
+                deployment_name,
+            ],
+        ]
+
+        # Optional secret
+        slack_app_url = os.getenv("SLACK_APP_URL")
+        if slack_app_url:
+            commands.append(
+                [
+                    "astro",
+                    "deployment",
+                    "variable",
+                    "create",
+                    f"SLACK_APP_URL={slack_app_url}",
+                    "--deployment-name",
+                    deployment_name,
+                    "-s",
+                ]
+            )
+
+        for cmd in commands:
+            var_name = cmd[4].split("=")[0]
+            try:
+                res = self.run_astro_command(cmd, exit_on_error=False)
+                # If it failed, check if it's due to already existing variable; otherwise show error
+                if isinstance(res, subprocess.CalledProcessError):
+                    err = (res.stderr or "").lower()
+                    if "already exists" in err or "conflict" in err:
+                        print(
+                            f"ℹ️  Variable {var_name} already exists for {deployment_name}, skipping"
+                        )
+                    else:
+                        print(
+                            f"⚠️  Failed to create variable {var_name} for {deployment_name}: {res.stderr}"
+                        )
+                else:
+                    print(f"✅ Set variable {var_name} for {deployment_name}")
+            except Exception as e:
+                print(f"⚠️  Unexpected error setting variable {var_name}: {e}")
+
     def get_next_available_numbers(self, count: int) -> List[int]:
         """Get the next N available runner numbers, filling gaps first."""
         test_runners = self.get_test_runner_deployments()
@@ -316,7 +406,7 @@ class AstroDeploymentManager:
         return created_deployments, hibernation_failed
 
     def display_test_runners(self):
-        """Display all existing de_bench_test_runner deployments."""
+        """Display all existing de_bench_test_runner deployments with status information."""
         test_runners = self.get_test_runner_deployments()
 
         if not test_runners:
@@ -324,13 +414,74 @@ class AstroDeploymentManager:
             return
 
         print(f"\nFound {len(test_runners)} {self.TEST_RUNNER_PATTERN} deployment(s):")
-        print("=" * 80)
-        print(f"{'NAME':<30} {'DEPLOYMENT ID':<30} {'REGION':<15} {'STATUS'}")
-        print("-" * 80)
+        print(f"🔄 Getting status information in parallel...")
 
-        for tr in test_runners:
+        def get_deployment_status(deployment: Dict) -> Dict:
+            """Get status information for a single deployment."""
+            details = self.get_deployment_details(deployment["name"])
+            if details:
+                metadata = details.get("metadata", {})
+                status = metadata.get("status", "UNKNOWN")
+                updated_at_str = metadata.get("updated_at")
+
+                # Calculate status duration
+                if updated_at_str:
+                    try:
+                        updated_at = datetime.fromisoformat(
+                            updated_at_str.replace("Z", "+00:00")
+                        )
+                        current_time = datetime.now(timezone.utc)
+                        status_duration_hours = (
+                            current_time - updated_at
+                        ).total_seconds() / 3600
+                    except ValueError:
+                        status_duration_hours = None
+                else:
+                    status_duration_hours = None
+
+                deployment["status"] = status
+                deployment["status_duration_hours"] = status_duration_hours
+            else:
+                deployment["status"] = "UNKNOWN"
+                deployment["status_duration_hours"] = None
+
+            return deployment
+
+        # Get status for all deployments in parallel
+        test_runners_with_status = map_func(get_deployment_status, test_runners)
+
+        print("=" * 110)
+        print(
+            f"{'NAME':<30} {'REGION':<15} {'STATUS':<20} {'STATUS DURATION':<15} {'DEPLOYMENT ID'}"
+        )
+        print("-" * 110)
+
+        for tr in test_runners_with_status:
+            status = tr.get("status", "UNKNOWN")
+
+            # Status emoji
+            status_emoji = {
+                "HIBERNATING": "🛌",
+                "HEALTHY": "✅",
+                "UNHEALTHY": "❌",
+                "DEPLOYING": "🚀",
+                "DELETING": "🗑️",
+                "UNKNOWN": "❓",
+            }.get(status, "📊")
+
+            # Format status duration
+            if tr.get("status_duration_hours") is not None:
+                if tr["status_duration_hours"] < 1:
+                    duration_str = f"{tr['status_duration_hours'] * 60:.0f}m"
+                else:
+                    duration_str = f"{tr['status_duration_hours']:.1f}h"
+            else:
+                duration_str = "Unknown"
+
+            status_display = f"{status_emoji} {status}"
+
             print(
-                f"{tr['name']:<30} {tr['deployment_id']:<30} {tr['region']:<15} Active"
+                f"{tr['name']:<30} {tr['region']:<15} {status_display:<20} {duration_str:<15} {tr['deployment_id']}"
             )
 
     def delete_deployment(
@@ -377,21 +528,25 @@ class AstroDeploymentManager:
             print(f"  - {tr['name']} ({tr['deployment_id']})")
 
         print("\n🚨 WARNING: This action cannot be undone!")
-        confirm1 = input(
-            f"Are you sure you want to delete ALL {self.TEST_RUNNER_PATTERN} deployments? (type 'yes' to confirm): "
-        )
 
-        if confirm1.lower() != "yes":
-            print("❌ Deletion cancelled.")
-            return [], []
+        if not self.auto_approve:
+            confirm1 = input(
+                f"Are you sure you want to delete ALL {self.TEST_RUNNER_PATTERN} deployments? (type 'yes' to confirm): "
+            )
 
-        confirm2 = input(
-            f"Final confirmation: Delete {len(test_runners)} deployments? (type 'DELETE' to confirm): "
-        )
+            if confirm1.lower() != "yes":
+                print("❌ Deletion cancelled.")
+                return [], []
 
-        if confirm2 != "DELETE":
-            print("❌ Deletion cancelled.")
-            return [], []
+            confirm2 = input(
+                f"Final confirmation: Delete {len(test_runners)} deployments? (type 'DELETE' to confirm): "
+            )
+
+            if confirm2 != "DELETE":
+                print("❌ Deletion cancelled.")
+                return [], []
+        else:
+            print("✅ Auto-approve enabled - skipping confirmation prompts")
 
         print(
             f"\n🗑️  Deleting {len(test_runners)} {self.TEST_RUNNER_PATTERN} deployments in parallel..."
@@ -432,6 +587,381 @@ class AstroDeploymentManager:
 
         return deleted_deployments, failed_deletions
 
+    def get_non_test_runner_deployments(self) -> List[Dict]:
+        """Get all deployments that do NOT match the de_bench_test_runner_X pattern."""
+        all_deployments = self.list_deployments()
+
+        non_test_runners = []
+        for deployment in all_deployments:
+            # If it doesn't match the test runner pattern, include it
+            if not self.TEST_RUNNER_REGEX.match(deployment["name"]):
+                non_test_runners.append(deployment)
+
+        # Sort by name for consistent output
+        non_test_runners.sort(key=lambda x: x["name"])
+        return non_test_runners
+
+    def delete_all_non_test_runners(self) -> tuple[List[str], List[Dict]]:
+        """Delete all deployments that do NOT match de_bench_test_runner pattern. Returns (successful_deletions, failed_deletions)."""
+        non_test_runners = self.get_non_test_runner_deployments()
+
+        if not non_test_runners:
+            print(f"No non-{self.TEST_RUNNER_PATTERN} deployments found to delete.")
+            return [], []
+
+        print(
+            f"\n⚠️  Found {len(non_test_runners)} deployment(s) that do NOT match the {self.TEST_RUNNER_PATTERN} pattern:"
+        )
+        print("=" * 80)
+        for deployment in non_test_runners:
+            print(f"  - {deployment['name']} ({deployment['deployment_id']})")
+
+        print(
+            f"\n🚨 WARNING: This will delete ALL deployments that are NOT {self.TEST_RUNNER_PATTERN} deployments!"
+        )
+        print("🚨 This action cannot be undone!")
+
+        if not self.auto_approve:
+            confirm1 = input(
+                f"Are you sure you want to delete ALL non-{self.TEST_RUNNER_PATTERN} deployments? (type 'yes' to confirm): "
+            )
+
+            if confirm1.lower() != "yes":
+                print("❌ Deletion cancelled.")
+                return [], []
+
+            confirm2 = input(
+                f"Final confirmation: Delete {len(non_test_runners)} non-test-runner deployments? (type 'DELETE' to confirm): "
+            )
+
+            if confirm2 != "DELETE":
+                print("❌ Deletion cancelled.")
+                return [], []
+        else:
+            print("✅ Auto-approve enabled - skipping confirmation prompts")
+
+        print(
+            f"\n🗑️  Deleting {len(non_test_runners)} non-{self.TEST_RUNNER_PATTERN} deployments in parallel..."
+        )
+
+        # Create a wrapper function for parallel processing
+        def delete_single_deployment(deployment_info: Dict) -> Dict:
+            """Delete a single deployment and return result info."""
+            success, error_msg = self.delete_deployment(
+                deployment_info["deployment_id"], deployment_info["name"]
+            )
+
+            return {
+                "name": deployment_info["name"],
+                "deployment_id": deployment_info["deployment_id"],
+                "success": success,
+                "error": error_msg,
+            }
+
+        # Process all deletions in parallel
+        results = map_func(delete_single_deployment, non_test_runners)
+
+        # Separate successful and failed deletions
+        deleted_deployments = []
+        failed_deletions = []
+
+        for result in results:
+            if result["success"]:
+                deleted_deployments.append(result["name"])
+            else:
+                failed_deletions.append(
+                    {
+                        "name": result["name"],
+                        "deployment_id": result["deployment_id"],
+                        "error": result["error"],
+                    }
+                )
+
+        return deleted_deployments, failed_deletions
+
+    def get_deployment_details(self, deployment_name: str) -> Optional[Dict]:
+        """Get detailed deployment information including timestamps."""
+        command = [
+            "astro",
+            "deployment",
+            "inspect",
+            "--deployment-name",
+            deployment_name,
+            "--output",
+            "json",
+            "--workspace-id",
+            self.workspace_id,
+        ]
+
+        result = self.run_astro_command(command, exit_on_error=False)
+
+        # Check if the result is an exception (failed command)
+        if isinstance(result, subprocess.CalledProcessError):
+            print(f"⚠️  Failed to get details for {deployment_name}: {result.stderr}")
+            return None
+
+        try:
+            data = json.loads(result.stdout)
+            return data.get("deployment", {})
+        except json.JSONDecodeError as e:
+            print(f"⚠️  Failed to parse deployment details for {deployment_name}: {e}")
+            return None
+
+    def get_deployments_older_than_hour(self) -> List[Dict]:
+        """Get all HEALTHY de_bench_test_runner deployments that haven't been modified in over 1 hour."""
+        test_runners = self.get_test_runner_deployments()
+        current_time = datetime.now(timezone.utc)
+        one_hour_ago = current_time - timedelta(hours=1)
+
+        print(
+            f"🕒 Checking {len(test_runners)} deployments in parallel for staleness (HEALTHY & last modified before {one_hour_ago.strftime('%Y-%m-%d %H:%M:%S UTC')})"
+        )
+
+        def check_deployment_age(deployment: Dict) -> Optional[Dict]:
+            """Check a single deployment's staleness and return deployment with age info if stale enough."""
+            details = self.get_deployment_details(deployment["name"])
+            if not details:
+                print(f"⚠️  Failed to get details for {deployment['name']}")
+                return None
+
+            metadata = details.get("metadata", {})
+            created_at_str = metadata.get("created_at")
+            updated_at_str = metadata.get("updated_at")
+            status = metadata.get("status", "UNKNOWN")
+
+            if not updated_at_str:
+                print(
+                    f"⚠️  No last modified timestamp found for {deployment['name']}, skipping"
+                )
+                return None
+
+            try:
+                # Parse the timestamps (format: "2025-09-23T20:33:59.556Z")
+                updated_at = datetime.fromisoformat(
+                    updated_at_str.replace("Z", "+00:00")
+                )
+
+                # Calculate staleness (time since last modification)
+                deployment["updated_at"] = updated_at
+                deployment["staleness_hours"] = (
+                    current_time - updated_at
+                ).total_seconds() / 3600
+                deployment["status"] = status
+                deployment["status_duration_hours"] = deployment[
+                    "staleness_hours"
+                ]  # Same as staleness for this purpose
+
+                # Also parse created_at for display purposes
+                if created_at_str:
+                    try:
+                        created_at = datetime.fromisoformat(
+                            created_at_str.replace("Z", "+00:00")
+                        )
+                        deployment["created_at"] = created_at
+                        deployment["age_hours"] = (
+                            current_time - created_at
+                        ).total_seconds() / 3600
+                    except ValueError:
+                        deployment["created_at"] = None
+                        deployment["age_hours"] = None
+
+                # Create status emoji
+                status_emoji = {
+                    "HIBERNATING": "🛌",
+                    "HEALTHY": "✅",
+                    "UNHEALTHY": "❌",
+                    "DEPLOYING": "🚀",
+                    "DELETING": "🗑️",
+                    "UNKNOWN": "❓",
+                }.get(status, "📊")
+
+                # Format status duration (staleness)
+                if deployment["staleness_hours"] < 1:
+                    status_duration_str = f"{deployment['staleness_hours'] * 60:.0f}m"
+                else:
+                    status_duration_str = f"{deployment['staleness_hours']:.1f}h"
+                status_info = f"{status_emoji} {status} ({status_duration_str})"
+
+                # Use last modified time for filtering (not creation time) AND only include HEALTHY deployments
+                if updated_at < one_hour_ago and status == "HEALTHY":
+                    print(
+                        f"🔄 {deployment['name']}: last modified {deployment['staleness_hours']:.1f}h ago | {status_info} (STALE & HEALTHY)"
+                    )
+                    return deployment
+                elif updated_at < one_hour_ago and status != "HEALTHY":
+                    print(
+                        f"🛌 {deployment['name']}: last modified {deployment['staleness_hours']:.1f}h ago | {status_info} (stale but not healthy - skipping)"
+                    )
+                    return None
+                else:
+                    staleness_minutes = (current_time - updated_at).total_seconds() / 60
+                    print(
+                        f"🆕 {deployment['name']}: last modified {staleness_minutes:.0f}m ago | {status_info} (too recent)"
+                    )
+                    return None
+
+            except ValueError as e:
+                print(f"⚠️  Failed to parse timestamp for {deployment['name']}: {e}")
+                return None
+
+        # Check all deployments in parallel
+        results = map_func(check_deployment_age, test_runners)
+
+        # Filter out None results to get only old deployments
+        old_deployments = [result for result in results if result is not None]
+
+        print(
+            f"✅ Staleness check complete: found {len(old_deployments)} HEALTHY deployment(s) not modified in over 1 hour"
+        )
+        return old_deployments
+
+    def recreate_old_deployments(self) -> tuple[List[str], List[str], List[str]]:
+        """Recreate all HEALTHY de_bench_test_runner deployments that haven't been modified in over 1 hour.
+        Returns (deleted_deployments, created_deployments, hibernation_failed_deployments)."""
+        old_deployments = self.get_deployments_older_than_hour()
+
+        if not old_deployments:
+            print(
+                f"✅ No HEALTHY {self.TEST_RUNNER_PATTERN} deployments found that haven't been modified in over 1 hour."
+            )
+            return [], [], []
+
+        print(
+            f"\n⚠️  Found {len(old_deployments)} HEALTHY {self.TEST_RUNNER_PATTERN} deployment(s) not modified in over 1 hour:"
+        )
+        print("=" * 100)
+        for deployment in old_deployments:
+            staleness_str = f"{deployment['staleness_hours']:.1f}h ago"
+            status = deployment.get("status", "UNKNOWN")
+
+            # Status emoji and duration
+            status_emoji = {
+                "HIBERNATING": "🛌",
+                "HEALTHY": "✅",
+                "UNHEALTHY": "❌",
+                "DEPLOYING": "🚀",
+                "DELETING": "🗑️",
+                "UNKNOWN": "❓",
+            }.get(status, "📊")
+
+            if deployment.get("status_duration_hours") is not None:
+                if deployment["status_duration_hours"] < 1:
+                    status_duration_str = (
+                        f"{deployment['status_duration_hours'] * 60:.0f}m"
+                    )
+                else:
+                    status_duration_str = f"{deployment['status_duration_hours']:.1f}h"
+                status_info = f"{status_emoji} {status} ({status_duration_str})"
+            else:
+                status_info = f"{status_emoji} {status}"
+
+            print(
+                f"  - {deployment['name']} | last modified {staleness_str} | {status_info}"
+            )
+
+        print(f"\n🚨 WARNING: This will DELETE and RECREATE these deployments!")
+        print(
+            "🚨 This action cannot be undone! All DAGs and task history will be lost!"
+        )
+
+        if not self.auto_approve:
+            confirm1 = input(
+                f"Are you sure you want to recreate ALL stale HEALTHY {self.TEST_RUNNER_PATTERN} deployments? (type 'yes' to confirm): "
+            )
+
+            if confirm1.lower() != "yes":
+                print("❌ Recreation cancelled.")
+                return [], [], []
+
+            confirm2 = input(
+                f"Final confirmation: Recreate {len(old_deployments)} stale HEALTHY deployments? (type 'RECREATE' to confirm): "
+            )
+
+            if confirm2 != "RECREATE":
+                print("❌ Recreation cancelled.")
+                return [], [], []
+        else:
+            print("✅ Auto-approve enabled - skipping confirmation prompts")
+
+        print(
+            f"\n🔄 Recreating {len(old_deployments)} stale {self.TEST_RUNNER_PATTERN} deployments..."
+        )
+
+        # Step 1: Delete stale deployments
+        print(f"\n🗑️  Step 1: Deleting {len(old_deployments)} stale deployments...")
+
+        def delete_single_deployment(deployment_info: Dict) -> Dict:
+            """Delete a single deployment and return result info."""
+            success, error_msg = self.delete_deployment(
+                deployment_info["deployment_id"], deployment_info["name"]
+            )
+            return {
+                "name": deployment_info["name"],
+                "deployment_id": deployment_info["deployment_id"],
+                "runner_number": deployment_info["runner_number"],
+                "success": success,
+                "error": error_msg,
+            }
+
+        # Delete in parallel
+        delete_results = map_func(delete_single_deployment, old_deployments)
+
+        # Check deletion results
+        deleted_deployments = []
+        failed_deletions = []
+        runner_numbers_to_recreate = []
+
+        for result in delete_results:
+            if result["success"]:
+                deleted_deployments.append(result["name"])
+                runner_numbers_to_recreate.append(result["runner_number"])
+            else:
+                failed_deletions.append(result)
+
+        if failed_deletions:
+            print(
+                f"\n❌ Failed to delete {len(failed_deletions)} deployment(s). Aborting recreation."
+            )
+            for failure in failed_deletions:
+                print(f"  - {failure['name']}: {failure['error']}")
+            return deleted_deployments, [], []
+
+        print(f"✅ Successfully deleted {len(deleted_deployments)} deployment(s)")
+
+        # Step 2: Recreate the deployments with the same numbers
+        print(
+            f"\n🏗️  Step 2: Recreating {len(runner_numbers_to_recreate)} deployments..."
+        )
+
+        def create_single_runner(runner_number: int) -> Dict:
+            """Create a single test runner and return result info."""
+            creation_success, hibernation_success = self.create_test_runner_deployment(
+                runner_number
+            )
+            return {
+                "runner_number": runner_number,
+                "name": f"{self.TEST_RUNNER_PATTERN}_{runner_number}",
+                "creation_success": creation_success,
+                "hibernation_success": hibernation_success,
+            }
+
+        # Create in parallel
+        create_results = map_func(create_single_runner, runner_numbers_to_recreate)
+
+        # Extract results
+        created_deployments = []
+        hibernation_failed = []
+
+        for result in create_results:
+            if result["creation_success"]:
+                created_deployments.append(result["name"])
+                if not result["hibernation_success"]:
+                    hibernation_failed.append(result["name"])
+            else:
+                print(f"⚠️  Failed to recreate {result['name']}")
+
+        return deleted_deployments, created_deployments, hibernation_failed
+
 
 def main():
     """Main function to handle command line interaction."""
@@ -442,6 +972,11 @@ def main():
 Examples:
   %(prog)s                    # Interactive mode to create deployments
   %(prog)s --delete-all       # Delete all de_bench_test_runner deployments
+  %(prog)s --delete-others    # Delete all non-de_bench_test_runner deployments
+  %(prog)s --recreate-all     # Delete all de_bench_test_runner deployments and recreate (interactive)
+  %(prog)s --recreate-all 5   # Delete all de_bench_test_runner deployments and recreate 5 new ones
+  %(prog)s --recreate-old     # Recreate HEALTHY deployments not modified in over 1 hour
+  %(prog)s --recreate-old -y  # Auto-approve recreation without confirmation prompts
         """,
     )
     parser.add_argument(
@@ -449,12 +984,50 @@ Examples:
         action="store_true",
         help="Delete all de_bench_test_runner deployments (requires confirmation)",
     )
+    parser.add_argument(
+        "--delete-others",
+        action="store_true",
+        help="Delete all deployments that do NOT follow the de_bench_test_runner pattern (requires confirmation)",
+    )
+    parser.add_argument(
+        "--recreate-all",
+        type=int,
+        nargs="?",
+        const=-1,
+        metavar="COUNT",
+        help="Delete all de_bench_test_runner deployments and recreate them. Optionally specify COUNT (default: interactive)",
+    )
+    parser.add_argument(
+        "--recreate-old",
+        action="store_true",
+        help="Recreate HEALTHY de_bench_test_runner deployments that haven't been modified in over 1 hour (requires confirmation)",
+    )
+    parser.add_argument(
+        "-y",
+        "--yes",
+        action="store_true",
+        help="Auto-approve all confirmations (skip user prompts)",
+    )
 
     args = parser.parse_args()
-    manager = AstroDeploymentManager()
+    manager = AstroDeploymentManager(auto_approve=args.yes)
 
     print("🚀 Astronomer Test Runner Deployment Manager")
     print("=" * 50)
+
+    # Check for conflicting arguments
+    exclusive_args = [
+        args.delete_all,
+        args.delete_others,
+        args.recreate_all is not None,
+        args.recreate_old,
+    ]
+    if sum(exclusive_args) > 1:
+        print("❌ Cannot use multiple action arguments at the same time.")
+        print(
+            "   Choose one of: --delete-all, --delete-others, --recreate-all, or --recreate-old"
+        )
+        sys.exit(1)
 
     if args.delete_all:
         # Delete all test_runner deployments
@@ -492,6 +1065,207 @@ Examples:
             print("\n\n👋 Cancelled by user.")
         except Exception as e:
             print(f"❌ An error occurred: {e}")
+
+    elif args.delete_others:
+        # Delete all non-test_runner deployments
+        try:
+            deleted, failed = manager.delete_all_non_test_runners()
+
+            # Print summary
+            print("\n" + "=" * 80)
+            print("🔥 DELETION SUMMARY")
+            print("=" * 80)
+
+            if deleted:
+                print(
+                    f"\n✅ Successfully deleted {len(deleted)} non-test-runner deployment(s):"
+                )
+                for deployment in deleted:
+                    print(f"  - {deployment}")
+
+            if failed:
+                print(f"\n❌ Failed to delete {len(failed)} deployment(s):")
+                for failure in failed:
+                    print(f"  - {failure['name']} ({failure['deployment_id']})")
+                    print(f"    Reason: {failure['error']}")
+
+            if not deleted and not failed:
+                print("\n❌ No deployments were processed.")
+
+            # Overall result
+            total_attempted = len(deleted) + len(failed)
+            if total_attempted > 0:
+                success_rate = (len(deleted) / total_attempted) * 100
+                print(
+                    f"\n📊 Overall: {len(deleted)}/{total_attempted} successful ({success_rate:.1f}%)"
+                )
+
+        except KeyboardInterrupt:
+            print("\n\n👋 Cancelled by user.")
+        except Exception as e:
+            print(f"❌ An error occurred: {e}")
+
+    elif args.recreate_all is not None:
+        # Delete all test_runner deployments and recreate them
+        try:
+            # First, show what exists
+            print("🔄 RECREATE ALL TEST RUNNERS")
+            print("=" * 50)
+            manager.display_test_runners()
+
+            # Delete all existing test runners
+            print(
+                f"\n🗑️  Step 1: Deleting all existing {manager.TEST_RUNNER_PATTERN} deployments..."
+            )
+            deleted, failed = manager.delete_all_test_runners()
+
+            if failed:
+                print(
+                    f"\n❌ Failed to delete {len(failed)} deployment(s). Aborting recreation."
+                )
+                print("   Fix deletion issues before retrying recreation.")
+                for failure in failed:
+                    print(f"  - {failure['name']}: {failure['error']}")
+                sys.exit(1)
+
+            if not deleted:
+                print("ℹ️  No existing deployments found to delete.")
+            else:
+                print(f"✅ Successfully deleted {len(deleted)} deployment(s)")
+
+            # Determine how many to recreate
+            if args.recreate_all == -1:
+                # Interactive mode
+                print(
+                    f"\n🏗️  Step 2: Creating new {manager.TEST_RUNNER_PATTERN} deployments..."
+                )
+                try:
+                    count_input = input(
+                        f"How many new {manager.TEST_RUNNER_PATTERN} deployments would you like to create? (0 to skip): "
+                    )
+                    count = int(count_input.strip())
+                except ValueError:
+                    print("❌ Invalid input. Exiting.")
+                    sys.exit(1)
+            else:
+                # Count provided via argument
+                count = args.recreate_all
+                print(
+                    f"\n🏗️  Step 2: Creating {count} new {manager.TEST_RUNNER_PATTERN} deployments..."
+                )
+
+            if count <= 0:
+                print("No new deployments to create. Recreation complete.")
+                return
+
+            if count > 10 and not manager.auto_approve:
+                confirm = input(
+                    f"You're about to create {count} deployments. Are you sure? (y/N): "
+                )
+                if confirm.lower() != "y":
+                    print("Cancelled.")
+                    return
+
+            # Create the new deployments
+            created, hibernation_failed = manager.create_multiple_test_runners(count)
+
+            # Print final summary
+            print("\n" + "=" * 80)
+            print("🔄 RECREATION SUMMARY")
+            print("=" * 80)
+
+            if deleted:
+                print(f"\n🗑️  Deleted: {len(deleted)} deployment(s)")
+
+            if created:
+                print(f"\n✅ Created: {len(created)} deployment(s)")
+                for deployment in created:
+                    print(f"  - {deployment}")
+
+            if len(created) < count:
+                print(
+                    f"\n⚠️  Only {len(created)} out of {count} requested deployments were created due to errors."
+                )
+
+            # Show hibernation failure summary if any
+            if hibernation_failed:
+                print(f"\n🚨 HIBERNATION FAILURES - MANUAL ACTION REQUIRED!")
+                print("=" * 60)
+                print(
+                    f"The following {len(hibernation_failed)} deployment(s) were created but failed to hibernate:"
+                )
+                for deployment in hibernation_failed:
+                    print(f"  ⚠️  {deployment}")
+                print(
+                    "\n💡 To avoid costs, manually hibernate these deployments using:"
+                )
+                print(
+                    "   astro deployment hibernate --deployment-name <DEPLOYMENT_NAME> -f"
+                )
+                print("   Or use the Astronomer UI to hibernate them.")
+            elif created:
+                print(f"\n✅ All {len(created)} deployments successfully hibernated!")
+
+            print(f"\n🎉 Recreation complete! Total active deployments: {len(created)}")
+
+        except KeyboardInterrupt:
+            print("\n\n👋 Cancelled by user.")
+        except Exception as e:
+            print(f"❌ An error occurred: {e}")
+
+    elif args.recreate_old:
+        # Recreate deployments older than 1 hour
+        try:
+            deleted, created, hibernation_failed = manager.recreate_old_deployments()
+
+            # Print summary
+            print("\n" + "=" * 80)
+            print("🔄 RECREATION SUMMARY")
+            print("=" * 80)
+
+            if deleted:
+                print(f"\n🗑️  Deleted: {len(deleted)} deployment(s)")
+                for deployment in deleted:
+                    print(f"  - {deployment}")
+
+            if created:
+                print(f"\n✅ Created: {len(created)} deployment(s)")
+                for deployment in created:
+                    print(f"  - {deployment}")
+
+            if not deleted and not created:
+                print("\n❌ No deployments were processed.")
+
+            # Show hibernation failure summary if any
+            if hibernation_failed:
+                print(f"\n🚨 HIBERNATION FAILURES - MANUAL ACTION REQUIRED!")
+                print("=" * 60)
+                print(
+                    f"The following {len(hibernation_failed)} deployment(s) were created but failed to hibernate:"
+                )
+                for deployment in hibernation_failed:
+                    print(f"  ⚠️  {deployment}")
+                print(
+                    "\n💡 To avoid costs, manually hibernate these deployments using:"
+                )
+                print(
+                    "   astro deployment hibernate --deployment-name <DEPLOYMENT_NAME> -f"
+                )
+                print("   Or use the Astronomer UI to hibernate them.")
+            elif created:
+                print(f"\n✅ All {len(created)} deployments successfully hibernated!")
+
+            # Overall result
+            if created and deleted:
+                print(
+                    f"\n🎉 Recreation complete! Successfully recreated {len(created)} deployment(s)"
+                )
+
+        except KeyboardInterrupt:
+            print("\n\n👋 Cancelled by user.")
+        except Exception as e:
+            print(f"❌ An error occurred: {e}")
+
     else:
         # Interactive mode to create deployments
         # Display existing test runners
@@ -518,7 +1292,7 @@ Examples:
                 print("No deployments to create. Exiting.")
                 return
 
-            if count > 10:
+            if count > 10 and not manager.auto_approve:
                 confirm = input(
                     f"You're about to create {count} deployments. Are you sure? (y/N): "
                 )

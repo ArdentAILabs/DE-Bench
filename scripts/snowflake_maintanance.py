@@ -1,161 +1,154 @@
 #!/usr/bin/env python3
 """
-PostgreSQL Database Maintenance Script
+Snowflake Database Maintenance Script
 
-This script provides utilities for managing PostgreSQL databases including
+This script provides utilities for managing Snowflake databases including
 listing and clearing user databases (excluding system databases).
 
 Requirements:
-    - psycopg2-binary (already included in requirements.txt)
+    - snowflake-connector-python (already included in requirements.txt)
     - python-dotenv (already included in requirements.txt)
 
 Usage:
     1. Create a .env file in the same directory with:
-       POSTGRES_HOSTNAME=localhost
-       POSTGRES_PORT=5432
-       POSTGRES_USERNAME=your_username
-       POSTGRES_PASSWORD=your_password
+       SNOWFLAKE_USER=your_username
+       SNOWFLAKE_PASSWORD=your_password
+       SNOWFLAKE_ACCOUNT=your_account
+       SNOWFLAKE_WAREHOUSE=your_warehouse
+       SNOWFLAKE_ROLE=SYSADMIN
 
     2. Or set environment variables:
-       export POSTGRES_HOSTNAME=localhost
-       export POSTGRES_PORT=5432
-       export POSTGRES_USERNAME=your_username
-       export POSTGRES_PASSWORD=your_password
+       export SNOWFLAKE_USER=your_username
+       export SNOWFLAKE_PASSWORD=your_password
+       export SNOWFLAKE_ACCOUNT=your_account
+       export SNOWFLAKE_WAREHOUSE=your_warehouse
+       export SNOWFLAKE_ROLE=SYSADMIN
 
     3. Run the script with subcommands:
        # List all user databases
-       python postgres_maintenance.py --list-dbs
+       python snowflake_maintanance.py --list-dbs
 
        # Clear all user databases (with confirmation)
-       python postgres_maintenance.py --clear-dbs
+       python snowflake_maintanance.py --clear-dbs
 
     Or run without .env file or environment variables and enter details when prompted.
 """
 
 import argparse
-import psycopg2
+import snowflake.connector
 import sys
 from typing import List, Optional
 from dotenv import load_dotenv
 
 
-def connect_to_postgres(
-    hostname: str, port: str, username: str, password: str
-) -> Optional[psycopg2.extensions.connection]:
+def connect_to_snowflake(
+    user: str, password: str, account: str, warehouse: str, role: str = "SYSADMIN"
+) -> Optional[snowflake.connector.SnowflakeConnection]:
     """
-    Connect to PostgreSQL database.
+    Connect to Snowflake.
 
     Args:
-        hostname: PostgreSQL server hostname
-        port: PostgreSQL server port
-        username: Database username
-        password: Database password
+        user: Snowflake username
+        password: Snowflake password
+        account: Snowflake account identifier
+        warehouse: Snowflake warehouse name
+        role: Snowflake role (defaults to SYSADMIN)
 
     Returns:
-        Database connection object or None if connection fails
+        Snowflake connection object or None if connection fails
     """
     try:
-        connection = psycopg2.connect(
-            host=hostname,
-            port=port,
-            user=username,
+        connection = snowflake.connector.connect(
+            user=user,
             password=password,
-            database="postgres",  # Connect to default postgres database
+            account=account,
+            warehouse=warehouse,
+            role=role,
+            autocommit=True,
         )
-        print(f"Successfully connected to PostgreSQL server at {hostname}:{port}")
+        print(f"Successfully connected to Snowflake account: {account}")
         return connection
-    except psycopg2.Error as e:
-        print(f"Error connecting to PostgreSQL: {e}")
+    except snowflake.connector.Error as e:
+        print(f"Error connecting to Snowflake: {e}")
         return None
 
 
-def list_databases(connection: psycopg2.extensions.connection) -> List[str]:
+def list_databases(connection: snowflake.connector.SnowflakeConnection) -> List[str]:
     """
-    List all databases except system databases.
+    List all user databases excluding Snowflake system databases.
+    
+    This function gets all databases and filters out the default Snowflake system databases,
+    returning only user-created databases that should be cleaned up.
 
     Args:
-        connection: PostgreSQL database connection
+        connection: Snowflake database connection
 
     Returns:
-        List of database names
+        List of user database names (excluding system databases)
     """
     try:
         cursor = connection.cursor()
 
-        # Query to get all databases except 'postgres', 'template0', and 'template1'
-        query = """
-        SELECT datname 
-        FROM pg_database 
-        WHERE datname NOT IN ('postgres', 'template0', 'template1')
-        AND datistemplate = false
-        ORDER BY datname;
-        """
-
+        # Query to get all databases
+        query = "SHOW DATABASES"
         cursor.execute(query)
-        databases = [row[0] for row in cursor.fetchall()]
+        
+        # Get all database names (row[1] is the database name)
+        all_databases = [row[1] for row in cursor.fetchall()]
         cursor.close()
 
-        return databases
+        # Filter out Snowflake system databases
+        # These are the default databases that come with Snowflake and should not be deleted
+        system_databases = {
+            'SNOWFLAKE',
+            'SNOWFLAKE_SAMPLE_DATA', 
+            'SNOWFLAKE_LEARNING_DB',
+            'UTIL_DB',
+            'INFORMATION_SCHEMA'
+        }
+        
+        # Return only user databases (not system databases)
+        user_databases = [db for db in all_databases if db not in system_databases]
+        
+        return user_databases
 
-    except psycopg2.Error as e:
+    except snowflake.connector.Error as e:
         print(f"Error querying databases: {e}")
         return []
 
 
-def drop_database(connection: psycopg2.extensions.connection, db_name: str) -> bool:
+def drop_database(connection: snowflake.connector.SnowflakeConnection, db_name: str) -> bool:
     """
-    Drop a database.
+    Drop a Snowflake database.
 
     Args:
-        connection: PostgreSQL database connection
+        connection: Snowflake database connection
         db_name: Name of database to drop
 
     Returns:
         True if successful, False otherwise
     """
     try:
-        # Ensure we're not in a transaction and set autocommit
-        connection.rollback()  # End any existing transaction
-        connection.autocommit = True
         cursor = connection.cursor()
 
-        # Terminate all connections to the database before dropping
-        terminate_query = """
-        SELECT pg_terminate_backend(pid)
-        FROM pg_stat_activity
-        WHERE datname = %s AND pid <> pg_backend_pid();
-        """
-        cursor.execute(terminate_query, (db_name,))
-
-        # Small delay to ensure connections are terminated
-        import time
-
-        time.sleep(0.1)
-
         # Drop the database using safe identifier quoting
-        drop_query = f'DROP DATABASE "{db_name}";'
+        drop_query = f'DROP DATABASE IF EXISTS "{db_name}"'
         cursor.execute(drop_query)
         cursor.close()
         print(f"✓ Successfully dropped database: {db_name}")
         return True
 
-    except psycopg2.Error as e:
+    except snowflake.connector.Error as e:
         print(f"✗ Error dropping database {db_name}: {e}")
-        # Try to rollback and reset connection state
-        try:
-            connection.rollback()
-            connection.autocommit = True
-        except:
-            pass
         return False
 
 
 def get_connection_params():
     """
-    Get database connection parameters from environment or user input.
+    Get Snowflake connection parameters from environment or user input.
 
     Returns:
-        Tuple of (hostname, port, username, password)
+        Tuple of (user, password, account, warehouse, role)
     """
     # Load environment variables from .env file
     load_dotenv()
@@ -163,41 +156,45 @@ def get_connection_params():
     # Get connection parameters from environment variables or prompt user
     import os
 
-    postgres_hostname = os.getenv("POSTGRES_HOSTNAME")
-    postgres_port = os.getenv("POSTGRES_PORT", "5432")
-    postgres_username = os.getenv("POSTGRES_USERNAME")
-    postgres_password = os.getenv("POSTGRES_PASSWORD")
+    snowflake_user = os.getenv("SNOWFLAKE_USER")
+    snowflake_password = os.getenv("SNOWFLAKE_PASSWORD")
+    snowflake_account = os.getenv("SNOWFLAKE_ACCOUNT")
+    snowflake_warehouse = os.getenv("SNOWFLAKE_WAREHOUSE")
+    snowflake_role = os.getenv("SNOWFLAKE_ROLE", "SYSADMIN")
 
     # If environment variables are not set, prompt user for input
-    if not postgres_hostname:
-        postgres_hostname = input("Enter PostgreSQL hostname: ")
-    if not postgres_username:
-        postgres_username = input("Enter PostgreSQL username: ")
-    if not postgres_password:
-        postgres_password = input("Enter PostgreSQL password: ")
+    if not snowflake_user:
+        snowflake_user = input("Enter Snowflake username: ")
+    if not snowflake_password:
+        snowflake_password = input("Enter Snowflake password: ")
+    if not snowflake_account:
+        snowflake_account = input("Enter Snowflake account identifier: ")
+    if not snowflake_warehouse:
+        snowflake_warehouse = input("Enter Snowflake warehouse name: ")
 
-    return postgres_hostname, postgres_port, postgres_username, postgres_password
+    return snowflake_user, snowflake_password, snowflake_account, snowflake_warehouse, snowflake_role
 
 
 def cmd_list_dbs():
     """
     Command to list all user databases.
     """
-    print("🔍 Listing PostgreSQL databases...")
+    print("❄️ Listing Snowflake user databases...")
 
     # Get connection parameters
-    hostname, port, username, password = get_connection_params()
+    user, password, account, warehouse, role = get_connection_params()
 
-    print(f"\nConnecting to PostgreSQL server...")
-    print(f"Hostname: {hostname}")
-    print(f"Port: {port}")
-    print(f"Username: {username}")
+    print(f"\nConnecting to Snowflake...")
+    print(f"Account: {account}")
+    print(f"User: {user}")
+    print(f"Warehouse: {warehouse}")
+    print(f"Role: {role}")
 
-    # Connect to PostgreSQL
-    connection = connect_to_postgres(hostname, port, username, password)
+    # Connect to Snowflake
+    connection = connect_to_snowflake(user, password, account, warehouse, role)
 
     if connection is None:
-        print("Failed to connect to PostgreSQL. Exiting.")
+        print("Failed to connect to Snowflake. Exiting.")
         sys.exit(1)
 
     try:
@@ -211,7 +208,7 @@ def cmd_list_dbs():
         if databases:
             for i, db_name in enumerate(databases, 1):
                 print(f"{i:2d}. {db_name}")
-            print(f"\nTotal databases found: {len(databases)}")
+            print(f"\nTotal user databases found: {len(databases)}")
         else:
             print("No user databases found.")
 
@@ -225,27 +222,28 @@ def cmd_clear_dbs():
     """
     Command to clear all user databases with confirmation.
     """
-    print("🗑️  Clearing PostgreSQL databases...")
+    print("🗑️  Clearing Snowflake user databases...")
 
     # Get connection parameters
-    hostname, port, username, password = get_connection_params()
+    user, password, account, warehouse, role = get_connection_params()
 
-    print(f"\nConnecting to PostgreSQL server...")
-    print(f"Hostname: {hostname}")
-    print(f"Port: {port}")
-    print(f"Username: {username}")
+    print(f"\nConnecting to Snowflake...")
+    print(f"Account: {account}")
+    print(f"User: {user}")
+    print(f"Warehouse: {warehouse}")
+    print(f"Role: {role}")
 
-    # Connect to PostgreSQL
-    connection = connect_to_postgres(hostname, port, username, password)
+    # Connect to Snowflake
+    connection = connect_to_snowflake(user, password, account, warehouse, role)
 
     if connection is None:
-        print("Failed to connect to PostgreSQL. Exiting.")
+        print("Failed to connect to Snowflake. Exiting.")
         sys.exit(1)
 
     try:
         # First, list databases to show what will be deleted
         print("\n" + "=" * 50)
-        print("DATABASES TO BE DELETED:")
+        print("USER DATABASES TO BE DELETED:")
         print("=" * 50)
 
         databases = list_databases(connection)
@@ -261,7 +259,7 @@ def cmd_clear_dbs():
 
         # Show warning and ask for confirmation
         print("\n" + "⚠️ " * 20)
-        print("WARNING: This will PERMANENTLY DELETE all the databases listed above!")
+        print("WARNING: This will PERMANENTLY DELETE all the user databases listed above!")
         print("This action CANNOT be undone!")
         print("⚠️ " * 20)
 
@@ -305,7 +303,7 @@ def main():
     Main function to parse arguments and execute commands.
     """
     parser = argparse.ArgumentParser(
-        description="PostgreSQL Database Maintenance Tool",
+        description="Snowflake Database Maintenance Tool",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:

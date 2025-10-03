@@ -54,6 +54,10 @@ SUPABASE_URL="YOUR_SUPABASE_URL"
 SUPABASE_SERVICE_ROLE_KEY="YOUR_SUPABASE_SERVICE_ROLE_KEY"
 SUPABASE_JWT_SECRET="YOUR_SUPABASE_JWT_SECRET"
 
+# DE-Bench Database (Supabase instance for distributed locking and coordination)
+DE_BENCH_DB_URL="http://127.0.0.1:54321"
+DE_BENCH_DB_SERVICE_KEY="YOUR_LOCAL_SUPABASE_SERVICE_ROLE_KEY"
+
 # PostgreSQL
 POSTGRES_HOSTNAME="YOUR_POSTGRES_HOSTNAME"
 POSTGRES_PORT=5432
@@ -191,13 +195,33 @@ Each section is clearly documented with:
 - Default values where applicable
 - Example formats for complex values
 
-### 3. Install Dependencies
+### 3. Setup Local Supabase (for DE-Bench Database)
+
+DE-Bench uses a local Supabase instance for distributed locking and coordination between test runners:
+
+```bash
+# Install Supabase CLI (if not already installed)
+npm install -g supabase
+
+# Start local Supabase instance
+npx supabase start
+
+# This will output your local credentials, including:
+# - API URL: http://127.0.0.1:43210
+# - Service Role Key: [copy this to DE_BENCH_DB_SERVICE_KEY in your .env]
+```
+
+**Important**: Copy the `service_role key` from the output and set it as `DE_BENCH_DB_SERVICE_KEY` in your `.env` file. The `DE_BENCH_DB_URL` should be set to `http://127.0.0.1:43210` (the default local API URL).
+
+The distributed locking mechanism will be automatically initialized when you run tests.
+
+### 4. Install Dependencies
 
 ```bash
 pip install -r requirements.txt
 ```
 
-### 4. Run Tests
+### 5. Run Tests
 
 The framework uses Braintrust for evaluation. Run tests using the evaluation script:
 
@@ -241,9 +265,15 @@ python run_braintrust_eval.py --filter "MongoDB.*" Ardent
 
 ```
 
-### 5. Service Configuration
+### 6. Service Configuration
 
 Configure your tools and permissions:
+
+**DE-Bench Database (Local Supabase)**:
+- Purpose: Distributed locking and coordination between test runners
+- Setup: Run `npx supabase start` to initialize local instance
+- Automatic: Database schema and functions are auto-created on first use
+- No manual configuration required beyond environment variables
 
 MongoDB:
 - Required Role: dbAdmin
@@ -269,6 +299,7 @@ Snowflake:
 - AWS S3 and other cloud resources
 
 **Service-Specific Requirements**:
+- **DE-Bench Database**: Local Supabase instance must be running (`npx supabase start`)
 - **MongoDB**: Must have permissions to create and drop collections and databases
 - **Airflow**: Must be set up with git sync enabled to your repository
 - **MySQL**: Check credentials regularly (AWS RDS defaults rotate weekly)
@@ -306,6 +337,16 @@ python run_braintrust_eval.py --filter "Test_Name" --verbose Ardent
 - Validation includes detailed test steps for debugging
 
 ## ⚠️ **Common Errors**
+
+### **DE-Bench Database Connection Errors**
+```
+ValueError: Missing required environment variables: DE_BENCH_DB_URL and DE_BENCH_DB_SERVICE_KEY
+supabase._sync.client.SupabaseException: Invalid API key
+```
+**Solution:** 
+1. Start local Supabase: `npx supabase start`
+2. Copy the `service_role key` from the output to `DE_BENCH_DB_SERVICE_KEY` in your `.env`
+3. Set `DE_BENCH_DB_URL=http://127.0.0.1:54321` in your `.env`
 
 ### **Astronomer Token Expired**
 ```

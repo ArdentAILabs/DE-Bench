@@ -177,7 +177,6 @@ def snowflake_resource(request):
                 "SCHEMA": schema_name,
                 "DATABASE": database_name,  # Alternative name for compatibility
                 "WAREHOUSE": os.getenv('SNOWFLAKE_WAREHOUSE'),
-                "ROLE": os.getenv('SNOWFLAKE_ROLE', 'SYSADMIN'),
             }
             
             # Add S3 configuration variables if provided

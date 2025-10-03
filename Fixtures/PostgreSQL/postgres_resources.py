@@ -24,6 +24,7 @@ class PostgreSQLResourceConfig(TypedDict):
     resource_id: str
     databases: List[PostgreSQLDatabaseConfig]
     test_module_path: Optional[str]
+    load_bulk: Optional[bool]
 
 
 class PostgreSQLDatabaseData(TypedDict):
@@ -50,6 +51,7 @@ class PostgreSQLFixture(
     PostgreSQL fixture implementation using DEBenchFixture pattern.
 
     Supports creating multiple databases with optional SQL schema loading.
+    Supports loading bulk tables from bulk_tables.sql before loading individual SQL files.
     """
 
     @classmethod
@@ -80,10 +82,10 @@ class PostgreSQLFixture(
             psycopg2 connection object
         """
         return psycopg2.connect(
-            host=os.getenv("POSTGRES_HOSTNAME"),
-            port=os.getenv("POSTGRES_PORT"),
-            user=os.getenv("POSTGRES_USERNAME"),
-            password=os.getenv("POSTGRES_PASSWORD"),
+            host=self.postgres_hostname,
+            port=self.postgres_port,
+            user=self.postgres_username,
+            password=self.postgres_password,
             database=database,
             sslmode="require",
         )
@@ -92,6 +94,11 @@ class PostgreSQLFixture(
         self, resource_config: Optional[PostgreSQLResourceConfig] = None
     ) -> PostgreSQLResourceData:
         """Set up PostgreSQL databases with optional SQL schema loading"""
+        self.postgres_hostname = os.getenv("POSTGRES_HOSTNAME")
+        self.postgres_port = os.getenv("POSTGRES_PORT")
+        self.postgres_username = os.getenv("POSTGRES_USERNAME")
+        self.postgres_password = os.getenv("POSTGRES_PASSWORD")
+
         # Determine which config to use
         if resource_config is not None:
             config = resource_config
@@ -107,9 +114,20 @@ class PostgreSQLFixture(
         created_resources = []
 
         # Get system connection for database operations
-        system_connection = self.get_connection("postgres")
+        print("🐘 Getting PostgreSQL connection...")
+        system_connection = self.get_connection()
+        print("✅ PostgreSQL connection obtained")
         system_connection.set_isolation_level(ISOLATION_LEVEL_AUTOCOMMIT)
         system_cursor = system_connection.cursor()
+
+        # Sanity check to make sure the database is connected
+        print("🐘 Sanity checking PostgreSQL connection...")
+        system_cursor.execute(
+            """
+            SELECT 1
+            """
+        )
+        print("✅ PostgreSQL connection sanity check passed")
 
         try:
             # Create each database specified in the config
@@ -120,8 +138,8 @@ class PostgreSQLFixture(
                 try:
                     system_cursor.execute(
                         """
-                        SELECT pg_terminate_backend(pid) 
-                        FROM pg_stat_activity 
+                        SELECT pg_terminate_backend(pid)
+                        FROM pg_stat_activity
                         WHERE datname = %s AND pid <> pg_backend_pid()
                         """,
                         (db_name,),
@@ -141,6 +159,10 @@ class PostgreSQLFixture(
                     name=db_name, tables=[], type="database"
                 )
                 created_resources.append(db_resource)
+
+                # Load bulk tables if requested
+                if config.get("load_bulk", False):
+                    self._load_bulk_tables(db_name, db_resource)
 
                 # Load SQL file if specified
                 if sql_file := db_config.get("sql_file"):
@@ -168,10 +190,10 @@ class PostgreSQLFixture(
             status="active",
             created_resources=created_resources,
             connection_params={
-                "host": os.getenv("POSTGRES_HOSTNAME"),
-                "port": os.getenv("POSTGRES_PORT"),
-                "user": os.getenv("POSTGRES_USERNAME"),
-                "password": os.getenv("POSTGRES_PASSWORD"),
+                "host": self.postgres_hostname,
+                "port": self.postgres_port,
+                "user": self.postgres_username,
+                "password": self.postgres_password,
                 "sslmode": "require",
             },
         )
@@ -235,17 +257,17 @@ class PostgreSQLFixture(
 
         # Set up environment for psql command
         env = os.environ.copy()
-        env["PGPASSWORD"] = os.getenv("POSTGRES_PASSWORD")
+        env["PGPASSWORD"] = self.postgres_password
 
         # Run psql to load the SQL file
         cmd = [
             "psql",
             "-h",
-            os.getenv("POSTGRES_HOSTNAME"),
+            self.postgres_hostname,
             "-p",
-            os.getenv("POSTGRES_PORT"),
+            self.postgres_port,
             "-U",
-            os.getenv("POSTGRES_USERNAME"),
+            self.postgres_username,
             "-d",
             db_name,
             "-f",
@@ -281,6 +303,71 @@ class PostgreSQLFixture(
 
         except subprocess.CalledProcessError as e:
             print(f"❌ Error loading SQL file: {e}")
+            print(f"STDOUT: {e.stdout}")
+            print(f"STDERR: {e.stderr}")
+            raise
+
+    def _load_bulk_tables(
+        self, db_name: str, db_resource: PostgreSQLDatabaseData
+    ) -> None:
+        """Load bulk tables from bulk_tables.sql into the specified database"""
+        # Get the path to bulk_tables.sql in the same directory as this file
+        bulk_sql_path = os.path.join(os.path.dirname(__file__), "bulk_tables.sql")
+        
+        if not os.path.exists(bulk_sql_path):
+            print(f"⚠️ Warning - bulk_tables.sql not found at {bulk_sql_path}")
+            return
+
+        print(f"📄 Loading bulk tables from {bulk_sql_path} into database {db_name}")
+
+        # Set up environment for psql command
+        env = os.environ.copy()
+        env["PGPASSWORD"] = os.getenv("POSTGRES_PASSWORD")
+
+        # Run psql to load the bulk tables file
+        cmd = [
+            "psql",
+            "-h",
+            os.getenv("POSTGRES_HOSTNAME"),
+            "-p",
+            os.getenv("POSTGRES_PORT"),
+            "-U",
+            os.getenv("POSTGRES_USERNAME"),
+            "-d",
+            db_name,
+            "-f",
+            bulk_sql_path,
+            "--quiet",
+            "--set=sslmode=require",
+        ]
+
+        try:
+            subprocess.run(cmd, env=env, capture_output=True, text=True, check=True)
+            print(f"✅ Successfully loaded bulk tables into {db_name}")
+
+            # Update table list to include bulk tables
+            db_connection = self.get_connection(db_name)
+            db_cursor = db_connection.cursor()
+
+            try:
+                db_cursor.execute(
+                    """
+                    SELECT table_name 
+                    FROM information_schema.tables 
+                    WHERE table_schema = 'public'
+                    ORDER BY table_name
+                    """
+                )
+                tables = [row[0] for row in db_cursor.fetchall()]
+                db_resource["tables"] = tables
+                print(f"📊 Loaded {len(tables)} tables from bulk_tables.sql into {db_name}")
+
+            finally:
+                db_cursor.close()
+                db_connection.close()
+
+        except subprocess.CalledProcessError as e:
+            print(f"❌ Error loading bulk tables: {e}")
             print(f"STDOUT: {e.stdout}")
             print(f"STDERR: {e.stderr}")
             raise
@@ -351,6 +438,7 @@ class PostgreSQLFixture(
                     name=f"test_database_{timestamp}", sql_file=None
                 )
             ],
+            load_bulk=False,
         )
 
     def create_config_section(self) -> Dict[str, Any]:

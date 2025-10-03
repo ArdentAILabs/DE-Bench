@@ -283,15 +283,26 @@ class SnowflakeFixture(
         print(f"🔄 Executing SQL file with variables substituted")
 
         # Execute SQL using Snowflake's execute_string for multi-statement support
-        cursors = connection.execute_string(processed_sql)
+        # Split into individual statements for better error reporting
+        statements = [s.strip() for s in processed_sql.split(';') if s.strip()]
 
-        # Process results from each statement
-        for i, cursor in enumerate(cursors):
-            print(f"✅ Processed statement {i+1}")
+        for i, statement in enumerate(statements):
             try:
-                cursor.fetchall()
-            except Exception:
-                pass  # DDL and DML statements may not return results
+                print(f"📝 Executing statement {i+1}/{len(statements)}: {statement[:100]}...")
+                cursor = connection.cursor()
+                cursor.execute(statement)
+                try:
+                    results = cursor.fetchall()
+                    if results:
+                        print(f"   ✅ Statement {i+1} returned {len(results)} rows")
+                except Exception:
+                    pass  # DDL and DML statements may not return results
+                cursor.close()
+                print(f"✅ Statement {i+1} completed successfully")
+            except Exception as e:
+                print(f"❌ Error executing statement {i+1}: {e}")
+                print(f"   Failed statement: {statement}")
+                raise
 
         print(f"✅ Successfully executed SQL file")
 

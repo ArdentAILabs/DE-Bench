@@ -39,6 +39,7 @@ def get_fixtures() -> List[DEBenchFixture]:
     # Initialize PostgreSQL fixture for workflow execution data
     custom_postgres_config = {
         "resource_id": f"workflow_observability_test_{test_timestamp}_{test_uuid}",
+        "load_bulk": True,
         "databases": [
             {
                 "name": f"workflow_db_{test_timestamp}_{test_uuid}",
@@ -312,6 +313,48 @@ def validate_test(model_result, fixtures=None):
             "Result_Message"
         ] = f"✅ Git branch '{branch_name}' created successfully"
 
+        # Capture agent's code snapshot for observability (after branch verification)
+        print(f"📸 Capturing agent code snapshot from branch: {branch_name}")
+        print(f"🔍 DEBUG: About to call get_multiple_file_contents_from_branch")
+        try:
+            agent_code_snapshot = github_manager.get_multiple_file_contents_from_branch(
+                branch_name=branch_name,
+                paths_to_capture=[
+                    "dags/",  # All DAG files created by the agent
+                    "requirements.txt",  # Root requirements file
+                    "Requirements/requirements.txt"  # Alternative requirements location
+                ]
+            )
+            print(f"🔍 DEBUG: Successfully received agent_code_snapshot with type: {type(agent_code_snapshot)}")
+            print(f"✅ Agent code snapshot captured: {agent_code_snapshot['summary']['total_files']} files "
+                  f"({agent_code_snapshot['summary']['total_size_bytes']} bytes)")
+
+            # Store snapshot in base test metadata immediately (incremental capture)
+            test_steps.append({
+                "name": "Agent Code Snapshot Capture",
+                "description": "Capture exact code created by agent for debugging",
+                "status": "passed",
+                "Result_Message": f"✅ Captured {agent_code_snapshot['summary']['total_files']} files "
+                                f"({agent_code_snapshot['summary']['total_size_bytes']} bytes) from branch {branch_name}",
+                "agent_code_snapshot": agent_code_snapshot,
+                "capture_timestamp": agent_code_snapshot["capture_timestamp"],
+                "branch_captured": branch_name
+            })
+            print(f"📋 Agent code snapshot added to test metadata for immediate availability")
+
+        except Exception as e:
+            print(f"⚠️ Failed to capture agent code snapshot: {e}")
+            agent_code_snapshot = None
+            # Still add a test step to show the attempt
+            test_steps.append({
+                "name": "Agent Code Snapshot Capture",
+                "description": "Capture exact code created by agent for debugging",
+                "status": "failed",
+                "Result_Message": f"❌ Failed to capture code snapshot: {str(e)}",
+                "agent_code_snapshot": None,
+                "capture_error": str(e)
+            })
+
         # PR creation and merge
         pr_exists, test_steps[2] = github_manager.find_and_merge_pr(
             pr_title=pr_title,
@@ -334,16 +377,23 @@ def validate_test(model_result, fixtures=None):
             "Result_Message"
         ] = f"✅ PR '{pr_title}' created and merged successfully"
 
-        # GitHub action completion
-        if not github_manager.check_if_action_is_complete(pr_title=pr_title):
-            test_steps[3]["status"] = "failed"
-            test_steps[3][
-                "Result_Message"
-            ] = "❌ GitHub action did not complete successfully"
-            return {"score": 0.0, "metadata": {"test_steps": test_steps}}
+        # GitHub action completion with CI failure details
+        action_status = github_manager.check_if_action_is_complete(pr_title=pr_title, return_details=True)
 
-        test_steps[3]["status"] = "passed"
-        test_steps[3]["Result_Message"] = "✅ GitHub action completed successfully"
+        if not action_status["completed"]:
+            test_steps[3]["status"] = "failed"
+            test_steps[3]["Result_Message"] = f"❌ GitHub action timed out (status: {action_status['status']})"
+            test_steps[3]["action_status"] = action_status
+            return {"score": 0.0, "metadata": {"test_steps": test_steps}}
+        elif not action_status["success"]:
+            test_steps[3]["status"] = "failed"
+            test_steps[3]["Result_Message"] = f"❌ GitHub action failed (conclusion: {action_status['conclusion']})"
+            test_steps[3]["action_status"] = action_status
+            return {"score": 0.0, "metadata": {"test_steps": test_steps}}
+        else:
+            test_steps[3]["status"] = "passed"
+            test_steps[3]["Result_Message"] = "✅ GitHub action completed successfully"
+            test_steps[3]["action_status"] = action_status
 
         # Airflow redeployment
         if not airflow_instance.wait_for_airflow_to_be_ready():
@@ -387,6 +437,79 @@ def validate_test(model_result, fixtures=None):
         test_steps[6][
             "Result_Message"
         ] = f"✅ DAG '{dag_name}' executed successfully (run_id: {dag_run_id})"
+
+        # Capture comprehensive DAG information for debugging (source, import errors, task logs)
+        print("📊 Capturing comprehensive DAG information for debugging...")
+        try:
+            comprehensive_dag_info = airflow_instance.get_comprehensive_dag_info(
+                dag_id=dag_name,
+                dag_run_id=dag_run_id,
+                github_manager=github_manager,
+            )
+
+            # Add agent code snapshot to comprehensive DAG info (captured earlier)
+            if agent_code_snapshot:
+                comprehensive_dag_info["agent_code_snapshot"] = agent_code_snapshot
+                print(f"📸 Agent code snapshot added to comprehensive DAG info: "
+                      f"{agent_code_snapshot['summary']['total_files']} files, "
+                      f"{agent_code_snapshot['summary']['total_size_bytes']} bytes")
+            else:
+                print("⚠️ Agent code snapshot not available")
+
+            dag_source = comprehensive_dag_info.get("dag_source", {})
+            import_errors = comprehensive_dag_info.get("import_errors", [])
+
+            if dag_source.get("source_code"):
+                print(
+                    f"📄 DAG source code captured ({len(dag_source['source_code'])} characters)"
+                )
+                print(
+                    f"📄 Source code preview: {dag_source['source_code'][:200]}..."
+                )
+            else:
+                print("⚠️ DAG source code not available from Airflow - check agent_code_snapshot for actual files")
+
+            if import_errors:
+                print(f"❌ Found {len(import_errors)} import errors")
+                for error in import_errors:
+                    print(
+                        f"   - {error.get('filename', 'Unknown')}: {error.get('stack_trace', 'No details')}"
+                    )
+            else:
+                print("✅ No DAG import errors found")
+
+            # Attach to test metadata
+            test_steps.append(
+                {
+                    "name": "DAG Information Capture",
+                    "description": "Capture comprehensive DAG information for debugging",
+                    "status": "passed",
+                    "Result_Message": "✅ Comprehensive DAG information captured successfully",
+                    "comprehensive_dag_info": comprehensive_dag_info,
+                    "dag_source_code": dag_source.get("source_code"),
+                    "dag_file_path": dag_source.get("file_path"),
+                    "dag_import_errors": import_errors,
+                    "task_logs_summary": {
+                        task_id: {
+                            "state": task_info.get("state"),
+                            "duration": task_info.get("duration"),
+                            "log_length": len(task_info.get("logs", "")),
+                        }
+                        for task_id, task_info in comprehensive_dag_info.get("task_logs", {}).items()
+                    },
+                }
+            )
+
+        except Exception as e:
+            print(f"⚠️ Could not capture comprehensive DAG info: {e}")
+            test_steps.append(
+                {
+                    "name": "DAG Information Capture",
+                    "description": "Capture comprehensive DAG information for debugging",
+                    "status": "failed",
+                    "Result_Message": f"❌ Failed to capture DAG information: {str(e)}",
+                }
+            )
 
         # Step 8: PostgreSQL Source Data Validation
         try:
