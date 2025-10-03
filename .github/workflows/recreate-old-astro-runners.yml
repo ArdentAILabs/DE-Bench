@@ -1,5 +1,15 @@
 name: Recreate Old Astro Runners
 
+# This workflow automatically recreates stale Astronomer test runner deployments
+# that are in HEALTHY status and haven't been modified in over 1 hour.
+#
+# Required Secrets:
+#   - ASTRONOMER_API_TOKEN: Your Astronomer API token for authentication
+#   - ASTRO_WORKSPACE_ID: The workspace ID (e.g., cmcnpmwr80l9601lyycmaep42)
+#   - AIRFLOW_USERNAME: Username for Airflow deployments (optional, defaults to "airflow")
+#   - AIRFLOW_PASSWORD: Password for Airflow deployments (optional, defaults to "airflow")
+#   - SLACK_APP_URL: Slack webhook URL for notifications (optional)
+
 on:
   schedule:
     # Run every hour at minute 0
@@ -27,23 +37,16 @@ jobs:
         run: |
           curl -sSL https://install.astronomer.io | sudo bash -s
       
-      - name: Configure Astronomer CLI credentials
+      - name: Authenticate with Astronomer
         run: |
-          # Create astro config directory
-          mkdir -p ~/.astro
+          # Login using API token
+          echo "${{ secrets.ASTRONOMER_API_TOKEN }}" | astro login --token-login
           
-          # Configure astro CLI with API token
-          cat > ~/.astro/config.yaml << EOF
-          context: astronomer.io
-          contexts:
-            astronomer.io:
-              domain: astronomer.io
-              token: ${{ secrets.ASTRONOMER_API_TOKEN }}
-              workspace: ${{ secrets.ASTRONOMER_WORKSPACE_ID }}
-          EOF
-        env:
-          ASTRONOMER_API_TOKEN: ${{ secrets.ASTRONOMER_API_TOKEN }}
-          ASTRONOMER_WORKSPACE_ID: ${{ secrets.ASTRONOMER_WORKSPACE_ID }}
+          # Switch to the correct workspace
+          astro workspace switch ${{ secrets.ASTRO_WORKSPACE_ID }}
+          
+          # Verify authentication
+          astro workspace list
       
       - name: Set Airflow credentials
         run: |
@@ -55,7 +58,7 @@ jobs:
         run: |
           python scripts/manage_astro_runners.py --recreate-old -y
         env:
-          ASTRO_WORKSPACE_ID: ${{ secrets.ASTRONOMER_WORKSPACE_ID }}
+          ASTRO_WORKSPACE_ID: ${{ secrets.ASTRO_WORKSPACE_ID }}
           AIRFLOW_USERNAME: ${{ secrets.AIRFLOW_USERNAME }}
           AIRFLOW_PASSWORD: ${{ secrets.AIRFLOW_PASSWORD }}
           SLACK_APP_URL: ${{ secrets.SLACK_APP_URL }}
